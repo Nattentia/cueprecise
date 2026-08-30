@@ -183,3 +183,45 @@ Claude 소유 파일을 구현했다. Codex는 읽기 전용 검증과 merge를 
 Codex가 Claude 소유 source를 수정한 사실은 없다. append-only 기록이므로 앞
 항목은 삭제하지 않고 이 정정을 최신 사실로 남긴다. PR #7의 lookahead 0.5
 결정과 검증 결과는 유효하다.
+
+## 2026-08-30 · transcribe.py 계약 적합성 점검 — 코드 변경 없음
+
+합의서 단계 3 점검 항목을 현재 main(`7ec4cd3`)에서 확인했다. PR #3(codex)이
+검증 계층을 이미 추가해 두어 추가 수정이 필요하지 않았다.
+
+**실호출 검증이 필요했던 이유:** PR #3 이 `generation_config` 를 타입 객체
+(`GI.GenerationConfig(transcription_config=GI.TranscriptionConfig(**cfg))`)
+에서 평문 dict(`{"transcription_config": cfg}`)로 바꿨다. SDK 가 dict 를
+그대로 받아 `verbatim`/`diarization`/word timestamp 를 실제 요청에
+적용하는지는 코드만으로 알 수 없다. 합의서가 "실제 요청에 적용되는지"를
+요구하므로 짧은 슬라이스로 실호출했다.
+
+**결과** (`jcBDSLSeud4` 195~230초, 35초 슬라이스, `auto`, Gemini 1콜):
+
+| 점검 항목 | 결과 |
+|---|---|
+| auto 입력 시 `language_codes` | `null` |
+| word timestamp 전부 존재 | True |
+| start 단조증가 | True |
+| diarization 적용 | `spk:0` 라벨 부여됨 |
+| `video_id` | `null` 유지 (합의서 지시대로) |
+| 단어 키 | `text`, `start`, `end`, `speaker` |
+| 추출 단어 | 56 / 34.9초 |
+
+dict 형태 `generation_config` 는 정상 동작한다. 되돌릴 이유가 없다.
+
+**업로드 정리:** `finally` 가 `interactions.create` 를 감싸고 있어 성공·실패
+양쪽에서 `files.delete` 를 호출한다. 삭제 실패는 `RuntimeWarning` 으로
+알리고 전사 결과는 살린다. 계약 요구를 만족한다.
+
+**빈 응답·비정상 timestamp:** `_extract_words` 가 `TranscriptionResultError`
+로 설명 가능한 오류를 낸다. word_info 부재 시 "verbatim/word timestamp 설정과
+..." 라는 원인 안내를 포함한다.
+
+**미해결 — 계약 판단 필요:** `video_id` 를 호출자가 지정할 경로가 없다.
+현재는 항상 `null` 이고 `merge.py` 가 `captions.json` 쪽 값으로 채운다.
+단일 파일 경로에서는 문제없지만, `pipeline.py` 가 여러 단계를 잇게 되면
+transcript 단독으로 영상을 식별하지 못한다. CLI 인자 추가는 호출 규약
+변경이므로 계약 PR 이 필요하다. 지금은 합의서 지시대로 `null` 을 유지한다.
+
+**Gemini API 호출 1회.**
