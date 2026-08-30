@@ -19,6 +19,7 @@ python src/pipeline.py run "https://www.youtube.com/watch?v=jcBDSLSeud4"
 python src/pipeline.py status jcBDSLSeud4                 # 진행도 + 사용량 추정
 python src/pipeline.py run <url> --stages merge,render    # 일부 단계만 재실행
 python src/pipeline.py purge jcBDSLSeud4 --scope derived  # derived 만 삭제
+python src/pipeline.py purge jcBDSLSeud4 --scope chunks   # 청크 오디오만 삭제
 ```
 
 ## 파이프라인
@@ -46,6 +47,10 @@ Gemini 는 긴 오디오에서 드물게 단어 하나의 timestamp 를 손상�
 (관측: `end` 가 `1120.3` 대신 `120.3`). 이런 단어는 이웃 단어로 복구하고
 `timestamp_repairs` 에 기록한다. 손상이 단어 수의 0.5% 를 넘으면 응답 자체가
 망가진 것으로 보고 중단한다.
+
+전사가 끝나면 `raw/audio/` 의 청크 오디오는 쓸 데가 없다. bundle 용량의
+20~25% 를 차지하므로 `purge --scope chunks` 로 지울 수 있다. `source.mp3` 가
+남아 있으면 `plan` 단계가 필요할 때 다시 뽑는다.
 
 영상은 프레임 추출에만 쓴다. 360p 로 받으므로 23분 영상 기준 16MB 이고,
 필요 없으면 `--skip-video` 로 건너뛴다.

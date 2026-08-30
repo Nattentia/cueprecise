@@ -16,7 +16,7 @@ owner: claude
 사용법:
     python src/pipeline.py run <url> [--bundle-root data] [--stages a,b,c]
     python src/pipeline.py status <video_id>
-    python src/pipeline.py purge <video_id> [--scope raw|derived|all]
+    python src/pipeline.py purge <video_id> [--scope chunks|derived|raw|all]
 
 완료된 청크는 job.json 의 fingerprint/config 가 일치하면 다시 호출하지 않는다.
 """
@@ -505,12 +505,28 @@ def status(bundle: Path, *, ledger: Path | None = None, api_key: str | None = No
     return info
 
 
+PURGE_SCOPES = ("chunks", "derived", "raw", "all")
+
+
 def purge(bundle: Path, *, scope: str = "derived") -> list[str]:
-    """raw 자료 삭제와 derived 재생성을 위한 명시적 삭제 (CONTRACT 12절)."""
-    if scope not in {"raw", "derived", "all"}:
-        raise ValueError("scope 는 raw | derived | all 이어야 합니다.")
+    """raw 자료 삭제와 derived 재생성을 위한 명시적 삭제 (CONTRACT 12절).
+
+    `chunks` 는 전사용 청크 오디오만 지운다. 청크는 `source.mp3` 에서 언제든
+    다시 뽑을 수 있고(`stage_plan` 이 없으면 자동으로 다시 뽑는다), 전사가
+    끝난 뒤에는 재개에도 쓰이지 않는다. bundle 용량의 20~25% 를 차지한다.
+    """
+    if scope not in PURGE_SCOPES:
+        raise ValueError("scope 는 %s 여야 합니다." % " | ".join(PURGE_SCOPES))
     removed: list[str] = []
     targets: list[Path] = []
+    if scope == "chunks":
+        # 원본이 없으면 청크가 이 bundle 의 유일한 오디오다. 지우면 되돌릴 수
+        # 없으므로 거부한다.
+        if not (bundle / "raw" / "source.mp3").exists():
+            raise ValueError(
+                "raw/source.mp3 가 없어 청크를 다시 만들 수 없습니다. "
+                "청크가 이 bundle 의 유일한 오디오이므로 지우지 않습니다.")
+        targets.append(bundle / "raw" / "audio")
     if scope in {"derived", "all"}:
         targets += [bundle / "derived", bundle / "index.sqlite3"]
     if scope in {"raw", "all"}:
@@ -559,7 +575,8 @@ def main() -> int:
     purge_cmd = sub.add_parser("purge", help="영상 자료 삭제")
     purge_cmd.add_argument("video_id")
     purge_cmd.add_argument("--bundle-root", type=Path, default=Path("data"))
-    purge_cmd.add_argument("--scope", choices=["raw", "derived", "all"], default="derived")
+    purge_cmd.add_argument("--scope", choices=list(PURGE_SCOPES), default="derived",
+                           help="chunks 는 전사용 청크 오디오만 지운다 (source.mp3 에서 재생성 가능)")
 
     args = parser.parse_args()
 

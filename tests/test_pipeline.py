@@ -328,6 +328,60 @@ class StatusAndPurgeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             pipeline.purge(self.bundle, scope="everything")
 
+    def _seed_chunks(self) -> None:
+        chunk = self.bundle / "raw/audio/chunk-000.mp3"
+        chunk.parent.mkdir(parents=True, exist_ok=True)
+        chunk.write_bytes(b"fake-chunk")
+        (self.bundle / "raw/source.mp3").write_bytes(b"fake-audio")
+
+    def test_purge_chunks_keeps_source_and_transcripts(self) -> None:
+        self._seed_chunks()
+        transcript = self.bundle / "raw/transcripts/chunk-000.json"
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text("{}", encoding="utf-8")
+
+        removed = pipeline.purge(self.bundle, scope="chunks")
+
+        self.assertFalse((self.bundle / "raw/audio").exists(), "청크가 남았다")
+        self.assertTrue((self.bundle / "raw/source.mp3").exists(), "원본을 지웠다")
+        self.assertTrue(transcript.exists(), "전사를 지웠다")
+        self.assertTrue((self.bundle / "raw/captions.json").exists(), "자막을 지웠다")
+        self.assertEqual(len(removed), 1)
+
+    def test_purge_chunks_refuses_when_source_audio_is_gone(self) -> None:
+        chunk = self.bundle / "raw/audio/chunk-000.mp3"
+        chunk.parent.mkdir(parents=True, exist_ok=True)
+        chunk.write_bytes(b"fake-chunk")  # source.mp3 없음
+        with self.assertRaises(ValueError) as caught:
+            pipeline.purge(self.bundle, scope="chunks")
+        self.assertIn("유일한 오디오", str(caught.exception))
+        self.assertTrue(chunk.exists(), "되돌릴 수 없는데 지웠다")
+
+    def test_plan_rebuilds_purged_chunks(self) -> None:
+        """청크를 지워도 source.mp3 가 있으면 계획 단계가 다시 뽑는다."""
+        self._seed_chunks()
+        job = {"input": {"fingerprint": "sha256:x"},
+               "config": {"chunk_max_secs": 1790.0, "overlap_secs": 10.0,
+                          "language_codes": None, "diarization": True},
+               "chunks": [{"index": 0, "start": 0.0, "end": 10.0,
+                           "path": "raw/audio/chunk-000.mp3", "status": "planned",
+                           "attempts": 0,
+                           "transcript_path": "raw/transcripts/chunk-000.json",
+                           "error": None}]}
+        (self.bundle / "job.json").write_text(json.dumps(job), encoding="utf-8")
+        pipeline.purge(self.bundle, scope="chunks")
+
+        calls: list = []
+        original = pipeline.audio.extract_chunks
+        pipeline.audio.extract_chunks = lambda src, root, chunks: calls.append(len(chunks))
+        pipeline.audio.file_fingerprint = lambda path: "sha256:x"
+        try:
+            pipeline.stage_plan(self.bundle, "u", chunk_max_secs=1790.0, overlap_secs=10.0,
+                                language_codes=None, diarization=True)
+        finally:
+            pipeline.audio.extract_chunks = original
+        self.assertEqual(calls, [1], "없어진 청크를 다시 뽑지 않았다")
+
 
 if __name__ == "__main__":
     unittest.main()
