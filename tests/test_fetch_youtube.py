@@ -1,6 +1,7 @@
 """YouTube 롤링 자막 중복 제거 테스트. 네트워크를 쓰지 않는다."""
 from __future__ import annotations
 
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -120,3 +121,71 @@ class ParserRobustnessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SubtitleLanguageTests(unittest.TestCase):
+    """원어 자동자막을 언어에 관계없이 받아온다."""
+
+    SRT = ("1\n00:00:01,000 --> 00:00:03,000\nhello world\n\n"
+           "2\n00:00:03,000 --> 00:00:05,000\nsecond line\n")
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = Path(self.tmp.name) / "captions.json"
+        self.original = fetch_youtube.subprocess.run
+        self.commands: list[list[str]] = []
+
+    def tearDown(self) -> None:
+        fetch_youtube.subprocess.run = self.original
+        self.tmp.cleanup()
+
+    def _fake_yt_dlp(self, produced: dict[str, str]):
+        """요청한 언어 중 `produced` 에 있는 것만 파일로 만든다."""
+        def run(command, capture_output=True, text=True):
+            self.commands.append(list(command))
+            langs = command[command.index("--sub-langs") + 1].split(",")
+            target = Path(command[command.index("-o") + 1]).parent
+            for lang in langs:
+                if lang in produced:
+                    (target / ("vid.%s.srt" % produced[lang])).write_text(
+                        self.SRT, encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, "", "")
+        fetch_youtube.subprocess.run = run
+
+    def test_korean_original_captions(self) -> None:
+        self._fake_yt_dlp({"*-orig": "ko-orig"})
+        result = fetch_youtube.fetch("u", self.out)
+        self.assertEqual(result["language"], "ko-orig")
+        self.assertEqual(result["source"], "youtube-ko-orig")
+        self.assertEqual(len(result["cues"]), 2)
+
+    def test_english_original_captions(self) -> None:
+        """ko-orig 고정 때문에 못 받던 영어 영상."""
+        self._fake_yt_dlp({"*-orig": "en-orig"})
+        result = fetch_youtube.fetch("u", self.out)
+        self.assertEqual(result["language"], "en-orig")
+        self.assertEqual(result["source"], "youtube-en-orig")
+        self.assertEqual(len(result["cues"]), 2)
+
+    def test_falls_back_when_no_original_track(self) -> None:
+        """원어 자동자막이 없으면 일반 자막을 시도한다."""
+        self._fake_yt_dlp({"en": "en"})
+        result = fetch_youtube.fetch("u", self.out)
+        self.assertEqual(result["language"], "en")
+        self.assertEqual(len(self.commands), 2, "폴백 시도를 하지 않았다")
+
+    def test_explicit_language_is_honoured(self) -> None:
+        self._fake_yt_dlp({"ja": "ja"})
+        result = fetch_youtube.fetch("u", self.out, langs=["ja"])
+        self.assertEqual(result["language"], "ja")
+        self.assertEqual(len(self.commands), 1, "명시한 언어 말고 다른 것도 시도했다")
+
+    def test_no_captions_at_all_raises(self) -> None:
+        self._fake_yt_dlp({})
+        with self.assertRaises(FileNotFoundError):
+            fetch_youtube.fetch("u", self.out)
+
+    def test_original_track_wins_over_others(self) -> None:
+        self._fake_yt_dlp({"*-orig": "ko-orig", "en": "en"})
+        result = fetch_youtube.fetch("u", self.out)
+        self.assertEqual(result["language"], "ko-orig", "원어 자막을 두고 다른 것을 골랐다")

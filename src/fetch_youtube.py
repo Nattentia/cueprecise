@@ -1,4 +1,9 @@
-"""Fetch and de-roll YouTube's Korean original automatic captions."""
+"""YouTube 원어 자동자막을 받아 롤링 중복을 편다.
+
+언어를 고정하지 않는다. `*-orig` 는 그 영상이 실제로 촬영된 언어의 자동자막을
+뜻하므로 한국어 영상이면 `ko-orig`, 영어 영상이면 `en-orig` 가 온다. 원어
+자동자막이 없는 영상은 일반 자막(ko/en)으로 한 번 더 시도한다.
+"""
 
 from __future__ import annotations
 
@@ -62,35 +67,77 @@ def collapse_rolling_lines(blocks: list[Block]) -> list[dict[str, object]]:
     return cues
 
 
-def fetch(url: str, output: Path) -> dict[str, object]:
+ORIGINAL_LANGS = (".*-orig",)
+"""영상이 실제로 촬영된 언어의 자동자막. 언어를 몰라도 이것만 받으면 된다."""
+
+FALLBACK_LANGS = ("ko", "en")
+"""원어 자동자막이 없는 영상용. 있는 것만 받아지고 없으면 그냥 안 받아진다."""
+
+
+def _download_subs(url: str, directory: Path, langs: tuple[str, ...]) -> list[Path]:
+    target = directory / "%(id)s.%(ext)s"
+    command = ["yt-dlp", "--write-auto-sub", "--write-subs",
+               "--sub-langs", ",".join(langs),
+               "--skip-download", "--convert-subs", "srt", "-o", str(target), url]
+    # 출력을 삼킨다. MCP 서버는 stdout 을 JSON-RPC 통로로 쓰므로 자식
+    # 프로세스가 거기에 쓰면 프로토콜이 깨진다.
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError("yt-dlp 자막 취득 실패: " + (result.stderr or "")[-300:])
+    return sorted(directory.glob("*.srt"))
+
+
+def _pick(candidates: list[Path]) -> Path:
+    """원어 자동자막을 먼저 고른다. 여러 언어가 받아졌을 때만 의미가 있다."""
+    for path in candidates:
+        if "-orig." in path.name:
+            return path
+    return candidates[0]
+
+
+def _split_name(path: Path) -> tuple[str, str]:
+    """`<video_id>.<lang>.srt` 를 나눈다."""
+    parts = path.name.rsplit(".", 2)
+    if len(parts) != 3:
+        return path.stem, "unknown"
+    return parts[0], parts[1]
+
+
+def fetch(url: str, output: Path, *, langs: list[str] | None = None) -> dict[str, object]:
+    attempts = [tuple(langs)] if langs else [ORIGINAL_LANGS, FALLBACK_LANGS]
     with tempfile.TemporaryDirectory(prefix="ytx-captions-") as directory:
-        target = Path(directory) / "%(id)s.%(ext)s"
-        command = ["yt-dlp", "--write-auto-sub", "--sub-lang", "ko-orig", "--skip-download", "--convert-subs", "srt", "-o", str(target), url]
-        # 출력을 삼킨다. MCP 서버는 stdout 을 JSON-RPC 통로로 쓰므로 자식
-        # 프로세스가 거기에 쓰면 프로토콜이 깨진다.
-        result = subprocess.run(command, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError("yt-dlp 자막 취득 실패: " + (result.stderr or "")[-300:])
-        candidates = list(Path(directory).glob("*.ko-orig*.srt"))
+        root = Path(directory)
+        candidates: list[Path] = []
+        for attempt in attempts:
+            candidates = _download_subs(url, root, attempt)
+            if candidates:
+                break
         if not candidates:
-            raise FileNotFoundError("ko-orig 자동자막을 내려받지 못했습니다.")
-        if len(candidates) != 1:
-            raise RuntimeError(f"예상하지 못한 자막 파일 수: {len(candidates)}")
-        video_id = candidates[0].name.split(".ko-orig", 1)[0]
-        cues = collapse_rolling_lines(parse_srt(candidates[0]))
-    result: dict[str, object] = {"source": "youtube-ko-orig", "video_id": video_id, "cues": cues}
+            raise FileNotFoundError(
+                "자막을 내려받지 못했습니다 (시도: %s)."
+                % "; ".join(",".join(a) for a in attempts))
+        chosen = _pick(candidates)
+        video_id, language = _split_name(chosen)
+        cues = collapse_rolling_lines(parse_srt(chosen))
+    payload: dict[str, object] = {"source": "youtube-" + language, "language": language,
+                                  "video_id": video_id, "cues": cues}
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return result
+    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + chr(10),
+                      encoding="utf-8")
+    return payload
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("url", help="YouTube URL")
     parser.add_argument("-o", "--output", type=Path, default=Path("captions.json"))
+    parser.add_argument("--sub-langs", default=None,
+                        help="쉼표 구분. 생략하면 원어 자동자막을 찾는다")
     args = parser.parse_args()
-    result = fetch(args.url, args.output)
-    print(f"{len(result['cues'])} cues -> {args.output}")
+    langs = ([s.strip() for s in args.sub_langs.split(",") if s.strip()]
+             if args.sub_langs else None)
+    result = fetch(args.url, args.output, langs=langs)
+    print(f"{result['language']}: {len(result['cues'])} cues -> {args.output}")
 
 
 if __name__ == "__main__":

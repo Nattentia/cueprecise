@@ -286,7 +286,7 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False,
             fetch_youtube.fetch(url, captions)
         except Exception as error:  # 자막은 선택 자료다. 없어도 파이프라인은 진행한다.
             _log("  경고: 자막 취득 실패, 영어 용어 복원을 건너뛴다 (%s)" % error)
-            _write_json(captions, {"source": "youtube-ko-orig",
+            _write_json(captions, {"source": "youtube", "language": None,
                                    "video_id": bundle.name, "cues": []})
     cue_count = len(_read_json(captions).get("cues", []))
     _log("  자막 %d cues" % cue_count)
@@ -596,7 +596,7 @@ def stage_merge(bundle: Path) -> dict[str, Any]:
     if not transcript.exists():
         raise StageError("derived/transcript.json 이 없습니다. assemble 단계를 먼저 실행하세요.")
     if not captions.exists():
-        _write_json(captions, {"source": "youtube-ko-orig",
+        _write_json(captions, {"source": "youtube", "language": None,
                                "video_id": bundle.name, "cues": []})
     merged = merge_mod.merge_files(transcript, captions, output)
     inserted = sum(1 for w in merged["words"] if w.get("origin") == "youtube")
