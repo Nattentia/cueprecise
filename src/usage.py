@@ -8,12 +8,51 @@ import hashlib
 import json
 import os
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any, Iterator
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-PACIFIC = ZoneInfo("America/Los_Angeles")
+
+class _USPacific(tzinfo):
+    """tzdata 가 없는 환경(주로 Windows venv)을 위한 US/Pacific 폴백.
+
+    2007년 이후 미국 규칙: 3월 둘째 일요일 02:00 에 DST 시작, 11월 첫째
+    일요일 02:00 에 종료. 새 외부 의존성을 들이지 않으려고 직접 계산한다.
+    """
+
+    _STD = timedelta(hours=-8)
+    _DST = timedelta(hours=-7)
+
+    @staticmethod
+    def _nth_sunday(year: int, month: int, nth: int) -> datetime:
+        first = datetime(year, month, 1)
+        first_sunday = 1 + (6 - first.weekday()) % 7  # weekday(): 월=0 … 일=6
+        return datetime(year, month, first_sunday + 7 * (nth - 1), 2, 0)
+
+    def _is_dst(self, dt: datetime) -> bool:
+        naive = dt.replace(tzinfo=None)
+        return (self._nth_sunday(naive.year, 3, 2)
+                <= naive < self._nth_sunday(naive.year, 11, 1))
+
+    def utcoffset(self, dt: datetime | None) -> timedelta:
+        return self._DST if dt is not None and self._is_dst(dt) else self._STD
+
+    def dst(self, dt: datetime | None) -> timedelta:
+        return timedelta(hours=1) if dt is not None and self._is_dst(dt) else timedelta(0)
+
+    def tzname(self, dt: datetime | None) -> str:
+        return "PDT" if dt is not None and self._is_dst(dt) else "PST"
+
+
+def _pacific() -> tzinfo:
+    try:
+        return ZoneInfo("America/Los_Angeles")
+    except (ZoneInfoNotFoundError, KeyError):
+        return _USPacific()
+
+
+PACIFIC = _pacific()
 
 
 class UsageLimitExceeded(RuntimeError):
