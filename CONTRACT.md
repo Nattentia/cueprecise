@@ -3,27 +3,31 @@
 에이전트는 이 파일을 수정하지 않는다. 변경은 사람만 한다.
 변경이 필요하면 `DECISIONS/<자기이름>.md`에 근거를 적고 사람의 판단을 기다린다.
 
+**2026-08-30 개정.** codex 가 토큰 한도로 중단됐다. 프로젝트 소유자가 claude
+에게 전권을 위임했고, 이 파일의 개정 권한도 함께 위임했다. 아래 소유권 표를
+그에 맞춰 고친다. codex 가 복귀하면 소유자가 다시 나눈다.
+
 ## 1. 파일 소유권
 
 | 파일 | 주인 | 다른 쪽 |
 |---|---|---|
-| `src/fetch_youtube.py` | codex | 읽기만 |
-| `src/render.py` | codex | 읽기만 |
+| `src/fetch_youtube.py` | claude | 읽기만 |
+| `src/render.py` | claude | 읽기만 |
 | `src/transcribe.py` | claude | 읽기만 |
 | `src/merge.py` | claude | 읽기만 |
 | `src/audio.py` | claude | 읽기만 |
 | `src/usage.py` | claude | 읽기만 |
 | `src/speakers.py` | claude | 읽기만 |
 | `CONTRACT.md` | 사람 | 읽기만 |
-| `DECISIONS/codex.md` | codex | 읽기만 |
+| `DECISIONS/codex.md` | codex | 읽기만 (codex 복귀 전까지 동결) |
 | `DECISIONS/claude.md` | claude | 읽기만 |
 | `tests/fixtures/**` | 사람 | 읽기만 |
 | `tests/test_transcribe.py`, `tests/test_merge.py`, `tests/test_audio.py`, `tests/test_usage.py`, `tests/test_speakers.py` | claude | 읽기만 |
-| `src/pipeline.py` | codex | 읽기만 |
-| `src/context.py` | codex | 읽기만 |
-| `src/visual.py` | codex | 읽기만 |
-| `src/mcp_server.py` | codex | 읽기만 |
-| `tests/test_fetch_youtube.py`, `tests/test_render.py`, `tests/test_pipeline.py`, `tests/test_context.py`, `tests/test_visual.py` | codex | 읽기만 |
+| `src/pipeline.py` | claude | 읽기만 |
+| `src/context.py` | claude | 읽기만 |
+| `src/visual.py` | claude | 읽기만 |
+| `src/mcp_server.py` | claude | 읽기만 |
+| `tests/test_fetch_youtube.py`, `tests/test_render.py`, `tests/test_pipeline.py`, `tests/test_context.py`, `tests/test_visual.py` | claude | 읽기만 |
 
 남의 파일은 고치지 않는다. 문제를 발견하면 자기 `DECISIONS` 파일에 적는다.
 

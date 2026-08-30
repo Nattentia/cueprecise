@@ -247,3 +247,87 @@ global을 요구하면 강한 한쪽만 받아들이고 나머지는 `unresolved
 청크 전체 화자가 뒤집히므로, `speaker_raw`는 불변 보존하고 증거 부족 시 기존
 reader용 `speaker`만 raw로 유지한다. overlap 중복 단어는 derived 결과에서만
 제거하고 제거 수를 metadata에 남긴다.
+
+## 2026-08-30 · 전권 위임 인수, 남은 전체 구현
+
+codex 가 토큰 한도로 PR #13 을 열어둔 채 중단했다. 프로젝트 소유자가 claude
+에게 전권과 `CONTRACT.md` 개정 권한을 위임했다. 이슈 #12 의 소유권 질문은
+"누가 중복하나"에서 "누가 전부 맡나"로 바뀌었고, 답은 claude 다.
+
+`CONTRACT.md` 1절 소유권 표를 그에 맞춰 고쳤다. codex 복귀 시 소유자가 다시
+나눈다. `DECISIONS/codex.md` 는 동결한다.
+
+**추가한 것**
+
+| 파일 | 내용 |
+|---|---|
+| `src/pipeline.py` | 7단계 오케스트레이터, checkpoint/resume, purge |
+| `src/visual.py` | 화면 참조·복원 용어 시각의 프레임 후보와 OCR |
+| `src/mcp_server.py` | stdio JSON-RPC MCP 서버, 도구 7종 |
+| `tests/test_pipeline.py` | 15건 |
+| `tests/test_merge.py` | 14건 |
+| `tests/test_render.py` | 12건 |
+| `tests/test_fetch_youtube.py` | 13건 |
+| `tests/test_visual.py` | 14건 |
+| `tests/test_transcribe.py` | 10건 |
+| `tests/test_mcp_server.py` | 16건 |
+
+전체 115건 통과. 네트워크와 Gemini API 를 호출하지 않는다.
+
+## 2026-08-30 · 구현 중 내린 판단
+
+**transcribe 임포트를 지연시켰다.** `pipeline.py` 가 최상단에서
+`import transcribe` 하면 `google-genai` 없이는 `merge`/`render`/`index`/
+`status`/`purge` 도 못 돈다. 실제 전사 시점에만 불러온다. 덕분에 SDK 없는
+환경에서도 나머지 단계와 테스트가 전부 동작한다.
+
+**`stage_transcribe` 에 `transcriber` 주입점을 뒀다.** 재개 로직과 실패 처리를
+API 호출 없이 검증하려면 대역이 필요하다. 기본값은 실제 함수이므로 운영
+경로는 바뀌지 않는다. 이 주입점 덕에 다음을 API 0콜로 확인했다.
+
+- 청크 로컬 타임스탬프가 절대 시각으로 보정되는지
+- 완료 청크를 재호출하지 않는지
+- 실패 후 재개 시 실패한 청크만 호출하는지
+- 실패한 시도도 원장에 계상되는지
+- preflight 가 한도 초과 시 호출 전에 막는지
+
+**tzdata 폴백을 넣었다.** `usage.py` 의 `ZoneInfo("America/Los_Angeles")` 가
+Windows venv 에서 `ZoneInfoNotFoundError` 로 죽는다. 실제로 SDK venv 에서
+테스트 3건이 이 이유로 터졌다. 합의서 7절이 새 외부 의존성 도입을 금지하므로
+`tzdata` 를 추가하는 대신 2007년 이후 미국 DST 규칙(3월 둘째 일요일 ~ 11월
+첫째 일요일)을 직접 구현한 폴백을 뒀다. `ZoneInfo` 가 되면 그쪽을 쓴다.
+하루 경계가 어긋나면 사용량 집계가 하루 밀리므로 고정 오프셋으로 때우지
+않았다.
+
+**`_log` 를 인코딩 안전하게 만들었다.** Windows cp949 콘솔에서 em-dash 가
+`UnicodeEncodeError` 를 낸다. 진행 로그가 파이프라인을 죽이면 안 된다.
+
+**프레임 후보는 균일 추출하지 않는다.** 계약 11절대로 화면 참조 표현
+(`보시면`, `이 그림` 등), 복원된 영어 용어 시각, 사용자 지정 시각만 잡고
+8초 이내 후보는 합친다. OCR 은 `pytesseract` 가 있을 때만 하고 결과를
+transcript 에 덮어쓰지 않는다.
+
+**MCP 서버를 stdlib 로 짰다.** MCP SDK 를 새로 들이는 것은 합의서 7절의
+"새 외부 의존성" 에 해당한다. stdio JSON-RPC 는 직접 구현해도 충분히 짧다.
+
+## 2026-08-30 · 아직 하지 않은 것 (다음 작업의 시작점)
+
+**실영상 end-to-end 검증을 하지 않았다.** 소유자 지시대로 검증은 다음
+작업으로 미뤘다. 각 모듈과 단계 연결은 단위 테스트로 확인했지만, 실제 URL
+하나로 `fetch → index` 를 통과시킨 적이 없다. 다음 작업의 첫 항목이다.
+
+확인해야 할 것:
+
+1. 짧은 영상(`jcBDSLSeud4`, 23분) 전체 실행 — 청크 1개, 약 1콜
+2. 30분 초과 영상(`vRTcE19M-KE`, 58분) 전체 실행 — 청크 2개, 약 2콜
+3. 청크 실패 후 재개가 실제 API 경로에서도 동작하는지
+4. `assemble` 이 실제 다청크 화자 라벨을 정합하는지 (지금은 합성 데이터로만 검증)
+5. overlap 구간 중복 제거가 실제 전사에서 올바른지
+6. `ytx_query` 가 실제 bundle 에서 근거 timestamp 를 돌려주는지
+
+**미해결 계약 사항:** `transcribe.py` 의 `video_id` 는 여전히 `null` 이고
+`pipeline.py` 가 청크 저장 시 채운다. 단일 파일 경로에서 `transcribe.py` 를
+직접 쓰면 transcript 만으로 영상을 식별하지 못한다. CLI 인자 추가는 호출
+규약 변경이라 계약 판단이 필요하다.
+
+**Gemini API 호출:** 이 작업에서 0회. 단계 3 점검의 1회가 전부다.
