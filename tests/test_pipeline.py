@@ -148,6 +148,60 @@ class TranscribeResumeTests(unittest.TestCase):
                                       request_interval=0.0, transcriber=fake)
         self.assertEqual(fake.calls, [], "한도 초과인데 호출했다")
 
+    def _write_raw(self, index: int, langs: str, text: str) -> Path:
+        path = self.bundle / ("raw/transcripts/chunk-%03d.raw.json" % index)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "model": "fake", "requested_langs": langs, "language_codes": None,
+            "response": {"steps": [{"content": [{"annotations": [
+                {"type": "word_info", "text": text,
+                 "start_offset": "0.0s", "end_offset": "0.4s", "speaker": "spk:0"},
+            ]}]}]},
+        }, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def test_stored_raw_response_is_reused_without_calling(self) -> None:
+        self._write_raw(0, "auto", "저장됨")
+        fake = FakeTranscriber({"chunk-000.mp3": ["a"], "chunk-001.mp3": ["b"]})
+        self._run(fake)
+        self.assertEqual(fake.calls, ["chunk-001.mp3"], "저장된 응답이 있는데 호출했다")
+        first = json.loads(
+            (self.bundle / "raw/transcripts/chunk-000.json").read_text(encoding="utf-8"))
+        self.assertEqual([w["text"] for w in first["words"]], ["저장됨"])
+
+    def test_reused_raw_does_not_count_as_an_attempt(self) -> None:
+        self._write_raw(0, "auto", "저장됨")
+        self._write_raw(1, "auto", "저장됨2")
+        fake = FakeTranscriber({})
+        self._run(fake)
+        self.assertEqual(fake.calls, [])
+        self.assertEqual(usage.get_usage(self.ledger, "k")["attempts"], 0)
+
+    def test_raw_from_a_different_language_request_is_ignored(self) -> None:
+        self._write_raw(0, "en-US", "저장됨")   # job 설정은 auto 다
+        fake = FakeTranscriber({"chunk-000.mp3": ["a"], "chunk-001.mp3": ["b"]})
+        self._run(fake)
+        self.assertEqual(fake.calls, ["chunk-000.mp3", "chunk-001.mp3"])
+
+    def test_force_ignores_stored_raw(self) -> None:
+        self._write_raw(0, "auto", "저장됨")
+        fake = FakeTranscriber({"chunk-000.mp3": ["a"], "chunk-001.mp3": ["b"]})
+        pipeline.stage_transcribe(self.bundle, self.job, ledger=self.ledger, api_key="k",
+                                  daily_limit=25, rpm_limit=None, request_interval=0.0,
+                                  transcriber=fake, force=True)
+        self.assertEqual(fake.calls, ["chunk-000.mp3", "chunk-001.mp3"])
+
+    def test_unusable_stored_raw_reports_how_to_recover(self) -> None:
+        path = self.bundle / "raw/transcripts/chunk-000.raw.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"requested_langs": "auto", "response": {"steps": []}}),
+                        encoding="utf-8")
+        fake = FakeTranscriber({"chunk-000.mp3": ["a"], "chunk-001.mp3": ["b"]})
+        with self.assertRaises(pipeline.StageError) as caught:
+            self._run(fake)
+        self.assertIn("삭제", str(caught.exception))
+        self.assertEqual(fake.calls, [], "복구 실패인데 임의로 호출했다")
+
 
 class OfflineStageTests(unittest.TestCase):
     """merge/render/index 는 Gemini SDK 없이 동작해야 한다."""

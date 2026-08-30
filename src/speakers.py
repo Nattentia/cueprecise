@@ -173,7 +173,7 @@ def reconcile_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
         merged.sort(key=lambda word: (float(word["start"]), float(word["end"])))
 
     first = ordered[0]
-    return {
+    result = {
         "source": "gemini-chunks-reconciled",
         "model": first.get("model"),
         "language_codes": first.get("language_codes"),
@@ -184,6 +184,16 @@ def reconcile_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
             "duplicates_removed": duplicates_removed,
         },
     }
+    # 청크가 기록한 timestamp 보정 내역은 derived 까지 그대로 들고 간다
+    # (CONTRACT §6: 부분 실패를 성공으로 숨기지 않는다).
+    repairs = [
+        {**item, "chunk_index": chunk.get("chunk_index", position)}
+        for position, chunk in enumerate(ordered)
+        for item in chunk.get("timestamp_repairs") or []
+    ]
+    if repairs:
+        result["timestamp_repairs"] = repairs
+    return result
 
 
 def main() -> None:
