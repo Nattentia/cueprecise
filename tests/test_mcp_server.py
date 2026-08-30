@@ -183,5 +183,42 @@ class StdoutIsProtocolOnlyTests(BundleFixture):
             json.loads(line)  # 하나라도 JSON 이 아니면 여기서 터진다
 
 
+class NarrowConsoleEncodingTests(unittest.TestCase):
+    """stdio 가 파이프이고 로케일이 cp949 여도 죽지 않아야 한다.
+
+    cp949 는 한글은 되지만 `—` `’` 를 못 쓴다. 전사와 OCR 결과에 흔한
+    문자라 응답 한 건에 서버가 통째로 죽던 자리다.
+    """
+
+    def _roundtrip(self, encoding: str) -> dict:
+        import os
+        import subprocess
+
+        request = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                   "params": {"name": "없는—도구’", "arguments": {}}}
+        environment = {**os.environ, "PYTHONIOENCODING": encoding}
+        environment.pop("PYTHONUTF8", None)
+        process = subprocess.run(
+            [sys.executable, str(Path(__file__).parents[1] / "src" / "mcp_server.py")],
+            input=(json.dumps(request) + "\n").encode("utf-8"),
+            capture_output=True, env=environment, timeout=60,
+        )
+        self.assertEqual(process.returncode, 0,
+                         "서버가 죽었다: " + process.stderr.decode("utf-8", "replace"))
+        lines = [line for line in process.stdout.decode("utf-8").splitlines() if line.strip()]
+        self.assertEqual(len(lines), 1, "응답이 한 줄이 아니다")
+        return json.loads(lines[0])
+
+    def test_cp949_pipe_survives_non_cp949_characters(self) -> None:
+        response = self._roundtrip("cp949")
+        text = response["result"]["content"][0]["text"]
+        self.assertIn("—", text, "특수문자가 응답에서 사라졌다")
+        self.assertIn("’", text)
+
+    def test_utf8_pipe_is_unaffected(self) -> None:
+        response = self._roundtrip("utf-8")
+        self.assertIn("—", response["result"]["content"][0]["text"])
+
+
 if __name__ == "__main__":
     unittest.main()

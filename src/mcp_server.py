@@ -378,8 +378,33 @@ def serve(stream_in, stream_out, *, bundle_root: Path, api_key: str | None = Non
             continue
         response = handle(message, bundle_root=bundle_root, api_key=api_key)
         if response is not None:
-            stream_out.write(json.dumps(response, ensure_ascii=False) + "\n")
+            # 프로토콜 프레임만 ASCII 로 내보낸다. 비ASCII 는 \uXXXX 로 이스케이프
+            # 되며 JSON 규격이고 클라이언트가 원문 그대로 복원한다. UTF-8 고정
+            # (_force_utf8) 이 어떤 이유로 실패해도 이 줄에서는 안 죽는다.
+            stream_out.write(json.dumps(response, ensure_ascii=True) + "\n")
             stream_out.flush()
+
+
+def _force_utf8(*streams) -> None:
+    """stdio 통로를 UTF-8 로 고정한다.
+
+    MCP 는 stdout/stdin 이 항상 파이프다. 파이프면 Python 이 인코딩을
+    로케일에서 가져오는데, 한국어 Windows 는 cp949 다. cp949 는 한글은 되지만
+    `—` `’` 같은 문자를 못 쓴다. 전사·OCR 결과에 흔히 섞이는 문자들이라
+    응답 한 건에 UnicodeEncodeError 가 나고 서버가 죽는다.
+
+    테스트는 `serve()` 에 StringIO 를 직접 넘기므로 여기는 실제 실행 경로
+    에서만 부른다. reconfigure 가 없는 스트림은 건드리지 않는다.
+    """
+    for stream in streams:
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            # 고정에 실패해도 죽지는 않는다. 아래 ensure_ascii 안전망이 받는다.
+            pass
 
 
 def main() -> int:
@@ -389,6 +414,7 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bundle-root", type=Path, default=Path("data"))
     args = parser.parse_args()
+    _force_utf8(sys.stdin, sys.stdout)
     serve(sys.stdin, sys.stdout, bundle_root=args.bundle_root,
           api_key=os.environ.get("GEMINI_API_KEY"))
     return 0
