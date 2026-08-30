@@ -345,6 +345,16 @@ class StatusAndPurgeTests(unittest.TestCase):
         self.assertTrue(info["artifacts"]["srt"])
         self.assertFalse(info["artifacts"]["merged"])
 
+    def test_status_marks_optional_artifacts(self) -> None:
+        """선택 산출물이 없다고 해서 실패로 보이면 안 된다."""
+        info = pipeline.status(self.bundle)
+        expected = sorted(name for stage in pipeline.OPTIONAL_STAGES
+                          for name in pipeline.STAGE_ARTIFACTS[stage])
+        self.assertEqual(sorted(info["optional_artifacts"]), expected)
+        for name in info["optional_artifacts"]:
+            self.assertIn(name, info["artifacts"],
+                          "선택 산출물 이름이 artifacts 에 없다")
+
     def test_purge_derived_keeps_raw(self) -> None:
         pipeline.purge(self.bundle, scope="derived")
         self.assertFalse((self.bundle / "derived").exists())
@@ -561,3 +571,38 @@ class ForceAndMissingJobTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StageSelectionTests(unittest.TestCase):
+    """유효 단계 목록과 기본 실행 목록의 분리 (LIGHTWEIGHT_HANDOFF 작업 D)."""
+
+    def test_default_stages_are_valid_and_ordered(self) -> None:
+        for stage in pipeline.DEFAULT_STAGES:
+            self.assertIn(stage, pipeline.STAGES, "기본 단계가 유효 목록에 없다")
+        order = [s for s in pipeline.STAGES if s in pipeline.DEFAULT_STAGES]
+        self.assertEqual(list(pipeline.DEFAULT_STAGES), order,
+                         "기본 단계 순서가 파이프라인 순서와 다르다")
+
+    def test_optional_stages_are_the_difference(self) -> None:
+        remainder = tuple(s for s in pipeline.STAGES if s not in pipeline.DEFAULT_STAGES)
+        self.assertEqual(remainder, pipeline.OPTIONAL_STAGES,
+                         "OPTIONAL_STAGES 가 STAGES - DEFAULT_STAGES 와 다르다")
+
+    def test_resolve_stages_defaults_and_all(self) -> None:
+        self.assertEqual(pipeline.resolve_stages(None), pipeline.DEFAULT_STAGES)
+        self.assertEqual(pipeline.resolve_stages(()), pipeline.DEFAULT_STAGES)
+        self.assertEqual(pipeline.resolve_stages(["all"]), pipeline.STAGES)
+        self.assertEqual(pipeline.resolve_stages("all"), pipeline.STAGES)
+
+    def test_resolve_stages_keeps_explicit_selection(self) -> None:
+        self.assertEqual(pipeline.resolve_stages(["merge", "index"]), ("merge", "index"))
+        self.assertEqual(pipeline.resolve_stages("merge, index"), ("merge", "index"))
+
+    def test_resolve_stages_rejects_unknown(self) -> None:
+        with self.assertRaises(ValueError):
+            pipeline.resolve_stages(["nope"])
+
+    def test_resolve_stages_validates_against_full_list(self) -> None:
+        """명시적 입력은 기본 목록이 아니라 STAGES 전체에서 검증한다."""
+        for stage in pipeline.OPTIONAL_STAGES:
+            self.assertEqual(pipeline.resolve_stages([stage]), (stage,))

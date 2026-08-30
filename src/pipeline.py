@@ -50,8 +50,54 @@ import visual
 # (transcribe.request_raw) 안에서만 불러오므로 fetch/merge/render/index/status
 # 와 저장된 응답 재파싱은 SDK 없이 동작한다.
 
+# STAGES 는 "실행할 수 있는 단계" 이고 DEFAULT_STAGES 는 "생략했을 때 도는
+# 단계" 다. 둘을 한 상수로 겸하면 기본을 줄일 때마다 호출부마다 예외를 심게
+# 된다. OPTIONAL_STAGES 만 고치면 CLI·MCP·status 가 함께 따라온다.
 STAGES = ("fetch", "plan", "transcribe", "assemble", "merge", "chapters",
           "render", "visual", "index")
+
+# 기본에서 빠지는 단계. 지금은 비어 있고 실제로 빼는 것은 뒤 작업이 한다.
+OPTIONAL_STAGES: tuple[str, ...] = ()
+
+DEFAULT_STAGES = tuple(s for s in STAGES if s not in OPTIONAL_STAGES)
+
+# 단계가 만드는 산출물. status 가 선택 산출물의 부재를 실패로 보이지 않게
+# 하는 데 쓴다.
+STAGE_ARTIFACTS: dict[str, tuple[str, ...]] = {
+    "fetch": ("captions",),
+    "assemble": ("transcript",),
+    "merge": ("merged",),
+    "chapters": ("chapters",),
+    "render": ("srt", "txt"),
+    "visual": ("frames",),
+    "index": ("index",),
+}
+
+ALL_STAGES_KEYWORD = "all"
+
+
+def resolve_stages(value: object = None) -> tuple[str, ...]:
+    """단계 선택을 정규화한다.
+
+    생략(`None` 또는 빈 값)은 `DEFAULT_STAGES`, `"all"` 은 `STAGES` 전체다.
+    명시적 선택은 기본 목록이 아니라 항상 `STAGES` 전체에서 검증한다 —
+    기본에서 빠진 단계도 이름을 대면 돌아가야 한다.
+    """
+    if value is None:
+        return DEFAULT_STAGES
+    if isinstance(value, str):
+        items = [s.strip() for s in value.split(",") if s.strip()]
+    else:
+        items = [str(s).strip() for s in value if str(s).strip()]
+    if not items:
+        return DEFAULT_STAGES
+    if len(items) == 1 and items[0] == ALL_STAGES_KEYWORD:
+        return STAGES
+    for stage in items:
+        if stage not in STAGES:
+            raise ValueError("알 수 없는 단계: %s (가능: %s, %s)"
+                             % (stage, ", ".join(STAGES), ALL_STAGES_KEYWORD))
+    return tuple(items)
 
 DEFAULT_DAILY_LIMIT = 25
 DEFAULT_RPM_LIMIT = 2
@@ -518,7 +564,8 @@ def stage_index(bundle: Path) -> Path:
 
 # ----------------------------------------------------------------------------- run
 
-def run(url: str, *, bundle_root: Path = Path("data"), stages: tuple[str, ...] = STAGES,
+def run(url: str, *, bundle_root: Path = Path("data"),
+        stages: tuple[str, ...] | None = None,
         chunk_max_secs: float = audio.DEFAULT_CHUNK_MAX_SECS,
         overlap_secs: float = audio.DEFAULT_OVERLAP_SECS,
         language_codes: list[str] | None = None, diarization: bool = True,
@@ -536,9 +583,7 @@ def run(url: str, *, bundle_root: Path = Path("data"), stages: tuple[str, ...] =
     summary: dict[str, Any] = {"video_id": video_id, "bundle": str(bundle), "stages": {}}
     job: dict[str, Any] | None = None
 
-    for stage in stages:
-        if stage not in STAGES:
-            raise ValueError("알 수 없는 단계: %s" % stage)
+    for stage in resolve_stages(stages):
         _log("[%s]" % stage)
         if stage == "fetch":
             summary["stages"][stage] = stage_fetch(bundle, url, force=force, video=video)
@@ -612,6 +657,10 @@ def status(bundle: Path, *, ledger: Path | None = None, api_key: str | None = No
             ("index", "index.sqlite3"),
         )
     }
+    # 기본에서 빠진 단계의 산출물은 없는 것이 정상이다. 읽는 쪽이 그것을
+    # 실패로 오인하지 않도록 이름을 함께 준다.
+    info["optional_artifacts"] = [name for stage in OPTIONAL_STAGES
+                                  for name in STAGE_ARTIFACTS.get(stage, ())]
     if ledger is not None and api_key:
         current = usage.get_usage(ledger, api_key)
         info["usage"] = {**current, "daily_limit": daily_limit,
@@ -668,7 +717,9 @@ def main() -> int:
     run_cmd = sub.add_parser("run", help="전체 또는 일부 단계 실행")
     run_cmd.add_argument("url")
     run_cmd.add_argument("--bundle-root", type=Path, default=Path("data"))
-    run_cmd.add_argument("--stages", default=",".join(STAGES), help="쉼표 구분")
+    run_cmd.add_argument("--stages", default=None,
+                         help="쉼표 구분. 생략하면 기본(%s), all 이면 전체"
+                              % ",".join(DEFAULT_STAGES))
     run_cmd.add_argument("--chunk-max-secs", type=float, default=audio.DEFAULT_CHUNK_MAX_SECS)
     run_cmd.add_argument("--overlap-secs", type=float, default=audio.DEFAULT_OVERLAP_SECS)
     run_cmd.add_argument("--language", default=None, help="쉼표 구분. 생략하면 자동 감지")
@@ -701,7 +752,7 @@ def main() -> int:
             codes = [s.strip() for s in args.language.split(",") if s.strip()]
         at = [float(s) for s in args.at.split(",") if s.strip()] if args.at else None
         summary = run(args.url, bundle_root=args.bundle_root,
-                      stages=tuple(s.strip() for s in args.stages.split(",") if s.strip()),
+                      stages=resolve_stages(args.stages),
                       chunk_max_secs=args.chunk_max_secs, overlap_secs=args.overlap_secs,
                       language_codes=codes, width=args.width, daily_limit=args.daily_limit,
                       rpm_limit=args.rpm_limit, request_interval=args.request_interval,

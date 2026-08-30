@@ -71,7 +71,7 @@ def _fmt(seconds: float) -> str:
 def tool_register(bundle_root: Path, *, url: str, stages: list[str] | None = None,
                   language: str | None = None) -> dict[str, Any]:
     codes = [s.strip() for s in language.split(",") if s.strip()] if language else None
-    selected = tuple(stages) if stages else pipeline.STAGES
+    selected = pipeline.resolve_stages(stages)
     return pipeline.run(url, bundle_root=bundle_root, stages=selected, language_codes=codes)
 
 
@@ -229,7 +229,10 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "url": {"type": "string", "description": "YouTube URL 또는 video_id"},
                 "stages": {"type": "array", "items": {"type": "string"},
-                           "description": "생략하면 전체. %s" % ", ".join(pipeline.STAGES)},
+                           "description": "생략하면 기본(%s). 전체는 [\"all\"]. "
+                                          "가능: %s"
+                                          % (", ".join(pipeline.DEFAULT_STAGES),
+                                             ", ".join(pipeline.STAGES))},
                 "language": {"type": "string",
                              "description": "쉼표 구분 BCP-47. 생략하면 자동 감지"},
             },

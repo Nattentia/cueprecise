@@ -27,11 +27,36 @@ D 가 A·C 의 토대라서 먼저 간다. B 는 제외한다.
 
 ### D — `STAGES` / `DEFAULT_STAGES` 분리
 
-상태: **대기**
+상태: **완료** (`8a48161` 다음 커밋)
+
 대안:
+1. 계획서안 — `DEFAULT_STAGES` 를 손으로 적은 별도 튜플. 두 상수가 따로 놀아
+   단계를 추가할 때 한쪽만 고치는 사고가 난다. 버림.
+2. `--skip-stages` 플래그만 추가 — 상수는 하나로 두고 빼기만 한다. MCP 호스트가
+   뺄 이름을 알아야 해서 설명이 길어지고, 기본과 전체의 구분이 도구 스키마에
+   안 드러난다. 버림.
+3. **채택** — `OPTIONAL_STAGES` 를 유일한 손편집 지점으로 두고
+   `DEFAULT_STAGES = STAGES - OPTIONAL_STAGES` 로 유도한다. 계획서와 다르지만
+   위험이 없고(순서·검증은 `STAGES` 가 그대로 쥔다) 뒤 작업 A·C 가 상수 한 줄만
+   고치면 끝난다. `STAGE_ARTIFACTS` 도 함께 둬서 status 가 선택 산출물을 알 수 있다.
+
+계획서와 달리한 것 하나 더: 이 커밋에서 `OPTIONAL_STAGES` 는 **빈 튜플**이다.
+D 는 배관만 놓고 기본 동작을 바꾸지 않는다. 실제로 단계를 빼는 것은 A(visual)와
+C(render)가 각각 한다. 그래야 커밋마다 동작 변화가 하나씩만 들어가 되돌리기 쉽다.
+
+부수 이득: `--stages all` / `stages: ["all"]` 키워드를 넣었다. 기본이 전체가
+아니게 된 뒤 "전부 돌려라" 를 표현할 방법이 없으면 호스트가 아홉 개를 손으로
+나열하게 된다.
+
 증거:
-막힌 것:
-다음: `pipeline.py` 의 `STAGES` 사용처 전부 읽고, 유효 목록과 기본 실행 목록을 나눈다. `mcp_server.tool_register` 의 `stages or pipeline.STAGES` 도 함께.
+- `pipeline.resolve_stages()` 가 CLI·MCP·`run()` 의 유일한 정규화 지점. 검증은
+  항상 `STAGES` 전체 기준이라 기본에서 빠진 단계도 이름을 대면 돈다.
+- `status()` 가 `optional_artifacts` 를 함께 낸다. 지금은 빈 목록.
+- 테스트 179 → **186 통과** (신규 7건). `DEFAULT_STAGES == STAGES` 라 기존 동작
+  변화 0. `python src/pipeline.py run --help` 정상.
+
+막힌 것: 없음.
+다음: 없음.
 
 ---
 
