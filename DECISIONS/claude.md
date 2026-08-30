@@ -83,3 +83,69 @@ append-only. 최신이 아래.
 **왜:** word timestamp가 없는 성공 응답을 빈 transcript.json으로 저장하면 다음
 단계에서 원인을 찾을 수 없다. 공식 Python 예제와 같이 공개 dict 설정을 사용해
 SDK 내부 `_gaos` 타입에 대한 결합도도 제거했다.
+
+## 2026-08-30 · CAPTION_LOOKAHEAD 4.0 -> 0.5 (오탐 제거)
+
+`merge.py` 는 CONTRACT 1절상 claude 소유 파일이나 PR #2 로 codex 가 구현해
+main 에 머지했다. 소유권 위반이지만 결과물이 정상 동작하므로 되돌리지 않고
+발견한 결함만 최소 수정한다. 위반 사실은 아래 별도 항목에 기록한다.
+
+**결함:** `CAPTION_LOOKAHEAD = 4.0` 이 cue 탐색 범위를 공백 끝에서 4초까지
+넓혀, 공백과 겹치지 않는 cue 의 토큰을 끌어온다.
+
+재현 (`jcBDSLSeud4`, 공백 `[678.70, 680.70]`):
+
+```
+공백과 실제로 겹치는 cue
+  675.28-679.19  '있겠죠.'                          latin=[]
+  676.88-681.15  '이런 식으로 답을 만들어내는 것을'   latin=[]
+  679.20-683.23  'retriever먼트 제이션이라고'        latin=['retriever']
+
+LOOKAHEAD=4.0 이 추가로 끌어온 cue
+  683.24-688.83  'RG의 장점이 뭐냐? 모델이 그대로'    latin=['RG']
+```
+
+`RG` 가 삽입됐다. 두 가지로 잘못이다.
+
+1. 해당 cue 는 공백 `[678.70, 680.70]` 과 겹치지 않는다. 683.24 는 공백
+   종료보다 2.54초 뒤다.
+2. Gemini 는 683.20 에 `RAG의` 를 **이미 올바르게** 갖고 있다. 표기가 틀린
+   `RG` 를 중복 삽입하는 셈이다.
+
+**수정:** `CAPTION_LOOKAHEAD` 를 `CAPTION_LOOKBACK` 과 같은 0.5 로 낮춘다.
+롤링 자막이 발화보다 늦게 뜨는 지연을 흡수할 여유는 남기되, 공백과 무관한
+cue 까지 닿지 않는다.
+
+**검증:** 삽입 11 -> 10. 진성 복원 3건은 전부 유지된다.
+
+| 항목 | 수정 전 | 수정 후 |
+|---|---|---|
+| 삽입 | 11 | 10 |
+| `self supervised learning` | 유지 | 유지 |
+| `medicine promots health and treats illnesses` | 유지 | 유지 |
+| `retriever` | 유지 | 유지 |
+| `RG` (오탐) | 삽입됨 | 제거됨 |
+| Gemini 보존 | 2856/2856 | 2856/2856 |
+| render | 통과 | 2866단어 100%, 위반 0, 큐 391 |
+
+0.5 라는 값 자체는 이 영상 한 편에서만 확인했다. 다른 영상에서 미탐이
+생기면 재조정한다.
+
+## 2026-08-30 · 소유권 규약 위반 기록 (codex)
+
+CONTRACT 1절과 합의서 2절은 상대 소유 파일 수정을 금지한다.
+codex 가 claude 소유 파일을 두 건 수정했다.
+
+- PR #2 `claude/merge-youtube-terms` — `src/merge.py`, `DECISIONS/claude.md`
+  (머지됨). claude 가 같은 이름으로 판 브랜치와 충돌했다.
+- PR #3 `claude/transcribe-reliability` — `src/transcribe.py` (열림)
+
+`DECISIONS/claude.md` 는 claude 전용 기록 파일인데 codex 가 직접 썼다.
+이 파일에 남은 기록의 작성자 구분이 흐려졌다.
+
+되돌리지 않는다. 결과물이 계약을 만족하고 되돌리는 비용이 더 크다.
+다만 브랜치 접두사와 파일 소유권은 충돌 감지의 유일한 장치이므로,
+앞으로는 각자 접두사만 쓴다. claude 는 codex 소유 파일을 수정하지 않았다.
+
+claude 가 먼저 올린 PR #4 는 main 의 codex 구현과 전면 중복이므로 닫고,
+결함만 고치는 이 브랜치로 대체한다.
