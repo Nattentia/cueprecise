@@ -102,18 +102,52 @@ def restored_term_times(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _spread(candidates: list[dict[str, Any]], room: int) -> list[dict[str, Any]]:
+    """`room` 개만 남기되 시간축에 고르게 편다.
+
+    앞에서부터 자르면 긴 영상의 뒷부분에 프레임이 한 장도 안 남는다. 후보는
+    이미 시각 순이므로 균등 간격 색인을 고른다.
+    """
+    if room >= len(candidates):
+        return list(candidates)
+    if room <= 1:
+        return candidates[:room]
+    last = len(candidates) - 1
+    picked = {round(position * last / (room - 1)) for position in range(room)}
+    return [candidates[index] for index in sorted(picked)]
+
+
 def dedupe_candidates(candidates: list[dict[str, Any]], *,
                       min_separation: float = MIN_SEPARATION_SECS,
                       max_frames: int = DEFAULT_MAX_FRAMES) -> list[dict[str, Any]]:
+    """사람이 지정한 시각을 먼저 확보하고, 남은 자리를 자동 후보로 채운다.
+
+    `requested` 는 호출자가 콕 집어 달라고 한 시각이다. 자동 후보에 밀려
+    사라지면 안 된다.
+    """
     ordered = sorted(candidates, key=lambda c: float(c["timestamp"]))
+    requested = [c for c in ordered if c.get("reason") == "requested"]
+    automatic = [c for c in ordered if c.get("reason") != "requested"]
+
+    def _far_enough(candidate: dict[str, Any], chosen: list[dict[str, Any]]) -> bool:
+        return all(
+            abs(float(candidate["timestamp"]) - float(other["timestamp"])) >= min_separation
+            for other in chosen
+        )
+
     kept: list[dict[str, Any]] = []
-    for candidate in ordered:
-        if kept and float(candidate["timestamp"]) - float(kept[-1]["timestamp"]) < min_separation:
-            continue
-        kept.append(candidate)
+    for candidate in requested:
         if len(kept) >= max_frames:
             break
-    return kept
+        if _far_enough(candidate, kept):
+            kept.append(candidate)
+
+    eligible: list[dict[str, Any]] = []
+    for candidate in automatic:
+        if _far_enough(candidate, kept) and _far_enough(candidate, eligible):
+            eligible.append(candidate)
+    kept.extend(_spread(eligible, max_frames - len(kept)))
+    return sorted(kept, key=lambda c: float(c["timestamp"]))
 
 
 def source_video(bundle: Path) -> Path | None:
@@ -199,6 +233,7 @@ def build(bundle: Path, *, at: list[float] | None = None,
 
     candidates = screen_reference_times(words) + restored_term_times(words)
     candidates += [{"timestamp": float(t), "reason": "requested"} for t in (at or [])]
+    found = len(candidates)
     candidates = dedupe_candidates(candidates, max_frames=max_frames)
 
     video = source_video(bundle)
@@ -208,6 +243,8 @@ def build(bundle: Path, *, at: list[float] | None = None,
         "video_id": payload.get("video_id") or bundle.name,
         "frames": frames,
         "candidates_considered": len(candidates),
+        # 찾았지만 근접·상한으로 떨어진 수. 몇 장을 안 뽑았는지 숨기지 않는다.
+        "candidates_dropped": found - len(candidates),
         "note": None if frames else
         "프레임을 뽑지 못했다. raw/source.mp4 등 영상 파일이 필요하다 "
         "(오디오만 받은 bundle 에서는 후보 시각만 계산된다).",
