@@ -4,18 +4,19 @@ owner: claude
 
 단계는 JSON 파일로만 이어지고 각각 독립적으로 재실행할 수 있다.
 
-    fetch      URL -> raw/source.mp3, raw/captions.json
-    plan       source.mp3 -> job.json, raw/audio/chunk-NNN.mp3
+    fetch      URL -> raw/source.<ext>, raw/source_video.<ext>, raw/captions.json
+    plan       source 오디오 -> job.json, raw/audio/chunk-NNN.mp3
     transcribe chunk-NNN.mp3 -> raw/transcripts/chunk-NNN.json   (Gemini 호출)
     assemble   chunk transcripts -> derived/transcript.json      (화자 정합)
     merge      transcript + captions -> derived/merged.json
     render     merged.json -> derived/output.srt, output.txt
+    visual     merged.json + source_video -> raw/frames/, derived/frames.json
     index      bundle -> index.sqlite3
 
 사용법:
     python src/pipeline.py run <url> [--bundle-root data] [--stages a,b,c]
     python src/pipeline.py status <video_id>
-    python src/pipeline.py purge <video_id> [--scope raw|derived|all]
+    python src/pipeline.py purge <video_id> [--scope chunks|derived|raw|all]
 
 완료된 청크는 job.json 의 fingerprint/config 가 일치하면 다시 호출하지 않는다.
 """
@@ -42,17 +43,29 @@ import render as render_mod
 import speakers
 import transcribe as transcribe_mod
 import usage
+import visual
 
 # transcribe 임포트는 SDK 를 요구하지 않는다. google-genai 는 실제 호출 경로
 # (transcribe.request_raw) 안에서만 불러오므로 fetch/merge/render/index/status
 # 와 저장된 응답 재파싱은 SDK 없이 동작한다.
 
-STAGES = ("fetch", "plan", "transcribe", "assemble", "merge", "render", "index")
+STAGES = ("fetch", "plan", "transcribe", "assemble", "merge", "render", "visual", "index")
 
 DEFAULT_DAILY_LIMIT = 25
 DEFAULT_RPM_LIMIT = 2
 DEFAULT_REQUEST_INTERVAL = 30.0
 DEFAULT_WIDTH = 20
+
+# 프레임용 영상. 슬라이드 글자를 읽을 만한 최소 화질이면 된다. 360p mp4 는
+# 23분 영상 기준 16MB 로, 이미 받는 오디오(58분 61MB)보다 작다. m3u8 은
+# 구간 추출이 느려 직접 https 포맷을 먼저 고른다.
+VIDEO_FORMAT = ("bv*[height<=480][ext=mp4][protocol^=http]/"
+                "bv*[height<=480][protocol^=http]/bv*[height<=480]/wv*")
+
+# 오디오는 받은 형식 그대로 둔다. mp3 로 변환하면 파일이 오히려 커지고
+# (m4a 129k 21.7MB -> mp3 160k 26.8MB) 재압축이라 음질도 떨어진다. 어차피
+# 청크를 만들 때 16kHz 모노로 낮추므로 원본을 고음질로 보관할 이유가 없다.
+AUDIO_FORMAT = "ba[protocol^=http]/ba/bestaudio"
 
 _ID_RE = re.compile(r"(?:v=|youtu\.be/|/shorts/|/embed/)([0-9A-Za-z_-]{11})")
 
@@ -92,34 +105,83 @@ def _save_job(bundle: Path, job: dict[str, Any]) -> None:
 
 
 def _log(message: str) -> None:
-    """Windows cp949 등 좁은 콘솔 인코딩에서도 죽지 않게 출력한다."""
+    """진행 로그는 stderr 로 보낸다.
+
+    MCP 서버가 stdout 을 JSON-RPC 통신 통로로 쓴다. 진행 로그가 같은 곳으로
+    나가면 프로토콜이 깨져 클라이언트가 응답을 파싱하지 못한다. CLI 사용자는
+    터미널에서 그대로 보이므로 달라지는 것이 없다.
+
+    Windows cp949 등 좁은 콘솔 인코딩에서도 죽지 않게 감싼다.
+    """
     try:
-        print(message, flush=True)
+        print(message, file=sys.stderr, flush=True)
     except UnicodeEncodeError:
-        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
-        print(message.encode(encoding, "replace").decode(encoding), flush=True)
+        encoding = getattr(sys.stderr, "encoding", None) or "utf-8"
+        print(message.encode(encoding, "replace").decode(encoding),
+              file=sys.stderr, flush=True)
 
 
 # -------------------------------------------------------------------------- stages
 
-def stage_fetch(bundle: Path, url: str, *, force: bool = False) -> dict[str, Any]:
-    """오디오와 자막을 받는다. Gemini 호출 없음."""
-    source = bundle / "raw" / "source.mp3"
-    captions = bundle / "raw" / "captions.json"
-    source.parent.mkdir(parents=True, exist_ok=True)
+def _remove_stale_sources(bundle: Path, names: tuple[str, ...]) -> list[str]:
+    """--force 로 다시 받기 전에 이전 원본을 지운다.
 
-    if force or not source.exists():
-        target = source.parent / "source"
+    형식이 바뀌면(mp3 -> webm, source.mp4 -> source_video.mp4) 옛 파일이 그대로
+    남아 용량만 두 배가 된다. 다시 받는 자리이므로 지워도 잃는 것이 없다.
+    """
+    removed: list[str] = []
+    for name in names:
+        path = bundle / "raw" / name
+        if path.exists():
+            path.unlink()
+            removed.append(name)
+    return removed
+
+
+def stage_fetch(bundle: Path, url: str, *, force: bool = False,
+                video: bool = True) -> dict[str, Any]:
+    """오디오·영상·자막을 받는다. Gemini 호출 없음."""
+    raw = bundle / "raw"
+    captions = raw / "captions.json"
+    raw.mkdir(parents=True, exist_ok=True)
+
+    source = audio.source_audio(bundle)
+    if force or source is None:
+        if force:
+            _remove_stale_sources(bundle, audio.AUDIO_NAMES)
         command = [
-            "yt-dlp", "--no-playlist", "-x", "--audio-format", "mp3",
-            "--audio-quality", "0", "-o", str(target) + ".%(ext)s", url,
+            "yt-dlp", "--no-playlist", "-f", AUDIO_FORMAT,
+            "-o", str(raw / "source") + ".%(ext)s", url,
         ]
         result = subprocess.run(command, capture_output=True, text=True)
-        if result.returncode != 0 or not source.exists():
-            raise StageError("오디오 다운로드 실패: " + result.stderr[-500:])
-        _log("  오디오 %.1fMB" % (source.stat().st_size / 1048576))
+        source = audio.source_audio(bundle)
+        if result.returncode != 0 or source is None:
+            raise StageError("오디오 다운로드 실패: " + (result.stderr or "")[-500:])
+        _log("  오디오 %.1fMB (%s)" % (source.stat().st_size / 1048576, source.name))
     else:
-        _log("  오디오 재사용")
+        _log("  오디오 재사용 (%s)" % source.name)
+
+    # 영상은 프레임 추출에만 쓴다. 자막과 마찬가지로 실패해도 치명이 아니다.
+    if video:
+        existing = visual.source_video(bundle)
+        if existing is not None and not force:
+            _log("  영상 재사용 (%s)" % existing.name)
+        else:
+            if force:
+                _remove_stale_sources(bundle, visual.VIDEO_NAMES)
+            command = [
+                "yt-dlp", "--no-playlist", "-f", VIDEO_FORMAT,
+                "-o", str(raw / "source_video") + ".%(ext)s", url,
+            ]
+            result = subprocess.run(command, capture_output=True, text=True)
+            downloaded = visual.source_video(bundle)
+            if result.returncode != 0 or downloaded is None:
+                tail = (result.stderr or "").strip().splitlines()
+                _log("  경고: 영상 취득 실패, 프레임 추출을 건너뛴다 (%s)"
+                     % (tail[-1][:200] if tail else "원인 불명"))
+            else:
+                _log("  영상 %.1fMB (%s)"
+                     % (downloaded.stat().st_size / 1048576, downloaded.name))
 
     if force or not captions.exists():
         try:
@@ -130,7 +192,9 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False) -> dict[str, Any
                                    "video_id": bundle.name, "cues": []})
     cue_count = len(_read_json(captions).get("cues", []))
     _log("  자막 %d cues" % cue_count)
-    return {"source_mp3": str(source), "captions": str(captions), "cues": cue_count}
+    found = visual.source_video(bundle)
+    return {"source_audio": str(source), "captions": str(captions), "cues": cue_count,
+            "video": str(found) if found else None}
 
 
 def stage_plan(bundle: Path, url: str, *, chunk_max_secs: float, overlap_secs: float,
@@ -138,9 +202,9 @@ def stage_plan(bundle: Path, url: str, *, chunk_max_secs: float, overlap_secs: f
                force: bool = False) -> dict[str, Any]:
     """청크 계획과 분할. Gemini 호출 없음."""
     job_path = bundle / "job.json"
-    source = bundle / "raw" / "source.mp3"
-    if not source.exists():
-        raise StageError("raw/source.mp3 가 없습니다. fetch 단계를 먼저 실행하세요.")
+    source = audio.source_audio(bundle)
+    if source is None:
+        raise StageError("raw 에 원본 오디오가 없습니다. fetch 단계를 먼저 실행하세요.")
 
     config = {"chunk_max_secs": chunk_max_secs, "overlap_secs": overlap_secs,
               "language_codes": language_codes, "diarization": diarization}
@@ -181,8 +245,25 @@ def _raw_path(bundle: Path, chunk: dict[str, Any]) -> Path:
     return bundle / (stem + ".raw.json")
 
 
-def _reusable_raw(bundle: Path, chunk: dict[str, Any], langs: str) -> Path | None:
-    """호출 없이 다시 파싱할 수 있는 저장된 응답. 요청 설정이 다르면 안 쓴다."""
+def _raw_meta(job: dict[str, Any], chunk: dict[str, Any], langs: str) -> dict[str, Any]:
+    """응답 원문에 함께 저장할 꼬리표. 나중에 재사용해도 되는지 판단할 근거다."""
+    return {
+        "requested_langs": langs,
+        "fingerprint": job.get("input", {}).get("fingerprint"),
+        "chunk_index": chunk["index"],
+        "chunk_start": chunk["start"],
+        "chunk_end": chunk["end"],
+    }
+
+
+def _reusable_raw(bundle: Path, job: dict[str, Any], chunk: dict[str, Any],
+                  langs: str) -> Path | None:
+    """호출 없이 다시 파싱할 수 있는 저장된 응답.
+
+    언어 설정뿐 아니라 입력 오디오와 청크 구간까지 같아야 쓴다. `--force` 로
+    다시 받아 오디오 형식이 바뀌거나 `--chunk-max-secs` 를 고치면 경계가
+    옮겨가는데, 그때 옛 응답을 그대로 쓰면 타임스탬프가 조용히 어긋난다.
+    """
     path = _raw_path(bundle, chunk)
     if not path.exists():
         return None
@@ -190,7 +271,11 @@ def _reusable_raw(bundle: Path, chunk: dict[str, Any], langs: str) -> Path | Non
         stored = _read_json(path)
     except (OSError, json.JSONDecodeError):
         return None
-    if stored.get("requested_langs") != langs:
+    expected = _raw_meta(job, chunk, langs)
+    if any(stored.get(key) != value for key, value in expected.items()):
+        # 꼬리표가 없던 시절의 응답도 여기서 걸린다. 조용히 어긋난 결과를
+        # 내느니 호출 한 번을 더 쓰는 편이 낫다. 원문은 그대로 남으므로
+        # `transcribe.py --from-raw` 로 수동 복구할 수 있다.
         return None
     return path
 
@@ -214,7 +299,7 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
     reusable = {} if force else {
         chunk["index"]: path
         for chunk in pending
-        if (path := _reusable_raw(bundle, chunk, langs)) is not None
+        if (path := _reusable_raw(bundle, job, chunk, langs)) is not None
     }
     to_call = [chunk for chunk in pending if chunk["index"] not in reusable]
     if to_call:
@@ -257,8 +342,9 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
             calls_made += 1
             try:
                 result = (transcriber(str(chunk_mp3), langs) if transcriber is not None
-                          else transcribe_mod.transcribe(str(chunk_mp3), langs,
-                                                         raw_path=raw_path))
+                          else transcribe_mod.transcribe(
+                              str(chunk_mp3), langs, raw_path=raw_path,
+                              meta=_raw_meta(job, chunk, langs)))
             except Exception as error:
                 chunk["status"] = "failed"
                 chunk["error"] = str(error)[:500]
@@ -355,6 +441,21 @@ def stage_render(bundle: Path, *, width: int) -> tuple[Path, Path]:
     return srt, txt
 
 
+def stage_visual(bundle: Path, *, at: list[float] | None = None,
+                 max_frames: int = visual.DEFAULT_MAX_FRAMES) -> dict[str, Any]:
+    """화면 참조·복원 용어 시각의 프레임을 뽑는다 (CONTRACT 11절). Gemini 호출 없음."""
+    result = visual.build(bundle, at=at, max_frames=max_frames)
+    frames = result["frames"]
+    if frames:
+        ocr = sum(1 for frame in frames if frame.get("ocr_text"))
+        _log("  프레임 %d장 / 후보 %d, OCR %d장"
+             % (len(frames), result["candidates_considered"], ocr))
+    else:
+        _log("  프레임 0장 / 후보 %d — %s"
+             % (result["candidates_considered"], result.get("note") or ""))
+    return result
+
+
 def stage_index(bundle: Path) -> Path:
     """SQLite 색인을 만든다. Gemini 호출 없음."""
     index = context.build_index(bundle)
@@ -372,6 +473,8 @@ def run(url: str, *, bundle_root: Path = Path("data"), stages: tuple[str, ...] =
         rpm_limit: int | None = DEFAULT_RPM_LIMIT,
         request_interval: float = DEFAULT_REQUEST_INTERVAL,
         ledger: Path | None = None, force: bool = False,
+        video: bool = True, at: list[float] | None = None,
+        max_frames: int = visual.DEFAULT_MAX_FRAMES,
         transcriber=None) -> dict[str, Any]:
     video_id = video_id_from_url(url)
     bundle = bundle_path(bundle_root, video_id)
@@ -385,7 +488,7 @@ def run(url: str, *, bundle_root: Path = Path("data"), stages: tuple[str, ...] =
             raise ValueError("알 수 없는 단계: %s" % stage)
         _log("[%s]" % stage)
         if stage == "fetch":
-            summary["stages"][stage] = stage_fetch(bundle, url, force=force)
+            summary["stages"][stage] = stage_fetch(bundle, url, force=force, video=video)
         elif stage == "plan":
             job = stage_plan(bundle, url, chunk_max_secs=chunk_max_secs,
                              overlap_secs=overlap_secs, language_codes=language_codes,
@@ -414,6 +517,12 @@ def run(url: str, *, bundle_root: Path = Path("data"), stages: tuple[str, ...] =
         elif stage == "render":
             srt, txt = stage_render(bundle, width=width)
             summary["stages"][stage] = {"srt": str(srt), "txt": str(txt)}
+        elif stage == "visual":
+            frames = stage_visual(bundle, at=at, max_frames=max_frames)
+            summary["stages"][stage] = {
+                "frames": len(frames["frames"]),
+                "candidates": frames["candidates_considered"],
+            }
         elif stage == "index":
             summary["stages"][stage] = {"index": str(stage_index(bundle))}
     return summary
@@ -451,12 +560,28 @@ def status(bundle: Path, *, ledger: Path | None = None, api_key: str | None = No
     return info
 
 
+PURGE_SCOPES = ("chunks", "derived", "raw", "all")
+
+
 def purge(bundle: Path, *, scope: str = "derived") -> list[str]:
-    """raw 자료 삭제와 derived 재생성을 위한 명시적 삭제 (CONTRACT 12절)."""
-    if scope not in {"raw", "derived", "all"}:
-        raise ValueError("scope 는 raw | derived | all 이어야 합니다.")
+    """raw 자료 삭제와 derived 재생성을 위한 명시적 삭제 (CONTRACT 12절).
+
+    `chunks` 는 전사용 청크 오디오만 지운다. 청크는 원본 오디오에서 언제든
+    다시 뽑을 수 있고(`stage_plan` 이 없으면 자동으로 다시 뽑는다), 전사가
+    끝난 뒤에는 재개에도 쓰이지 않는다. bundle 용량의 20~25% 를 차지한다.
+    """
+    if scope not in PURGE_SCOPES:
+        raise ValueError("scope 는 %s 여야 합니다." % " | ".join(PURGE_SCOPES))
     removed: list[str] = []
     targets: list[Path] = []
+    if scope == "chunks":
+        # 원본이 없으면 청크가 이 bundle 의 유일한 오디오다. 지우면 되돌릴 수
+        # 없으므로 거부한다.
+        if audio.source_audio(bundle) is None:
+            raise ValueError(
+                "raw 에 원본 오디오가 없어 청크를 다시 만들 수 없습니다. "
+                "청크가 이 bundle 의 유일한 오디오이므로 지우지 않습니다.")
+        targets.append(bundle / "raw" / "audio")
     if scope in {"derived", "all"}:
         targets += [bundle / "derived", bundle / "index.sqlite3"]
     if scope in {"raw", "all"}:
@@ -492,6 +617,10 @@ def main() -> int:
     run_cmd.add_argument("--rpm-limit", type=int, default=DEFAULT_RPM_LIMIT)
     run_cmd.add_argument("--request-interval", type=float, default=DEFAULT_REQUEST_INTERVAL)
     run_cmd.add_argument("--force", action="store_true", help="캐시를 무시하고 다시 만든다")
+    run_cmd.add_argument("--skip-video", action="store_true",
+                         help="영상을 받지 않는다. 프레임 추출도 건너뛴다")
+    run_cmd.add_argument("--at", default=None, help="프레임을 뽑을 시각. 쉼표 구분 초")
+    run_cmd.add_argument("--max-frames", type=int, default=visual.DEFAULT_MAX_FRAMES)
 
     status_cmd = sub.add_parser("status", help="작업 상태와 로컬 사용량 추정")
     status_cmd.add_argument("video_id")
@@ -501,7 +630,8 @@ def main() -> int:
     purge_cmd = sub.add_parser("purge", help="영상 자료 삭제")
     purge_cmd.add_argument("video_id")
     purge_cmd.add_argument("--bundle-root", type=Path, default=Path("data"))
-    purge_cmd.add_argument("--scope", choices=["raw", "derived", "all"], default="derived")
+    purge_cmd.add_argument("--scope", choices=list(PURGE_SCOPES), default="derived",
+                           help="chunks 는 전사용 청크 오디오만 지운다 (원본 오디오에서 재생성 가능)")
 
     args = parser.parse_args()
 
@@ -509,12 +639,14 @@ def main() -> int:
         codes = None
         if args.language:
             codes = [s.strip() for s in args.language.split(",") if s.strip()]
+        at = [float(s) for s in args.at.split(",") if s.strip()] if args.at else None
         summary = run(args.url, bundle_root=args.bundle_root,
                       stages=tuple(s.strip() for s in args.stages.split(",") if s.strip()),
                       chunk_max_secs=args.chunk_max_secs, overlap_secs=args.overlap_secs,
                       language_codes=codes, width=args.width, daily_limit=args.daily_limit,
                       rpm_limit=args.rpm_limit, request_interval=args.request_interval,
-                      force=args.force)
+                      force=args.force, video=not args.skip_video, at=at,
+                      max_frames=args.max_frames)
         print(json.dumps(summary, ensure_ascii=False, indent=1))
     elif args.command == "status":
         bundle = bundle_path(args.bundle_root, args.video_id)

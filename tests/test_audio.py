@@ -60,5 +60,44 @@ class AudioExtractionTests(unittest.TestCase):
             self.assertEqual(stored, job)
 
 
+
+class SourceAudioLookupTests(unittest.TestCase):
+    """오디오는 받은 형식 그대로 둔다. 확장자가 여러 개일 수 있다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "raw").mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _touch(self, name: str) -> Path:
+        path = self.bundle / "raw" / name
+        path.write_bytes(b"x")
+        return path
+
+    def test_returns_none_without_audio(self) -> None:
+        self.assertIsNone(audio.source_audio(self.bundle))
+
+    def test_finds_native_download(self) -> None:
+        self._touch("source.webm")
+        self.assertEqual(audio.source_audio(self.bundle).name, "source.webm")
+
+    def test_legacy_mp3_bundle_still_works(self) -> None:
+        self._touch("source.mp3")
+        self.assertEqual(audio.source_audio(self.bundle).name, "source.mp3")
+
+    def test_native_format_wins_over_legacy_mp3(self) -> None:
+        self._touch("source.mp3")
+        self._touch("source.m4a")
+        self.assertEqual(audio.source_audio(self.bundle).name, "source.m4a")
+
+    def test_video_is_never_mistaken_for_audio(self) -> None:
+        self._touch("source_video.mp4")
+        self._touch("source.mp4")
+        self.assertIsNone(audio.source_audio(self.bundle),
+                          "영상 파일을 오디오로 골랐다")
+
 if __name__ == "__main__":
     unittest.main()

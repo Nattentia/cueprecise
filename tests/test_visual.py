@@ -40,6 +40,44 @@ class ScreenReferenceTests(unittest.TestCase):
             [])
 
 
+class EnglishScreenReferenceTests(unittest.TestCase):
+    """영어 강의도 프레임 후보를 잡아야 한다. 한국어 전용이면 반쪽이다."""
+
+    def _hits(self, sentence: str, base: float = 100.0) -> list[dict]:
+        words = [word(token, base + index * 0.3)
+                 for index, token in enumerate(sentence.split())]
+        return visual.screen_reference_times(words)
+
+    def test_common_english_phrases_are_detected(self) -> None:
+        for sentence in (
+            "as you can see the numbers go up",
+            "if you look at the second column",
+            "let's look at the architecture now",
+            "this figure shows the tradeoff",
+            "the value up here is the baseline",
+            "on the left we have the retriever",
+            "at the bottom of the slide",
+            "take a look at what happens next",
+        ):
+            with self.subTest(sentence=sentence):
+                self.assertEqual(len(self._hits(sentence)), 1, sentence)
+
+    def test_matching_ignores_case(self) -> None:
+        self.assertEqual(len(self._hits("As You Can See here")), 1)
+
+    def test_ordinary_english_speech_is_not_a_candidate(self) -> None:
+        for sentence in (
+            "the model was trained on a large corpus",
+            "we published the results last year",
+            "there we go and that is the end",
+        ):
+            with self.subTest(sentence=sentence):
+                self.assertEqual(self._hits(sentence), [], sentence)
+
+    def test_korean_detection_is_unchanged(self) -> None:
+        self.assertEqual(len(self._hits("이 그림을 보시면 알 수 있습니다")), 1)
+
+
 class RestoredTermTests(unittest.TestCase):
     def test_youtube_origin_words_become_candidates(self) -> None:
         hits = visual.restored_term_times([
@@ -121,6 +159,34 @@ class BuildTests(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 visual.build(Path(name) / "empty")
 
+
+
+class SourceVideoLookupTests(unittest.TestCase):
+    """오디오와 영상이 둘 다 webm 일 수 있다. 이름이 부딪히면 안 된다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "raw").mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _touch(self, name: str) -> None:
+        (self.bundle / "raw" / name).write_bytes(b"x")
+
+    def test_audio_webm_is_not_treated_as_video(self) -> None:
+        self._touch("source.webm")   # 오디오
+        self.assertIsNone(visual.source_video(self.bundle))
+
+    def test_finds_downloaded_video(self) -> None:
+        self._touch("source.webm")
+        self._touch("source_video.webm")
+        self.assertEqual(visual.source_video(self.bundle).name, "source_video.webm")
+
+    def test_legacy_bundle_video_still_found(self) -> None:
+        self._touch("source.mp4")
+        self.assertEqual(visual.source_video(self.bundle).name, "source.mp4")
 
 if __name__ == "__main__":
     unittest.main()

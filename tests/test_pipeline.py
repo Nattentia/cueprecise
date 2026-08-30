@@ -148,11 +148,16 @@ class TranscribeResumeTests(unittest.TestCase):
                                       request_interval=0.0, transcriber=fake)
         self.assertEqual(fake.calls, [], "한도 초과인데 호출했다")
 
-    def _write_raw(self, index: int, langs: str, text: str) -> Path:
+    def _write_raw(self, index: int, langs: str, text: str, **override) -> Path:
         path = self.bundle / ("raw/transcripts/chunk-%03d.raw.json" % index)
         path.parent.mkdir(parents=True, exist_ok=True)
+        chunk = self.job["chunks"][index]
+        tags = {"requested_langs": langs,
+                "fingerprint": self.job["input"]["fingerprint"],
+                "chunk_index": chunk["index"], "chunk_start": chunk["start"],
+                "chunk_end": chunk["end"], **override}
         path.write_text(json.dumps({
-            "model": "fake", "requested_langs": langs, "language_codes": None,
+            "model": "fake", "language_codes": None, **tags,
             "response": {"steps": [{"content": [{"annotations": [
                 {"type": "word_info", "text": text,
                  "start_offset": "0.0s", "end_offset": "0.4s", "speaker": "spk:0"},
@@ -192,15 +197,43 @@ class TranscribeResumeTests(unittest.TestCase):
         self.assertEqual(fake.calls, ["chunk-000.mp3", "chunk-001.mp3"])
 
     def test_unusable_stored_raw_reports_how_to_recover(self) -> None:
-        path = self.bundle / "raw/transcripts/chunk-000.raw.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"requested_langs": "auto", "response": {"steps": []}}),
-                        encoding="utf-8")
+        """꼬리표는 맞는데 내용을 파싱할 수 없으면 임의로 호출하지 않는다."""
+        path = self._write_raw(0, "auto", "저장됨")
+        stored = json.loads(path.read_text(encoding="utf-8"))
+        stored["response"] = {"steps": []}          # word_info 가 없다
+        path.write_text(json.dumps(stored, ensure_ascii=False), encoding="utf-8")
+
         fake = FakeTranscriber({"chunk-000.mp3": ["a"], "chunk-001.mp3": ["b"]})
         with self.assertRaises(pipeline.StageError) as caught:
             self._run(fake)
         self.assertIn("삭제", str(caught.exception))
         self.assertEqual(fake.calls, [], "복구 실패인데 임의로 호출했다")
+
+    def test_raw_from_a_different_chunk_plan_is_not_reused(self) -> None:
+        """--force 나 --chunk-max-secs 변경으로 경계가 옮겨가면 옛 응답을 쓰면 안 된다.
+
+        언어만 비교하면 다른 구간의 전사를 그대로 붙여 타임스탬프가 조용히
+        어긋난다. 호출을 한 번 더 쓰더라도 다시 받는 편이 낫다.
+        """
+        self._write_raw(0, "auto", "저장됨", chunk_start=999.0)
+        fake = FakeTranscriber({"chunk-000.mp3": ["a"], "chunk-001.mp3": ["b"]})
+        self._run(fake)
+        self.assertIn("chunk-000.mp3", fake.calls, "경계가 달라진 응답을 재사용했다")
+
+    def test_raw_from_a_different_input_audio_is_not_reused(self) -> None:
+        self._write_raw(0, "auto", "저장됨", fingerprint="sha256:다른오디오")
+        fake = FakeTranscriber({"chunk-000.mp3": ["a"], "chunk-001.mp3": ["b"]})
+        self._run(fake)
+        self.assertIn("chunk-000.mp3", fake.calls, "다른 오디오의 응답을 재사용했다")
+
+    def test_untagged_legacy_raw_is_not_reused(self) -> None:
+        path = self.bundle / "raw/transcripts/chunk-000.raw.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"requested_langs": "auto",
+                                    "response": {"steps": []}}), encoding="utf-8")
+        fake = FakeTranscriber({"chunk-000.mp3": ["a"], "chunk-001.mp3": ["b"]})
+        self._run(fake)
+        self.assertIn("chunk-000.mp3", fake.calls, "꼬리표 없는 응답을 재사용했다")
 
 
 class OfflineStageTests(unittest.TestCase):
@@ -244,6 +277,40 @@ class OfflineStageTests(unittest.TestCase):
             (self.bundle / "derived/merged.json").read_text(encoding="utf-8"))
         rendered = (self.bundle / "derived/output.txt").read_text(encoding="utf-8")
         self.assertEqual(len(rendered.split()), len(merged["words"]))
+
+    def test_visual_runs_offline_and_reports_missing_video(self) -> None:
+        pipeline.stage_merge(self.bundle)
+        result = pipeline.stage_visual(self.bundle)
+        self.assertEqual(result["frames"], [], "영상이 없는데 프레임이 나왔다")
+        self.assertIn("영상", result["note"])
+        self.assertTrue((self.bundle / "derived/frames.json").exists())
+
+    def test_visual_does_not_treat_audio_as_video(self) -> None:
+        (self.bundle / "raw/source.mp3").write_bytes(b"fake-audio")
+        pipeline.stage_merge(self.bundle)
+        result = pipeline.stage_visual(self.bundle)
+        self.assertEqual(result["frames"], [], "오디오로 프레임을 뽑으려 했다")
+
+    def test_visual_stage_sits_between_render_and_index(self) -> None:
+        self.assertEqual(pipeline.STAGES[-3:], ("render", "visual", "index"))
+
+    def test_index_picks_up_frames(self) -> None:
+        pipeline.stage_merge(self.bundle)
+        (self.bundle / "derived/frames.json").write_text(json.dumps({
+            "schema_version": 1, "video_id": "vid",
+            "frames": [{"timestamp": 3.0, "path": "raw/frames/000003000.jpg",
+                        "reason": "screen-reference", "ocr_text": "self supervised",
+                        "confidence": 0.8}],
+        }, ensure_ascii=False), encoding="utf-8")
+        index = pipeline.stage_index(self.bundle)
+        import sqlite3
+        connection = sqlite3.connect(index)
+        try:
+            rows = connection.execute(
+                "SELECT source_kind, text FROM evidence WHERE source_kind='frame'").fetchall()
+        finally:
+            connection.close()  # Windows 는 열린 파일을 지우지 못한다
+        self.assertEqual(rows, [("frame", "self supervised")])
 
     def test_assemble_requires_chunk_transcripts(self) -> None:
         job = {"video_id": "vid", "chunks": [
@@ -293,6 +360,101 @@ class StatusAndPurgeTests(unittest.TestCase):
     def test_purge_rejects_unknown_scope(self) -> None:
         with self.assertRaises(ValueError):
             pipeline.purge(self.bundle, scope="everything")
+
+    def _seed_chunks(self) -> None:
+        chunk = self.bundle / "raw/audio/chunk-000.mp3"
+        chunk.parent.mkdir(parents=True, exist_ok=True)
+        chunk.write_bytes(b"fake-chunk")
+        (self.bundle / "raw/source.mp3").write_bytes(b"fake-audio")
+
+    def test_purge_chunks_keeps_source_and_transcripts(self) -> None:
+        self._seed_chunks()
+        transcript = self.bundle / "raw/transcripts/chunk-000.json"
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text("{}", encoding="utf-8")
+
+        removed = pipeline.purge(self.bundle, scope="chunks")
+
+        self.assertFalse((self.bundle / "raw/audio").exists(), "청크가 남았다")
+        self.assertTrue((self.bundle / "raw/source.mp3").exists(), "원본을 지웠다")
+        self.assertTrue(transcript.exists(), "전사를 지웠다")
+        self.assertTrue((self.bundle / "raw/captions.json").exists(), "자막을 지웠다")
+        self.assertEqual(len(removed), 1)
+
+    def test_purge_chunks_refuses_when_source_audio_is_gone(self) -> None:
+        chunk = self.bundle / "raw/audio/chunk-000.mp3"
+        chunk.parent.mkdir(parents=True, exist_ok=True)
+        chunk.write_bytes(b"fake-chunk")  # source.mp3 없음
+        with self.assertRaises(ValueError) as caught:
+            pipeline.purge(self.bundle, scope="chunks")
+        self.assertIn("유일한 오디오", str(caught.exception))
+        self.assertTrue(chunk.exists(), "되돌릴 수 없는데 지웠다")
+
+    def test_plan_rebuilds_purged_chunks(self) -> None:
+        """청크를 지워도 source.mp3 가 있으면 계획 단계가 다시 뽑는다."""
+        self._seed_chunks()
+        job = {"input": {"fingerprint": "sha256:x"},
+               "config": {"chunk_max_secs": 1790.0, "overlap_secs": 10.0,
+                          "language_codes": None, "diarization": True},
+               "chunks": [{"index": 0, "start": 0.0, "end": 10.0,
+                           "path": "raw/audio/chunk-000.mp3", "status": "planned",
+                           "attempts": 0,
+                           "transcript_path": "raw/transcripts/chunk-000.json",
+                           "error": None}]}
+        (self.bundle / "job.json").write_text(json.dumps(job), encoding="utf-8")
+        pipeline.purge(self.bundle, scope="chunks")
+
+        calls: list = []
+        original = pipeline.audio.extract_chunks
+        pipeline.audio.extract_chunks = lambda src, root, chunks: calls.append(len(chunks))
+        pipeline.audio.file_fingerprint = lambda path: "sha256:x"
+        try:
+            pipeline.stage_plan(self.bundle, "u", chunk_max_secs=1790.0, overlap_secs=10.0,
+                                language_codes=None, diarization=True)
+        finally:
+            pipeline.audio.extract_chunks = original
+        self.assertEqual(calls, [1], "없어진 청크를 다시 뽑지 않았다")
+
+
+
+class ForceRefetchTests(unittest.TestCase):
+    """--force 로 다시 받을 때 옛 원본이 남으면 용량만 두 배가 된다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "raw").mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _touch(self, name: str) -> Path:
+        path = self.bundle / "raw" / name
+        path.write_bytes(b"x")
+        return path
+
+    def test_stale_audio_of_another_format_is_removed(self) -> None:
+        self._touch("source.mp3")
+        self._touch("source.webm")
+        removed = pipeline._remove_stale_sources(self.bundle, pipeline.audio.AUDIO_NAMES)
+        self.assertEqual(sorted(removed), ["source.mp3", "source.webm"])
+        self.assertIsNone(pipeline.audio.source_audio(self.bundle))
+
+    def test_stale_video_including_legacy_name_is_removed(self) -> None:
+        self._touch("source.mp4")            # 구 bundle 이름
+        self._touch("source_video.mp4")
+        pipeline._remove_stale_sources(self.bundle, pipeline.visual.VIDEO_NAMES)
+        self.assertIsNone(pipeline.visual.source_video(self.bundle))
+
+    def test_removal_leaves_other_raw_files_alone(self) -> None:
+        self._touch("source.mp3")
+        captions = self._touch("captions.json")
+        pipeline._remove_stale_sources(self.bundle, pipeline.audio.AUDIO_NAMES)
+        self.assertTrue(captions.exists(), "자막을 지웠다")
+
+    def test_removal_is_silent_when_nothing_is_there(self) -> None:
+        self.assertEqual(
+            pipeline._remove_stale_sources(self.bundle, pipeline.audio.AUDIO_NAMES), [])
 
 
 if __name__ == "__main__":

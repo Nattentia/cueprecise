@@ -27,13 +27,34 @@ DEFAULT_MAX_FRAMES = 40
 MIN_SEPARATION_SECS = 8.0
 """이보다 가까운 후보는 하나로 합친다. 같은 슬라이드를 여러 장 뽑지 않는다."""
 
+VIDEO_NAMES = ("source_video.mp4", "source_video.webm", "source_video.mkv",
+               "source.mp4")
+"""프레임을 뽑을 수 있는 파일.
+
+영상은 `source_video.*` 로 받는다. 오디오도 받은 형식을 그대로 두므로, 둘 다
+`source.*` 를 쓰면 webm 끼리 이름이 부딪힐 수 있다. `source.mp4` 는 이 규칙
+이전에 받은 bundle 을 위해 남긴다.
+"""
+
 SCREEN_REFERENCE_PATTERNS = (
+    # 한국어 — 네 갈래: 보다 / 이 그림 / 여기·좌우 / 그림에서
     r"보시면", r"보시다시피", r"보면", r"보겠습니다",
     r"이\s*그림", r"이\s*표", r"이\s*그래프", r"이\s*슬라이드", r"이\s*화면",
     r"여기\s*보", r"왼쪽", r"오른쪽", r"위\s*쪽", r"아래\s*쪽",
     r"그림에서", r"표에서", r"그래프에서", r"화면에",
+    # 영어 — 같은 네 갈래를 그대로 옮겼다.
+    r"\byou can see\b", r"\byou['’]?ll see\b", r"\bas you see\b",
+    r"\blet['’]?s look at\b", r"\blook at th(?:is|e)\b",
+    r"\bif you look\b", r"\btake a look\b",
+    r"\bthis (?:figure|table|graph|chart|slide|diagram|plot|image|picture)\b",
+    r"\bup here\b", r"\bdown here\b", r"\bover here\b", r"\bright here\b",
+    r"\bon the left\b", r"\bon the right\b",
+    r"\bat the top\b", r"\bat the bottom\b",
+    r"\bin the (?:figure|table|graph|chart|diagram|plot)\b",
+    r"\bon the (?:slide|screen)\b",
 )
-_SCREEN_RE = re.compile("|".join(SCREEN_REFERENCE_PATTERNS))
+_SCREEN_RE = re.compile("|".join(SCREEN_REFERENCE_PATTERNS), re.IGNORECASE)
+"""대소문자를 가리지 않는다. 한국어 패턴에는 영향이 없다."""
 
 _WINDOW_SECS = 6.0
 """화면 참조 표현을 찾을 때 묶어서 볼 문맥 길이."""
@@ -93,6 +114,19 @@ def dedupe_candidates(candidates: list[dict[str, Any]], *,
         if len(kept) >= max_frames:
             break
     return kept
+
+
+def source_video(bundle: Path) -> Path | None:
+    """bundle 의 영상 파일. 오디오만 받은 bundle 이면 None.
+
+    오디오를 영상 대신 넘기면 ffmpeg 가 후보마다 실패하므로, 없는 것은
+    없다고 답한다.
+    """
+    for name in VIDEO_NAMES:
+        candidate = bundle / "raw" / name
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def _ocr(path: Path) -> tuple[str | None, float | None]:
@@ -167,13 +201,8 @@ def build(bundle: Path, *, at: list[float] | None = None,
     candidates += [{"timestamp": float(t), "reason": "requested"} for t in (at or [])]
     candidates = dedupe_candidates(candidates, max_frames=max_frames)
 
-    video = bundle / "raw" / "source.mp3"
-    for name in ("source.mp4", "source.webm", "source.mkv"):
-        if (bundle / "raw" / name).exists():
-            video = bundle / "raw" / name
-            break
-
-    frames = extract_frames(video, bundle, candidates) if video.exists() else []
+    video = source_video(bundle)
+    frames = extract_frames(video, bundle, candidates) if video is not None else []
     result = {
         "schema_version": 1,
         "video_id": payload.get("video_id") or bundle.name,

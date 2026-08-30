@@ -19,23 +19,48 @@ python src/pipeline.py run "https://www.youtube.com/watch?v=jcBDSLSeud4"
 python src/pipeline.py status jcBDSLSeud4                 # 진행도 + 사용량 추정
 python src/pipeline.py run <url> --stages merge,render    # 일부 단계만 재실행
 python src/pipeline.py purge jcBDSLSeud4 --scope derived  # derived 만 삭제
+python src/pipeline.py purge jcBDSLSeud4 --scope chunks   # 청크 오디오만 삭제
 ```
 
 ## 파이프라인
 
 ```
-fetch       URL           -> raw/source.mp3, raw/captions.json      쿼터 0
-plan        source.mp3    -> job.json, raw/audio/chunk-NNN.mp3      쿼터 0
+fetch       URL           -> raw/source.<ext>, source_video.<ext>, captions.json
+plan        원본 오디오    -> job.json, raw/audio/chunk-NNN.mp3      쿼터 0
 transcribe  chunk-NNN.mp3 -> raw/transcripts/chunk-NNN.json         청크당 1콜
 assemble    chunk 전사    -> derived/transcript.json                쿼터 0
 merge       transcript+자막 -> derived/merged.json                  쿼터 0
 render      merged.json   -> derived/output.srt, output.txt         쿼터 0
+visual      merged+영상   -> raw/frames/, derived/frames.json       쿼터 0
 index       bundle        -> index.sqlite3                          쿼터 0
 ```
 
 단계는 JSON 파일로만 이어진다. 각각 독립적으로 재실행할 수 있고, 완료된
 청크는 `job.json` 의 fingerprint/config 가 일치하면 다시 호출하지 않는다.
 중간에 실패해도 완료 청크는 보존되고 같은 명령으로 이어서 진행한다.
+
+전사 응답 원문은 검증 전에 `raw/transcripts/chunk-NNN.raw.json` 으로
+저장한다. 파싱이 실패해도 이미 소모한 호출이 남아, 재실행하면 **Gemini 를
+다시 부르지 않고** 그 원문으로 이어간다.
+
+Gemini 는 긴 오디오에서 드물게 단어 하나의 timestamp 를 손상시킨다
+(관측: `end` 가 `1120.3` 대신 `120.3`). 이런 단어는 이웃 단어로 복구하고
+`timestamp_repairs` 에 기록한다. 손상이 단어 수의 0.5% 를 넘으면 응답 자체가
+망가진 것으로 보고 중단한다.
+
+오디오는 받은 형식 그대로 저장한다. mp3 로 변환하면 파일이 오히려 커지고
+(m4a 129k 21.7MB → mp3 160k 26.8MB) 재압축이라 음질도 떨어진다. 청크를 만들 때
+어차피 16kHz 모노로 낮춘다.
+
+전사가 끝나면 `raw/audio/` 의 청크 오디오는 쓸 데가 없다. bundle 용량의
+20~25% 를 차지하므로 `purge --scope chunks` 로 지울 수 있다. 원본 오디오가
+남아 있으면 `plan` 단계가 필요할 때 다시 뽑는다.
+
+영상은 프레임 추출에만 쓴다. 360p 로 받으므로 23분 영상 기준 16MB 이고,
+필요 없으면 `--skip-video` 로 건너뛴다. bundle 용량 실측은 23분 55.8MB,
+58분 110.3MB 였고 그중 오디오가 72~80%, 영상은 13~28% 다.
+
+진행 로그는 stderr 로 나간다. stdout 은 요약 JSON 과 MCP 의 JSON-RPC 전용이다.
 
 인터페이스는 `CONTRACT.md` 가 정의한다. 그 파일이 유일한 진실이다.
 
@@ -93,10 +118,16 @@ stdlib `unittest` 만 쓴다. 테스트 의존성이 없고 네트워크와 Gemi
 ## 알려진 제한
 
 - YouTube 자막의 표기 오류(`promots`, `retriever`, `RG`)가 그대로 들어온다.
-  표기 정규화는 별도 단계이며 아직 없다.
+  표기 정규화는 별도 단계이며 아직 없다. 다만 슬라이드에는 정확한 철자가
+  있는 경우가 많아, 뽑아둔 프레임의 OCR 로 풀 수 있을 것으로 본다.
+- OCR 은 `pytesseract` 와 tesseract 바이너리가 있을 때만 동작한다. 없으면
+  `ocr_text` 가 `null` 이고, 프레임은 시각으로만 조회된다(텍스트 검색 불가).
 - `merge.py` 의 임계값은 영상 한 편에서만 조정했다. 다른 영상 검증이 필요하다.
 - 사용량 원장은 로컬 추정치다. AI Studio 의 서버 수치가 최종 권위다.
-- `visual.py` 는 `raw/` 에 영상 파일이 있어야 프레임을 뽑는다. 오디오만 받은
-  bundle 에서는 후보 시각만 계산한다.
-- **전체 파이프라인의 실영상 end-to-end 검증은 아직 하지 않았다.** 다음 작업의
-  첫 항목이다.
+- 프레임 후보를 찾는 화면 참조 표현은 한국어와 영어만 있다. 다른 언어 영상은
+  복원 용어가 없으면 후보가 잡히지 않는다.
+- 청크가 3개 이상일 때, 앞 청크와 겹치지 않는 새 화자는 global 라벨을 못 받고
+  호출별 로컬 라벨(`spk:1`)로 남는다. 서로 다른 사람이 합쳐질 수 있다.
+- 목차(`chapters.json`)를 만드는 단계가 없어 `ytx_outline` 의 목차가 한 항목뿐이다.
+- 실영상 검증은 23분(단일 청크)과 58분(2청크)까지 마쳤다. 3청크 이상과
+  실 API 경로의 중단·재개는 아직이다.

@@ -193,7 +193,8 @@ def tool_purge(bundle_root: Path, *, video_id: str,
         "video_id": video_id,
         "scope": scope,
         "removed": removed,
-        "note": "derived 는 raw 가 남아 있으면 ytx_register 로 재생성할 수 있다.",
+        "note": "derived 는 raw 가 남아 있으면 ytx_register 로 재생성할 수 있다. "
+                "chunks 는 원본 오디오가 남아 있으면 plan 단계가 다시 뽑는다.",
     }
 
 
@@ -285,12 +286,14 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "ytx_purge",
         "description": "영상 자료를 명시적으로 삭제한다. "
-                       "scope: derived(기본) | raw | all.",
+                       "scope: derived(기본) | chunks | raw | all. "
+                       "chunks 는 전사용 청크 오디오만 지우며 원본 오디오에서 다시 만들 수 있다.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "video_id": {"type": "string"},
-                "scope": {"type": "string", "enum": ["derived", "raw", "all"]},
+                "scope": {"type": "string",
+                          "enum": ["derived", "chunks", "raw", "all"]},
             },
             "required": ["video_id"],
         },

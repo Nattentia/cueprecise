@@ -66,7 +66,11 @@ def fetch(url: str, output: Path) -> dict[str, object]:
     with tempfile.TemporaryDirectory(prefix="ytx-captions-") as directory:
         target = Path(directory) / "%(id)s.%(ext)s"
         command = ["yt-dlp", "--write-auto-sub", "--sub-lang", "ko-orig", "--skip-download", "--convert-subs", "srt", "-o", str(target), url]
-        subprocess.run(command, check=True)
+        # 출력을 삼킨다. MCP 서버는 stdout 을 JSON-RPC 통로로 쓰므로 자식
+        # 프로세스가 거기에 쓰면 프로토콜이 깨진다.
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError("yt-dlp 자막 취득 실패: " + (result.stderr or "")[-300:])
         candidates = list(Path(directory).glob("*.ko-orig*.srt"))
         if not candidates:
             raise FileNotFoundError("ko-orig 자동자막을 내려받지 못했습니다.")
