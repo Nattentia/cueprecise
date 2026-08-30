@@ -245,6 +245,40 @@ class OfflineStageTests(unittest.TestCase):
         rendered = (self.bundle / "derived/output.txt").read_text(encoding="utf-8")
         self.assertEqual(len(rendered.split()), len(merged["words"]))
 
+    def test_visual_runs_offline_and_reports_missing_video(self) -> None:
+        pipeline.stage_merge(self.bundle)
+        result = pipeline.stage_visual(self.bundle)
+        self.assertEqual(result["frames"], [], "영상이 없는데 프레임이 나왔다")
+        self.assertIn("영상", result["note"])
+        self.assertTrue((self.bundle / "derived/frames.json").exists())
+
+    def test_visual_does_not_treat_audio_as_video(self) -> None:
+        (self.bundle / "raw/source.mp3").write_bytes(b"fake-audio")
+        pipeline.stage_merge(self.bundle)
+        result = pipeline.stage_visual(self.bundle)
+        self.assertEqual(result["frames"], [], "오디오로 프레임을 뽑으려 했다")
+
+    def test_visual_stage_sits_between_render_and_index(self) -> None:
+        self.assertEqual(pipeline.STAGES[-3:], ("render", "visual", "index"))
+
+    def test_index_picks_up_frames(self) -> None:
+        pipeline.stage_merge(self.bundle)
+        (self.bundle / "derived/frames.json").write_text(json.dumps({
+            "schema_version": 1, "video_id": "vid",
+            "frames": [{"timestamp": 3.0, "path": "raw/frames/000003000.jpg",
+                        "reason": "screen-reference", "ocr_text": "self supervised",
+                        "confidence": 0.8}],
+        }, ensure_ascii=False), encoding="utf-8")
+        index = pipeline.stage_index(self.bundle)
+        import sqlite3
+        connection = sqlite3.connect(index)
+        try:
+            rows = connection.execute(
+                "SELECT source_kind, text FROM evidence WHERE source_kind='frame'").fetchall()
+        finally:
+            connection.close()  # Windows 는 열린 파일을 지우지 못한다
+        self.assertEqual(rows, [("frame", "self supervised")])
+
     def test_assemble_requires_chunk_transcripts(self) -> None:
         job = {"video_id": "vid", "chunks": [
             {"index": 0, "transcript_path": "raw/transcripts/chunk-000.json"}]}

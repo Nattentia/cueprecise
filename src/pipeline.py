@@ -4,12 +4,13 @@ owner: claude
 
 단계는 JSON 파일로만 이어지고 각각 독립적으로 재실행할 수 있다.
 
-    fetch      URL -> raw/source.mp3, raw/captions.json
+    fetch      URL -> raw/source.mp3, raw/source.mp4, raw/captions.json
     plan       source.mp3 -> job.json, raw/audio/chunk-NNN.mp3
     transcribe chunk-NNN.mp3 -> raw/transcripts/chunk-NNN.json   (Gemini 호출)
     assemble   chunk transcripts -> derived/transcript.json      (화자 정합)
     merge      transcript + captions -> derived/merged.json
     render     merged.json -> derived/output.srt, output.txt
+    visual     merged.json + source.mp4 -> raw/frames/, derived/frames.json
     index      bundle -> index.sqlite3
 
 사용법:
@@ -42,17 +43,24 @@ import render as render_mod
 import speakers
 import transcribe as transcribe_mod
 import usage
+import visual
 
 # transcribe 임포트는 SDK 를 요구하지 않는다. google-genai 는 실제 호출 경로
 # (transcribe.request_raw) 안에서만 불러오므로 fetch/merge/render/index/status
 # 와 저장된 응답 재파싱은 SDK 없이 동작한다.
 
-STAGES = ("fetch", "plan", "transcribe", "assemble", "merge", "render", "index")
+STAGES = ("fetch", "plan", "transcribe", "assemble", "merge", "render", "visual", "index")
 
 DEFAULT_DAILY_LIMIT = 25
 DEFAULT_RPM_LIMIT = 2
 DEFAULT_REQUEST_INTERVAL = 30.0
 DEFAULT_WIDTH = 20
+
+# 프레임용 영상. 슬라이드 글자를 읽을 만한 최소 화질이면 된다. 360p mp4 는
+# 23분 영상 기준 16MB 로, 이미 받는 오디오(58분 61MB)보다 작다. m3u8 은
+# 구간 추출이 느려 직접 https 포맷을 먼저 고른다.
+VIDEO_FORMAT = ("bv*[height<=480][ext=mp4][protocol^=http]/"
+                "bv*[height<=480][protocol^=http]/bv*[height<=480]/wv*")
 
 _ID_RE = re.compile(r"(?:v=|youtu\.be/|/shorts/|/embed/)([0-9A-Za-z_-]{11})")
 
@@ -102,8 +110,9 @@ def _log(message: str) -> None:
 
 # -------------------------------------------------------------------------- stages
 
-def stage_fetch(bundle: Path, url: str, *, force: bool = False) -> dict[str, Any]:
-    """오디오와 자막을 받는다. Gemini 호출 없음."""
+def stage_fetch(bundle: Path, url: str, *, force: bool = False,
+                video: bool = True) -> dict[str, Any]:
+    """오디오·영상·자막을 받는다. Gemini 호출 없음."""
     source = bundle / "raw" / "source.mp3"
     captions = bundle / "raw" / "captions.json"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -121,6 +130,26 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False) -> dict[str, Any
     else:
         _log("  오디오 재사용")
 
+    # 영상은 프레임 추출에만 쓴다. 자막과 마찬가지로 실패해도 치명이 아니다.
+    if video:
+        existing = visual.source_video(bundle)
+        if existing is not None and not force:
+            _log("  영상 재사용 (%s)" % existing.name)
+        else:
+            command = [
+                "yt-dlp", "--no-playlist", "-f", VIDEO_FORMAT,
+                "-o", str(source.parent / "source") + ".%(ext)s", url,
+            ]
+            result = subprocess.run(command, capture_output=True, text=True)
+            downloaded = visual.source_video(bundle)
+            if result.returncode != 0 or downloaded is None:
+                tail = (result.stderr or "").strip().splitlines()
+                _log("  경고: 영상 취득 실패, 프레임 추출을 건너뛴다 (%s)"
+                     % (tail[-1][:200] if tail else "원인 불명"))
+            else:
+                _log("  영상 %.1fMB (%s)"
+                     % (downloaded.stat().st_size / 1048576, downloaded.name))
+
     if force or not captions.exists():
         try:
             fetch_youtube.fetch(url, captions)
@@ -130,7 +159,9 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False) -> dict[str, Any
                                    "video_id": bundle.name, "cues": []})
     cue_count = len(_read_json(captions).get("cues", []))
     _log("  자막 %d cues" % cue_count)
-    return {"source_mp3": str(source), "captions": str(captions), "cues": cue_count}
+    found = visual.source_video(bundle)
+    return {"source_mp3": str(source), "captions": str(captions), "cues": cue_count,
+            "video": str(found) if found else None}
 
 
 def stage_plan(bundle: Path, url: str, *, chunk_max_secs: float, overlap_secs: float,
@@ -355,6 +386,21 @@ def stage_render(bundle: Path, *, width: int) -> tuple[Path, Path]:
     return srt, txt
 
 
+def stage_visual(bundle: Path, *, at: list[float] | None = None,
+                 max_frames: int = visual.DEFAULT_MAX_FRAMES) -> dict[str, Any]:
+    """화면 참조·복원 용어 시각의 프레임을 뽑는다 (CONTRACT 11절). Gemini 호출 없음."""
+    result = visual.build(bundle, at=at, max_frames=max_frames)
+    frames = result["frames"]
+    if frames:
+        ocr = sum(1 for frame in frames if frame.get("ocr_text"))
+        _log("  프레임 %d장 / 후보 %d, OCR %d장"
+             % (len(frames), result["candidates_considered"], ocr))
+    else:
+        _log("  프레임 0장 / 후보 %d — %s"
+             % (result["candidates_considered"], result.get("note") or ""))
+    return result
+
+
 def stage_index(bundle: Path) -> Path:
     """SQLite 색인을 만든다. Gemini 호출 없음."""
     index = context.build_index(bundle)
@@ -372,6 +418,8 @@ def run(url: str, *, bundle_root: Path = Path("data"), stages: tuple[str, ...] =
         rpm_limit: int | None = DEFAULT_RPM_LIMIT,
         request_interval: float = DEFAULT_REQUEST_INTERVAL,
         ledger: Path | None = None, force: bool = False,
+        video: bool = True, at: list[float] | None = None,
+        max_frames: int = visual.DEFAULT_MAX_FRAMES,
         transcriber=None) -> dict[str, Any]:
     video_id = video_id_from_url(url)
     bundle = bundle_path(bundle_root, video_id)
@@ -385,7 +433,7 @@ def run(url: str, *, bundle_root: Path = Path("data"), stages: tuple[str, ...] =
             raise ValueError("알 수 없는 단계: %s" % stage)
         _log("[%s]" % stage)
         if stage == "fetch":
-            summary["stages"][stage] = stage_fetch(bundle, url, force=force)
+            summary["stages"][stage] = stage_fetch(bundle, url, force=force, video=video)
         elif stage == "plan":
             job = stage_plan(bundle, url, chunk_max_secs=chunk_max_secs,
                              overlap_secs=overlap_secs, language_codes=language_codes,
@@ -414,6 +462,12 @@ def run(url: str, *, bundle_root: Path = Path("data"), stages: tuple[str, ...] =
         elif stage == "render":
             srt, txt = stage_render(bundle, width=width)
             summary["stages"][stage] = {"srt": str(srt), "txt": str(txt)}
+        elif stage == "visual":
+            frames = stage_visual(bundle, at=at, max_frames=max_frames)
+            summary["stages"][stage] = {
+                "frames": len(frames["frames"]),
+                "candidates": frames["candidates_considered"],
+            }
         elif stage == "index":
             summary["stages"][stage] = {"index": str(stage_index(bundle))}
     return summary
@@ -492,6 +546,10 @@ def main() -> int:
     run_cmd.add_argument("--rpm-limit", type=int, default=DEFAULT_RPM_LIMIT)
     run_cmd.add_argument("--request-interval", type=float, default=DEFAULT_REQUEST_INTERVAL)
     run_cmd.add_argument("--force", action="store_true", help="캐시를 무시하고 다시 만든다")
+    run_cmd.add_argument("--skip-video", action="store_true",
+                         help="영상을 받지 않는다. 프레임 추출도 건너뛴다")
+    run_cmd.add_argument("--at", default=None, help="프레임을 뽑을 시각. 쉼표 구분 초")
+    run_cmd.add_argument("--max-frames", type=int, default=visual.DEFAULT_MAX_FRAMES)
 
     status_cmd = sub.add_parser("status", help="작업 상태와 로컬 사용량 추정")
     status_cmd.add_argument("video_id")
@@ -509,12 +567,14 @@ def main() -> int:
         codes = None
         if args.language:
             codes = [s.strip() for s in args.language.split(",") if s.strip()]
+        at = [float(s) for s in args.at.split(",") if s.strip()] if args.at else None
         summary = run(args.url, bundle_root=args.bundle_root,
                       stages=tuple(s.strip() for s in args.stages.split(",") if s.strip()),
                       chunk_max_secs=args.chunk_max_secs, overlap_secs=args.overlap_secs,
                       language_codes=codes, width=args.width, daily_limit=args.daily_limit,
                       rpm_limit=args.rpm_limit, request_interval=args.request_interval,
-                      force=args.force)
+                      force=args.force, video=not args.skip_video, at=at,
+                      max_frames=args.max_frames)
         print(json.dumps(summary, ensure_ascii=False, indent=1))
     elif args.command == "status":
         bundle = bundle_path(args.bundle_root, args.video_id)

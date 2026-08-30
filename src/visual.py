@@ -27,6 +27,9 @@ DEFAULT_MAX_FRAMES = 40
 MIN_SEPARATION_SECS = 8.0
 """이보다 가까운 후보는 하나로 합친다. 같은 슬라이드를 여러 장 뽑지 않는다."""
 
+VIDEO_NAMES = ("source.mp4", "source.webm", "source.mkv")
+"""프레임을 뽑을 수 있는 파일. 오디오(source.mp3)는 여기 없다."""
+
 SCREEN_REFERENCE_PATTERNS = (
     r"보시면", r"보시다시피", r"보면", r"보겠습니다",
     r"이\s*그림", r"이\s*표", r"이\s*그래프", r"이\s*슬라이드", r"이\s*화면",
@@ -93,6 +96,19 @@ def dedupe_candidates(candidates: list[dict[str, Any]], *,
         if len(kept) >= max_frames:
             break
     return kept
+
+
+def source_video(bundle: Path) -> Path | None:
+    """bundle 의 영상 파일. 오디오만 받은 bundle 이면 None.
+
+    오디오를 영상 대신 넘기면 ffmpeg 가 후보마다 실패하므로, 없는 것은
+    없다고 답한다.
+    """
+    for name in VIDEO_NAMES:
+        candidate = bundle / "raw" / name
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def _ocr(path: Path) -> tuple[str | None, float | None]:
@@ -167,13 +183,8 @@ def build(bundle: Path, *, at: list[float] | None = None,
     candidates += [{"timestamp": float(t), "reason": "requested"} for t in (at or [])]
     candidates = dedupe_candidates(candidates, max_frames=max_frames)
 
-    video = bundle / "raw" / "source.mp3"
-    for name in ("source.mp4", "source.webm", "source.mkv"):
-        if (bundle / "raw" / name).exists():
-            video = bundle / "raw" / name
-            break
-
-    frames = extract_frames(video, bundle, candidates) if video.exists() else []
+    video = source_video(bundle)
+    frames = extract_frames(video, bundle, candidates) if video is not None else []
     result = {
         "schema_version": 1,
         "video_id": payload.get("video_id") or bundle.name,
