@@ -95,7 +95,6 @@ SDK 내부 `_gaos` 타입에 대한 결합도도 제거했다.
 사례에서 같은 `API` cue가 두 공백에 2회 들어가던 결과가 1회로 줄었고, 실제
 fixture 결과는 11단어로 변하지 않았다.
 
-
 ## 2026-08-30 · CAPTION_LOOKAHEAD 4.0 -> 0.5 (오탐 제거)
 
 `merge.py` 는 CONTRACT 1절상 claude 소유 파일이나 PR #2 로 codex 가 구현해
@@ -161,3 +160,26 @@ codex 가 claude 소유 파일을 두 건 수정했다.
 
 claude 가 먼저 올린 PR #4 는 main 의 codex 구현과 전면 중복이므로 닫고,
 결함만 고치는 이 브랜치로 대체한다.
+
+## 2026-08-30 · overlap을 포함한 실제 청크 길이를 상한 이하로 검증
+
+**무엇:** 먼저 `ceil(total/chunk_max)`로 균등 계획하되, 첫 청크 이후에
+overlap을 더한 실제 추출 길이가 상한을 넘으면 청크 수를 하나씩 늘린다.
+모든 청크는 16kHz mono 64kbps MP3로 만들고 입력 SHA-256과 계획을 원자적으로
+`job.json`에 저장한다.
+
+**왜:** 3,570초 입력을 1,790초 상한으로 둘로 나누면 core는 1,785초지만
+두 번째 청크에 overlap 10초가 더해져 1,795초가 된다. 단순 ceil만 믿으면 API
+상한을 다시 넘으므로 실제 start/end를 만든 뒤 상한을 재검증해야 한다.
+
+## 2026-08-30 · PR #2/#3 소유권 기록 정정
+
+앞의 "소유권 규약 위반 기록"은 GitHub 계정과 실행 주체를 혼동한 것이다.
+PR #2와 #3은 root orchestrator가 Claude 트랙 worker에 위임했고, 그 worker가
+Claude 소유 파일을 구현했다. Codex는 읽기 전용 검증과 merge를 맡았다.
+
+두 트랙이 같은 GitHub 계정 `Nattentia`를 사용하고 root가 작업을 배정하면서
+작성자 표시만으로 실제 트랙을 구분할 수 없어 생긴 귀속 오류다. 자율 실행 중
+Codex가 Claude 소유 source를 수정한 사실은 없다. append-only 기록이므로 앞
+항목은 삭제하지 않고 이 정정을 최신 사실로 남긴다. PR #7의 lookahead 0.5
+결정과 검증 결과는 유효하다.
