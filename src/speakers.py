@@ -84,7 +84,7 @@ def _first_mapping(words: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         if raw is not None and raw not in mapping:
             mapping[raw] = {
                 "global": f"speaker:{len(mapping)}",
-                "status": "inferred",
+                "status": "confirmed",
                 "evidence": None,
                 "votes": 0,
             }
@@ -164,6 +164,30 @@ def _enrich(word: dict[str, Any], mapping: dict[str, dict[str, Any]]) -> dict[st
     }
 
 
+def _allocate_unresolved_globals(
+    mapping: dict[str, dict[str, Any]], used_globals: set[str]
+) -> None:
+    """Give every observed local label a unique display identity.
+
+    A label without overlap evidence remains ``unresolved``; assigning a fresh
+    global ID prevents unrelated ``spk:1`` labels from separate API calls from
+    being rendered and indexed as the same person.
+    """
+    next_index = 0
+    while f"speaker:{next_index}" in used_globals:
+        next_index += 1
+    for match in mapping.values():
+        if match.get("global") is not None:
+            used_globals.add(str(match["global"]))
+            continue
+        while f"speaker:{next_index}" in used_globals:
+            next_index += 1
+        label = f"speaker:{next_index}"
+        match["global"] = label
+        used_globals.add(label)
+        next_index += 1
+
+
 def _overlap_bounds(
     previous: dict[str, Any], current: dict[str, Any], words: list[dict[str, Any]]
 ) -> tuple[float, float]:
@@ -186,12 +210,14 @@ def reconcile_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
     merged_index: Bucket = {}
     reports: list[dict[str, Any]] = []
     duplicates_removed = 0
+    used_globals: set[str] = set()
 
     for position, chunk in enumerate(ordered):
         words = chunk.get("words")
         if not isinstance(words, list):
             raise ValueError(f"chunk[{position}]에 words 배열이 없습니다.")
         mapping = _first_mapping(words) if position == 0 else _reconcile_mapping(merged, words)
+        _allocate_unresolved_globals(mapping, used_globals)
         reports.append({
             "chunk_index": chunk.get("chunk_index", position),
             "labels": mapping,
