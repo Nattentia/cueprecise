@@ -31,17 +31,19 @@ transcribe  chunk-NNN.mp3 -> raw/transcripts/chunk-NNN.json         청크당 1�
 assemble    chunk 전사    -> derived/transcript.json                쿼터 0
 merge       transcript+자막 -> derived/merged.json                  쿼터 0
 chapters    merged.json     -> derived/chapters.json                쿼터 0
-render      merged.json   -> derived/output.srt, output.txt         쿼터 0
+render      merged.json   -> derived/output.srt, output.txt         쿼터 0  선택
 visual      merged+영상   -> raw/frames/, derived/frames.json       쿼터 0  선택
 index       bundle        -> index.sqlite3                          쿼터 0
 ```
 
-기본 실행은 `visual` 을 뺀 나머지다. 프레임은 화면·도식·코드를 볼 때만
-필요하고, 영상 다운로드는 bundle 용량의 13~28% 를 차지한다. 나중에 프레임을
-요청하면 `job.json` 의 원본 URL 로 그때 360p 영상을 받는다.
+기본 실행은 `render` 와 `visual` 을 뺀 나머지다. 요약과 원문 검색에 필요한
+자료는 전부 만들고, 자막 파일과 프레임은 요청이 있을 때 만든다. 프레임을
+빼면 360p 영상 다운로드가 통째로 사라진다 (bundle 용량의 13~28%). 나중에
+요청하면 `job.json` 의 원본 URL 로 그때 받는다.
 
 ```powershell
 python src/pipeline.py run <url> --stages all      # 선택 단계까지 전부
+python src/pipeline.py run <url> --stages render   # 나중에 SRT/TXT 만
 python src/pipeline.py run <url> --stages visual   # 나중에 프레임만
 python src/pipeline.py run <url> --with-video      # 처음부터 영상까지 미리
 ```

@@ -61,7 +61,12 @@ STAGES = ("fetch", "plan", "transcribe", "assemble", "merge", "chapters",
 # visual — 프레임은 화면·도식·코드를 볼 때만 필요하다. 기본에서 빼면 360p
 # 영상 다운로드가 통째로 사라진다 (실측 bundle 의 13~28%). 나중에 프레임을
 # 요청하면 job.json 의 원본 URL 로 그때 받는다 (ensure_video).
-OPTIONAL_STAGES: tuple[str, ...] = ("visual",)
+#
+# render — SRT/TXT 는 사람이 자막 파일을 원할 때 쓴다. 용량 절감은 거의 없지만
+# 근거 검색은 merged.json 과 index 로 하므로 기본 산출물에 있을 이유가 없다.
+# 기능은 그대로다. `--stages render` / `ytx_register(stages=["render"])` 로
+# 언제든 만들 수 있고 단어 보존율 100% 도 그대로다.
+OPTIONAL_STAGES: tuple[str, ...] = ("render", "visual")
 
 DEFAULT_STAGES = tuple(s for s in STAGES if s not in OPTIONAL_STAGES)
 

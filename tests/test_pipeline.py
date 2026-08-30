@@ -703,3 +703,41 @@ class OnDemandVideoTests(unittest.TestCase):
         result = pipeline.stage_visual(self.bundle)
         self.assertEqual(result["frames"], [])
         self.assertTrue(result["note"], "조용히 빈 결과만 돌려줬다")
+
+
+class OptionalRenderTests(unittest.TestCase):
+    """SRT/TXT 는 요청할 때만 만든다 (작업 C). 기능은 그대로 둔다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "derived").mkdir(parents=True)
+        self.texts = ["첫", "번째", "문장", "그리고", "두", "번째", "문장"]
+        (self.bundle / "derived/merged.json").write_text(json.dumps({
+            "schema_version": 1, "video_id": "vid", "words": _words(self.texts, 0.0),
+        }, ensure_ascii=False), encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_render_is_optional_and_not_in_default_stages(self) -> None:
+        self.assertIn("render", pipeline.STAGES)
+        self.assertNotIn("render", pipeline.DEFAULT_STAGES)
+        self.assertIn("render", pipeline.OPTIONAL_STAGES)
+
+    def test_default_stages_keep_evidence_path_intact(self) -> None:
+        """요약과 원문 검색에 필요한 단계는 기본에 남아 있어야 한다."""
+        for stage in ("fetch", "plan", "transcribe", "assemble", "merge",
+                      "chapters", "index"):
+            self.assertIn(stage, pipeline.DEFAULT_STAGES, "%s 가 기본에서 빠졌다" % stage)
+
+    def test_render_still_runs_when_asked_and_preserves_words(self) -> None:
+        srt, txt = pipeline.stage_render(self.bundle, width=42)
+        self.assertTrue(srt.exists() and txt.exists())
+        rendered = txt.read_text(encoding="utf-8").split()
+        self.assertEqual(rendered, self.texts, "렌더에서 단어가 사라졌다")
+
+    def test_status_calls_srt_and_txt_optional(self) -> None:
+        info = pipeline.status(self.bundle)
+        self.assertIn("srt", info["optional_artifacts"])
+        self.assertIn("txt", info["optional_artifacts"])

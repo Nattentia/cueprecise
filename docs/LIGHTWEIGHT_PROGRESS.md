@@ -106,11 +106,26 @@ CLI: `--skip-video` 가 기본이 됐으므로 `--with-video`(미리 받기)를 
 
 ### C — `render` 기본 stages 제외
 
-상태: **대기**
+상태: **완료**
+
 대안:
+1. 그대로 두기 — 렌더는 빠르고 산출물도 작다(58분 기준 수백 KB). 용량만 보면
+   할 이유가 없다. 다만 근거 검색은 `merged.json` 과 `index.sqlite3` 로 하고
+   `output.srt`/`txt` 를 읽는 코드가 **하나도 없다**(`context.py`, `mcp_server.py`,
+   `chapters.py` 확인). 기본 산출물에 있을 이유가 없어 버림.
+2. **채택** — `OPTIONAL_STAGES` 에 `render` 추가. D 덕에 상수 한 줄이다.
+   `render.py` 는 손대지 않았다.
+3. `ytx_render` MCP 도구 신설 — `ytx_register(stages=["render"])` 로 이미 되므로
+   도구 표면만 넓힌다. 버림.
+
 증거:
-막힌 것:
-다음: D 가 끝난 뒤 `DEFAULT_STAGES` 에서 `render` 만 빼면 된다. `render.py` 는 건드리지 않는다. 단어 보존 100% 테스트 유지.
+- 테스트 197 → **201 통과** (신규 4건).
+- 실번들 `vRTcE19M-KE` 로 기본 경로 재생성 → derived 에 `transcript/merged/chapters`
+  만 남고 SRT/TXT 없음. 이어서 `--stages render` 한 번으로 생성,
+  **merged 10,557단어 = output.txt 10,557단어**, 보존율 100%.
+
+막힌 것: 없음.
+다음: 없음.
 
 ---
 
