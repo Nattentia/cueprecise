@@ -110,5 +110,36 @@ class SpeakerReconciliationTests(unittest.TestCase):
         self.assertEqual(texts.count("또"), 2)
 
 
+class ScaleTests(unittest.TestCase):
+    """긴 영상에서 이어붙이기가 전수 대조로 돌아가면 안 된다.
+
+    수정 전에는 앞 청크 전체 × 현재 청크 전체를 대조해 3청크 15,900단어에
+    170초가 걸렸다. 텍스트 버킷 조회로 바꾼 뒤 0.1초다. 넉넉한 상한을 둬서
+    전수 대조로 되돌아가는 회귀만 잡는다.
+    """
+
+    @staticmethod
+    def _chunk(index: int, start: float, count: int) -> dict:
+        # 어휘가 좁아 같은 텍스트가 대량으로 겹친다 (버킷 조회의 최악 조건).
+        vocab = ["그리고", "이제", "모델", "학습", "데이터"]
+        return {
+            "chunk_index": index, "chunk_start": start, "chunk_end": start + count * 0.3,
+            "words": [
+                word(vocab[i % len(vocab)], start + i * 0.3, "spk:%d" % (i % 2))
+                for i in range(count)
+            ],
+        }
+
+    def test_many_chunks_do_not_degrade(self) -> None:
+        import time
+
+        chunks = [self._chunk(i, i * 590.0, 2000) for i in range(3)]
+        started = time.monotonic()
+        result = speakers.reconcile_chunks(chunks)
+        elapsed = time.monotonic() - started
+        self.assertGreater(len(result["words"]), 5000)
+        self.assertLess(elapsed, 5.0, "이어붙이기가 전수 대조로 되돌아갔다")
+
+
 if __name__ == "__main__":
     unittest.main()
