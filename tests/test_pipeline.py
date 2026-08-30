@@ -456,6 +456,108 @@ class ForceRefetchTests(unittest.TestCase):
         self.assertEqual(
             pipeline._remove_stale_sources(self.bundle, pipeline.audio.AUDIO_NAMES), [])
 
+    def test_newly_downloaded_file_is_kept(self) -> None:
+        self._touch("source.mp3")
+        self._touch("source.webm")
+        removed = pipeline._remove_stale_sources(
+            self.bundle, pipeline.audio.AUDIO_NAMES, keep="source.webm")
+        self.assertEqual(removed, ["source.mp3"])
+        self.assertEqual(pipeline.audio.source_audio(self.bundle).name, "source.webm")
+
+
+class DownloadSafetyTests(unittest.TestCase):
+    """다운로드가 실패해도 기존 원본을 잃으면 안 된다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        self.raw = self.bundle / "raw"
+        self.raw.mkdir(parents=True)
+        self.real_run = pipeline.subprocess.run
+
+    def tearDown(self) -> None:
+        pipeline.subprocess.run = self.real_run
+        self.tmp.cleanup()
+
+    def _fake_yt_dlp(self, *, ok: bool, ext: str = "webm"):
+        class Result:
+            returncode = 0 if ok else 1
+            stderr = "" if ok else "ERROR: 모의 다운로드 실패"
+            stdout = ""
+
+        def fake(command, **kwargs):
+            if ok:
+                target = Path(command[command.index("-o") + 1].replace(".%(ext)s", "." + ext))
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"new-media")
+            return Result()
+
+        return fake
+
+    def test_failed_download_leaves_previous_source_intact(self) -> None:
+        previous = self.raw / "source.mp3"
+        previous.write_bytes(b"original-audio")
+        pipeline.subprocess.run = self._fake_yt_dlp(ok=False)
+        with self.assertRaises(pipeline.StageError):
+            pipeline.stage_fetch(self.bundle, "https://y/watch?v=x",
+                                 force=True, video=False)
+        self.assertTrue(previous.exists(), "다운로드 실패인데 원본을 지웠다")
+        self.assertEqual(previous.read_bytes(), b"original-audio")
+
+    def test_successful_download_replaces_the_old_format(self) -> None:
+        (self.raw / "source.mp3").write_bytes(b"original-audio")
+        (self.raw / "captions.json").write_text(
+            json.dumps({"source": "youtube-ko-orig", "video_id": "x", "cues": []}),
+            encoding="utf-8")
+        pipeline.subprocess.run = self._fake_yt_dlp(ok=True, ext="webm")
+        pipeline.stage_fetch(self.bundle, "https://y/watch?v=x", force=True, video=False)
+        self.assertFalse((self.raw / "source.mp3").exists(), "옛 형식이 남았다")
+        self.assertEqual((self.raw / "source.webm").read_bytes(), b"new-media")
+        self.assertFalse((self.raw / ".download").exists(), "임시 디렉터리가 남았다")
+
+
+class ForceAndMissingJobTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        self.bundle.mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_missing_job_explains_which_stage_to_run(self) -> None:
+        with self.assertRaises(pipeline.StageError) as caught:
+            pipeline.run("jcBDSLSeud4", bundle_root=self.bundle.parent,
+                         stages=("assemble",))
+        self.assertIn("plan", str(caught.exception))
+
+    def test_force_on_complete_chunks_warns_instead_of_silence(self) -> None:
+        transcript = self.bundle / "raw/transcripts/chunk-000.json"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text(json.dumps({"words": []}), encoding="utf-8")
+        job = {
+            "schema_version": 1, "video_id": "vid",
+            "input": {"source": "u", "fingerprint": "sha256:x"},
+            "config": {"chunk_max_secs": 1790.0, "overlap_secs": 10.0,
+                       "language_codes": None, "diarization": True},
+            "status": "complete",
+            "chunks": [{"index": 0, "start": 0.0, "end": 10.0,
+                        "path": "raw/audio/chunk-000.mp3", "status": "complete",
+                        "attempts": 1,
+                        "transcript_path": "raw/transcripts/chunk-000.json",
+                        "error": None}],
+        }
+        messages: list[str] = []
+        real_log, pipeline._log = pipeline._log, messages.append
+        try:
+            pipeline.stage_transcribe(
+                self.bundle, job, ledger=self.bundle / "usage.json", api_key="k",
+                daily_limit=25, rpm_limit=None, request_interval=0.0, force=True)
+        finally:
+            pipeline._log = real_log
+        self.assertTrue(any("plan" in message for message in messages),
+                        "--force 가 조용히 아무것도 안 했다")
+
 
 if __name__ == "__main__":
     unittest.main()

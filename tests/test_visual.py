@@ -113,6 +113,32 @@ class DedupeTests(unittest.TestCase):
         ])
         self.assertEqual([c["timestamp"] for c in kept], [100.0, 200.0, 300.0])
 
+    def test_requested_time_survives_a_nearby_automatic_candidate(self) -> None:
+        kept = visual.dedupe_candidates([
+            {"timestamp": 100.0, "reason": "screen-reference"},
+            {"timestamp": 103.0, "reason": "requested"},
+        ])
+        self.assertEqual([c["reason"] for c in kept], ["requested"])
+        self.assertEqual([c["timestamp"] for c in kept], [103.0])
+
+    def test_requested_time_survives_the_frame_ceiling(self) -> None:
+        candidates = [{"timestamp": i * 100.0, "reason": "screen-reference"}
+                      for i in range(30)]
+        candidates.append({"timestamp": 9000.0, "reason": "requested"})
+        kept = visual.dedupe_candidates(candidates, max_frames=5)
+        self.assertIn(9000.0, [c["timestamp"] for c in kept])
+        self.assertEqual(len(kept), 5)
+
+    def test_ceiling_spreads_over_the_whole_video(self) -> None:
+        """앞에서부터 자르면 긴 영상의 뒷부분이 통째로 빈다."""
+        candidates = [{"timestamp": i * 100.0, "reason": "screen-reference"}
+                      for i in range(50)]
+        kept = visual.dedupe_candidates(candidates, max_frames=5)
+        times = [c["timestamp"] for c in kept]
+        self.assertEqual(len(times), 5)
+        self.assertEqual(times[0], 0.0)
+        self.assertEqual(times[-1], 4900.0, "마지막 후보까지 닿지 않았다")
+
     def test_uniform_extraction_is_not_the_default(self) -> None:
         """균일 전체 프레임 추출을 하지 않는다 (CONTRACT 11절)."""
         words = [word("가나다", i * 1.0) for i in range(600)]

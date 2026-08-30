@@ -104,6 +104,16 @@ def _save_job(bundle: Path, job: dict[str, Any]) -> None:
     _write_json(bundle / "job.json", job)
 
 
+def _load_job(bundle: Path) -> dict[str, Any]:
+    """job.json 을 읽는다. 없으면 무엇을 해야 하는지 알려준다."""
+    path = bundle / "job.json"
+    if not path.exists():
+        raise StageError(
+            "%s 가 없습니다. plan 단계를 먼저 실행하세요 "
+            "(--stages plan,... 또는 단계 지정 없이 run)." % path)
+    return _read_json(path)
+
+
 def _log(message: str) -> None:
     """진행 로그는 stderr 로 보낸다.
 
@@ -123,19 +133,54 @@ def _log(message: str) -> None:
 
 # -------------------------------------------------------------------------- stages
 
-def _remove_stale_sources(bundle: Path, names: tuple[str, ...]) -> list[str]:
-    """--force 로 다시 받기 전에 이전 원본을 지운다.
+def _remove_stale_sources(bundle: Path, names: tuple[str, ...],
+                          keep: str | None = None) -> list[str]:
+    """이전 원본을 지운다. `keep` 은 방금 받은 파일이라 남긴다.
 
     형식이 바뀌면(mp3 -> webm, source.mp4 -> source_video.mp4) 옛 파일이 그대로
-    남아 용량만 두 배가 된다. 다시 받는 자리이므로 지워도 잃는 것이 없다.
+    남아 용량만 두 배가 된다. 반드시 **다운로드가 성공한 뒤에** 부른다.
     """
     removed: list[str] = []
     for name in names:
+        if name == keep:
+            continue
         path = bundle / "raw" / name
         if path.exists():
             path.unlink()
             removed.append(name)
     return removed
+
+
+def _download(url: str, fmt: str, raw: Path, stem: str,
+              names: tuple[str, ...]) -> tuple[Path | None, str]:
+    """받아서 성공했을 때만 자리를 바꾼다. 실패하면 기존 원본이 그대로 남는다.
+
+    예전에는 다시 받기 전에 옛 파일을 먼저 지웠다. 다운로드가 실패하면(연결
+    끊김, 포맷 없음, 연령 제한) 옛 것도 새 것도 없는 상태가 됐다. 임시
+    디렉터리에 받고, 성공한 뒤에 옛 것을 치우고 옮긴다.
+    """
+    staging = raw / ".download"
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True, exist_ok=True)
+    try:
+        result = subprocess.run(
+            ["yt-dlp", "--no-playlist", "-f", fmt,
+             "-o", str(staging / stem) + ".%(ext)s", url],
+            capture_output=True, text=True,
+        )
+        files = [path for path in staging.iterdir() if path.is_file()]
+        if result.returncode != 0 or not files:
+            return None, (result.stderr or "")
+        # 여러 개가 남으면 가장 큰 것이 본편이다 (.part 등 부산물 배제).
+        downloaded = max(files, key=lambda path: path.stat().st_size)
+        _remove_stale_sources(raw.parent, names, keep=downloaded.name)
+        target = raw / downloaded.name
+        if target.exists():
+            target.unlink()
+        downloaded.replace(target)
+        return target, ""
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def stage_fetch(bundle: Path, url: str, *, force: bool = False,
@@ -147,16 +192,11 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False,
 
     source = audio.source_audio(bundle)
     if force or source is None:
-        if force:
-            _remove_stale_sources(bundle, audio.AUDIO_NAMES)
-        command = [
-            "yt-dlp", "--no-playlist", "-f", AUDIO_FORMAT,
-            "-o", str(raw / "source") + ".%(ext)s", url,
-        ]
-        result = subprocess.run(command, capture_output=True, text=True)
+        downloaded, error = _download(url, AUDIO_FORMAT, raw, "source", audio.AUDIO_NAMES)
+        if downloaded is None or audio.source_audio(bundle) is None:
+            # 기존 원본이 있었다면 그대로 살아 있다.
+            raise StageError("오디오 다운로드 실패: " + error[-500:])
         source = audio.source_audio(bundle)
-        if result.returncode != 0 or source is None:
-            raise StageError("오디오 다운로드 실패: " + (result.stderr or "")[-500:])
         _log("  오디오 %.1fMB (%s)" % (source.stat().st_size / 1048576, source.name))
     else:
         _log("  오디오 재사용 (%s)" % source.name)
@@ -167,21 +207,18 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False,
         if existing is not None and not force:
             _log("  영상 재사용 (%s)" % existing.name)
         else:
-            if force:
-                _remove_stale_sources(bundle, visual.VIDEO_NAMES)
-            command = [
-                "yt-dlp", "--no-playlist", "-f", VIDEO_FORMAT,
-                "-o", str(raw / "source_video") + ".%(ext)s", url,
-            ]
-            result = subprocess.run(command, capture_output=True, text=True)
-            downloaded = visual.source_video(bundle)
-            if result.returncode != 0 or downloaded is None:
-                tail = (result.stderr or "").strip().splitlines()
+            downloaded, error = _download(url, VIDEO_FORMAT, raw, "source_video",
+                                          visual.VIDEO_NAMES)
+            if downloaded is None:
+                tail = error.strip().splitlines()
                 _log("  경고: 영상 취득 실패, 프레임 추출을 건너뛴다 (%s)"
                      % (tail[-1][:200] if tail else "원인 불명"))
             else:
                 _log("  영상 %.1fMB (%s)"
                      % (downloaded.stat().st_size / 1048576, downloaded.name))
+                if force:
+                    # 옛 영상에서 뽑아둔 프레임은 새 영상과 무관하다.
+                    shutil.rmtree(bundle / "raw" / "frames", ignore_errors=True)
 
     if force or not captions.exists():
         try:
@@ -287,6 +324,12 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
     """청크별 Gemini 전사. 완료 청크도, 응답 원문이 남은 청크도 재호출하지 않는다."""
     pending = _pending_chunks(job, bundle)
     if not pending:
+        if force:
+            # 조용히 아무것도 안 하면 사용자는 다시 받아쓴 줄 안다. 완료된
+            # 청크를 여기서 재호출하지는 않는다 — 쿼터를 쓰는 결정은 사람이 한다.
+            _log("  경고: --force 로는 이미 완료된 청크를 다시 전사하지 않는다. "
+                 "정말 다시 받아쓰려면 plan 을 함께 돌려라 "
+                 "(--stages plan,transcribe --force). 청크마다 Gemini 를 부른다.")
         _log("  전사 완료된 청크만 있음, 호출 없음")
         job["status"] = "complete"
         _save_job(bundle, job)
@@ -495,7 +538,7 @@ def run(url: str, *, bundle_root: Path = Path("data"), stages: tuple[str, ...] =
                              diarization=diarization, force=force)
             summary["stages"][stage] = {"chunks": len(job["chunks"])}
         elif stage == "transcribe":
-            job = job if job is not None else _read_json(bundle / "job.json")
+            job = job if job is not None else _load_job(bundle)
             api_key = os.environ.get("GEMINI_API_KEY")
             if not api_key:
                 raise StageError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
@@ -505,7 +548,7 @@ def run(url: str, *, bundle_root: Path = Path("data"), stages: tuple[str, ...] =
                                    transcriber=transcriber, force=force)
             summary["stages"][stage] = {"status": job["status"]}
         elif stage == "assemble":
-            job = job if job is not None else _read_json(bundle / "job.json")
+            job = job if job is not None else _load_job(bundle)
             payload = stage_assemble(bundle, job)
             summary["stages"][stage] = {"words": len(payload["words"])}
         elif stage == "merge":

@@ -26,6 +26,52 @@ def _same_word(left: dict[str, Any], right: dict[str, Any]) -> bool:
     )
 
 
+Bucket = dict[tuple[str, int], list[dict[str, Any]]]
+
+
+def _bucket_key(word: dict[str, Any]) -> tuple[str, int] | None:
+    """`(정규화 텍스트, 시각 슬롯)`. 정규화 결과가 비면 None.
+
+    `_same_word` 는 정규화 텍스트가 같고 start 차이가 `MAX_TIME_DELTA` 이내
+    여야 참이다. 슬롯 폭을 그 값으로 잡으면 짝은 반드시 같은 슬롯이나 바로
+    옆 슬롯에 있다. 텍스트만으로 묶으면 `그리고` 처럼 수백 번 나오는 단어에서
+    버킷이 커져 다시 느려지므로 시각까지 키에 넣는다.
+    """
+    text = _normalized(str(word.get("text", "")))
+    if not text:
+        return None
+    return text, int(float(word["start"]) // MAX_TIME_DELTA)
+
+
+def _add(index: Bucket, word: dict[str, Any]) -> None:
+    key = _bucket_key(word)
+    if key is not None:
+        index.setdefault(key, []).append(word)
+
+
+def _index(words: list[dict[str, Any]]) -> Bucket:
+    index: Bucket = {}
+    for word in words:
+        _add(index, word)
+    return index
+
+
+def _matches(index: Bucket, word: dict[str, Any]) -> list[dict[str, Any]]:
+    """`word` 와 같은 단어일 수 있는 후보. 최종 판정은 호출자가 `_same_word` 로 한다.
+
+    후보는 실제 짝의 상위집합이다. 놓치는 짝이 없으므로 전수 대조와 결과가
+    같다.
+    """
+    key = _bucket_key(word)
+    if key is None:
+        return []
+    text, slot = key
+    found: list[dict[str, Any]] = []
+    for neighbour in (slot - 1, slot, slot + 1):
+        found.extend(index.get((text, neighbour), ()))
+    return found
+
+
 def _raw_label(word: dict[str, Any]) -> str | None:
     value = word.get("speaker_raw", word.get("speaker"))
     return str(value) if value is not None else None
@@ -49,11 +95,12 @@ def _overlap_votes(
     existing: list[dict[str, Any]], current: list[dict[str, Any]]
 ) -> dict[str, Counter[str]]:
     votes: dict[str, Counter[str]] = defaultdict(Counter)
+    index = _index(existing)
     for word in current:
         raw = _raw_label(word)
         if raw is None:
             continue
-        for previous in existing:
+        for previous in _matches(index, word):
             global_label = previous.get("speaker_global")
             if global_label and _same_word(previous, word):
                 votes[raw][str(global_label)] += 1
@@ -136,6 +183,7 @@ def reconcile_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
         raise ValueError("최소 한 개의 chunk transcript가 필요합니다.")
     ordered = sorted(chunks, key=lambda chunk: int(chunk.get("chunk_index", 0)))
     merged: list[dict[str, Any]] = []
+    merged_index: Bucket = {}
     reports: list[dict[str, Any]] = []
     duplicates_removed = 0
 
@@ -164,12 +212,13 @@ def reconcile_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
             in_overlap = position > 0 and lo <= float(word["start"]) < hi
             if in_overlap and any(
                 _same_word(previous, enriched)
-                for previous in merged
+                for previous in _matches(merged_index, enriched)
                 if lo <= float(previous["start"]) < hi
             ):
                 duplicates_removed += 1
                 continue
             merged.append(enriched)
+            _add(merged_index, enriched)
         merged.sort(key=lambda word: (float(word["start"]), float(word["end"])))
 
     first = ordered[0]
