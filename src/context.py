@@ -14,6 +14,12 @@ from typing import Any, Iterable
 SPAN_MAX_SECS = 30.0
 SPAN_MAX_GAP = 2.5
 
+SPEAKER_CONFIDENCE = {
+    "confirmed": 1.0,
+    "inferred": 0.75,
+    "unresolved": 0.0,
+}
+
 
 def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -28,11 +34,24 @@ def _transcript_spans(payload: dict[str, Any], source_path: str) -> Iterable[dic
     def finish() -> dict[str, Any] | None:
         if not current:
             return None
+        candidate = current[0].get("speaker_global") or current[0].get("speaker")
+        statuses = {str(word.get("speaker_status") or "unresolved") for word in current}
+        if "unresolved" in statuses:
+            speaker_status = "unresolved"
+        elif "inferred" in statuses:
+            speaker_status = "inferred"
+        else:
+            speaker_status = "confirmed"
         return {
             "start": float(current[0]["start"]),
             "end": float(current[-1]["end"]),
             "text": " ".join(str(word["text"]).strip() for word in current),
-            "speaker": current[0].get("speaker_global") or current[0].get("speaker"),
+            # 불확실한 라벨은 내용 검색에서 확정 화자로 주장하지 않는다.
+            # 원래 라벨은 candidate 로 보존해 디버깅과 수동 확인에 쓴다.
+            "speaker": candidate if speaker_status != "unresolved" else None,
+            "speaker_candidate": candidate,
+            "speaker_status": speaker_status,
+            "speaker_confidence": SPEAKER_CONFIDENCE[speaker_status],
             "source_path": source_path,
             "source_kind": "transcript",
             "confidence": 1.0,
@@ -84,6 +103,9 @@ def _optional_records(bundle: Path, filename: str, key: str, kind: str) -> Itera
             "end": end,
             "text": text,
             "speaker": record.get("speaker"),
+            "speaker_candidate": record.get("speaker"),
+            "speaker_status": None,
+            "speaker_confidence": None,
             "source_path": str(path.relative_to(bundle)).replace("\\", "/"),
             "source_kind": kind,
             "confidence": float(record.get("confidence", 1.0)),
@@ -123,22 +145,28 @@ def build_index(bundle: Path) -> Path:
                     source_path TEXT NOT NULL,
                     source_kind TEXT NOT NULL,
                     speaker TEXT,
+                    speaker_candidate TEXT,
+                    speaker_status TEXT,
+                    speaker_confidence REAL,
                     confidence REAL NOT NULL
                 );
                 CREATE INDEX evidence_time ON evidence(video_id, start);
                 CREATE INDEX evidence_kind ON evidence(video_id, source_kind);
                 """
             )
-            connection.execute("INSERT INTO metadata VALUES (?, ?)", ("schema_version", "1"))
+            connection.execute("INSERT INTO metadata VALUES (?, ?)", ("schema_version", "2"))
             connection.execute("INSERT INTO metadata VALUES (?, ?)", ("video_id", video_id))
             connection.executemany(
                 """INSERT INTO evidence
-                (video_id, start, end, text, source_path, source_kind, speaker, confidence)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (video_id, start, end, text, source_path, source_kind, speaker,
+                 speaker_candidate, speaker_status, speaker_confidence, confidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     (
                         video_id, record["start"], record["end"], record["text"],
                         record["source_path"], record["source_kind"], record["speaker"],
+                        record["speaker_candidate"], record["speaker_status"],
+                        record["speaker_confidence"],
                         record["confidence"],
                     )
                     for record in records
@@ -186,6 +214,9 @@ def search(index_path: Path, query: str, limit: int = 8) -> list[dict[str, Any]]
             "source_kind": row["source_kind"],
             "confidence": row["confidence"],
             "speaker": row["speaker"],
+            "speaker_candidate": row["speaker_candidate"] if "speaker_candidate" in row.keys() else row["speaker"],
+            "speaker_status": row["speaker_status"] if "speaker_status" in row.keys() else None,
+            "speaker_confidence": row["speaker_confidence"] if "speaker_confidence" in row.keys() else None,
         }
         for row in ranked
     ]
