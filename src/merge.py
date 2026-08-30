@@ -68,24 +68,31 @@ def _is_particle_fragment(text: str) -> bool:
 
 
 def _caption_latin_tokens(
-    cues: list[dict[str, Any]], gap_start: float, gap_end: float
-) -> list[str]:
-    tokens: list[str] = []
+    cues: list[dict[str, Any]],
+    gap_start: float,
+    gap_end: float,
+    consumed: set[tuple[int, int]],
+) -> list[tuple[int, int, str]]:
+    tokens: list[tuple[int, int, str]] = []
     seen: set[str] = set()
     window_start = max(0.0, gap_start - CAPTION_LOOKBACK)
     window_end = gap_end + CAPTION_LOOKAHEAD
-    for cue in cues:
+    for cue_index, cue in enumerate(cues):
         start = float(cue["start"])
         end = float(cue["end"])
         if start > window_end:
             break
         if end < window_start:
             continue
-        for token in LATIN_TOKEN_RE.findall(str(cue.get("text", ""))):
+        for token_index, token in enumerate(
+            LATIN_TOKEN_RE.findall(str(cue.get("text", "")))
+        ):
+            if (cue_index, token_index) in consumed:
+                continue
             key = token.casefold()
             if key not in seen:
                 seen.add(key)
-                tokens.append(token)
+                tokens.append((cue_index, token_index, token))
     return tokens
 
 
@@ -114,6 +121,7 @@ def merge_payloads(
 
     output: list[dict[str, Any]] = []
     inserted_count = 0
+    consumed_caption_tokens: set[tuple[int, int]] = set()
     for index, word in enumerate(words):
         output.append({**word, "origin": "gemini"})
         if index + 1 >= len(words):
@@ -126,9 +134,15 @@ def merge_payloads(
         if not _is_particle_fragment(str(following["text"])):
             continue
 
-        candidates = _caption_latin_tokens(cues, gap_start, gap_end)
+        candidates = _caption_latin_tokens(
+            cues, gap_start, gap_end, consumed_caption_tokens
+        )
         present = _nearby_gemini_latin(words, gap_start - 1.0, gap_end + CAPTION_LOOKAHEAD)
-        candidates = [token for token in candidates if token.casefold() not in present]
+        candidates = [
+            candidate
+            for candidate in candidates
+            if candidate[2].casefold() not in present
+        ]
         if not candidates:
             continue
 
@@ -136,7 +150,7 @@ def merge_payloads(
         # terms inside the missing Gemini interval and preserve source order.
         slot = (gap_end - gap_start) / len(candidates)
         speaker = word.get("speaker") if word.get("speaker") == following.get("speaker") else None
-        for position, token in enumerate(candidates):
+        for position, (cue_index, token_index, token) in enumerate(candidates):
             start = gap_start + position * slot
             end = gap_start + (position + 1) * slot
             output.append({
@@ -146,6 +160,7 @@ def merge_payloads(
                 "speaker": speaker,
                 "origin": "youtube",
             })
+            consumed_caption_tokens.add((cue_index, token_index))
             inserted_count += 1
 
     return {
