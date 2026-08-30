@@ -1,0 +1,7 @@
+data/
+*.mp3
+*.mp4
+*.webm
+__pycache__/
+*.pyc
+.venv/
