@@ -62,11 +62,45 @@ C(render)가 각각 한다. 그래야 커밋마다 동작 변화가 하나씩만
 
 ### A — 영상 다운로드·visual 기본 off + 온디맨드 프레임
 
-상태: **대기**
-대안:
+상태: **완료**
+
+대안 (영상 취득을 어디에 두는가):
+1. `visual.build` 에 `ensure_video` 콜백을 넘긴다 — visual.py 가 네트워크를 모르는
+   상태로 남아 깔끔하지만, 호출부 셋(CLI·MCP·run)이 각자 콜백을 만들어야 한다. 버림.
+2. **채택** — `pipeline.ensure_video()` 를 만들고 `stage_visual` 이 먼저 부른다.
+   다운로드는 이미 pipeline 소유(`_download`, `VIDEO_FORMAT`)이라 새 책임이 아니다.
+   MCP `tool_frames` 를 `visual.build` 대신 `pipeline.stage_visual` 로 돌리면
+   CLI(`--stages visual`)와 MCP 가 같은 경로를 쓴다.
+3. MCP 계층에서만 받아온다 — CLI 로 `--stages visual` 을 돌리면 여전히 빈 결과가
+   나온다. 같은 로직이 두 벌 된다. 버림.
+
+계획서와 달리한 것: `tool_frames` 를 `visual.build` 직접 호출에서 떼어냈다.
+계획서는 "영상이 없으면 그때 받아야 한다" 고만 적었는데, 그 자리를 MCP 로 두면
+CLI 가 같은 구멍을 그대로 갖는다. 부수로 `max_frames` 미전달 버그도 사라졌다.
+
+CLI: `--skip-video` 가 기본이 됐으므로 `--with-video`(미리 받기)를 추가했다.
+`--skip-video` 는 남겨두고 `--with-video` 를 이기게 했다 — 기존 스크립트가
+깨지지 않는다.
+
+회귀 대비 (계획서 §6 의 1·6번):
+- URL 은 `job.json.input.source` 에서 읽는다. 새 영속 설정 없음.
+- `job.json` 이 없거나 URL 이 없으면 받지 않고 그 사실을 로그로 남긴다.
+- 영상을 못 구했는데 프레임이 0장이면 note 를 "영상을 확보하지 못했다" 로 바꾼다.
+  후보 시각만 계산된 경우와 구분된다. 조용한 빈 결과가 없어졌다.
+- 이미 있는 영상은 재사용하고 지우지 않는다.
+
 증거:
-막힌 것:
-다음: `visual.build` 에 영상 취득 경로가 없다. `job.json.input.source` 를 읽어 `stage_fetch(video=True)` 를 부르는 계층을 어디에 둘지 정한다. `job.json` 이 없는 번들 분기도 필요. `tool_frames` 가 `max_frames` 를 안 넘기는 것도 같이 고친다.
+- 테스트 186 → **197 통과** (신규 11건: pipeline 8, mcp 3).
+- 실제 3청크 번들(`vRTcE19M-KE`, 58분)을 스크래치패드에 복사해 derived 를 지우고
+  `--stages assemble,merge,chapters,index` 재생성 → **10,557단어**, 챕터 15개,
+  index 생성. 기록된 3청크 결과와 정확히 일치. Gemini 호출 0.
+- 같은 번들 `status` 가 `optional_artifacts: ["frames"]` 를 낸다.
+- `ensure_video` 가 이미 있는 영상을 재다운로드 없이 재사용하는 것을 실번들에서 확인.
+
+막힌 것: 없음. 단 **실제 영상 다운로드 경로는 네트워크가 필요해 실행하지 않았다**
+(가짜 `_download` 로만 검증). `_download` 자체는 이번에 손대지 않았고 fetch 가
+쓰던 것과 같은 함수·같은 포맷 문자열이다.
+다음: 없음.
 
 ---
 

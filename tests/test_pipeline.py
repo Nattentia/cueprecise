@@ -606,3 +606,100 @@ class StageSelectionTests(unittest.TestCase):
         """명시적 입력은 기본 목록이 아니라 STAGES 전체에서 검증한다."""
         for stage in pipeline.OPTIONAL_STAGES:
             self.assertEqual(pipeline.resolve_stages([stage]), (stage,))
+
+
+class OnDemandVideoTests(unittest.TestCase):
+    """영상은 기본으로 받지 않고, 프레임이 필요할 때 그때 받는다 (작업 A)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "raw").mkdir(parents=True)
+        self.original_download = pipeline._download
+        self.calls: list[str] = []
+
+    def tearDown(self) -> None:
+        pipeline._download = self.original_download
+        self.tmp.cleanup()
+
+    def _job(self, source: str = "https://www.youtube.com/watch?v=vid") -> None:
+        (self.bundle / "job.json").write_text(json.dumps({
+            "schema_version": 1, "video_id": "vid",
+            "input": {"source": source, "fingerprint": "sha256:x"},
+            "config": {}, "status": "complete", "chunks": [],
+        }, ensure_ascii=False), encoding="utf-8")
+
+    def _fake_download(self, *, ok: bool = True):
+        def download(url, fmt, raw, stem, names):
+            self.calls.append(url)
+            if not ok:
+                return None, "네트워크 없음"
+            target = Path(raw) / (stem + ".mp4")
+            target.write_bytes(b"fake-video")
+            return target, ""
+        return download
+
+    def test_visual_is_optional_and_not_in_default_stages(self) -> None:
+        self.assertIn("visual", pipeline.STAGES)
+        self.assertNotIn("visual", pipeline.DEFAULT_STAGES)
+        self.assertIn("visual", pipeline.OPTIONAL_STAGES)
+
+    def test_fetch_skips_video_by_default(self) -> None:
+        import inspect
+        signature = inspect.signature(pipeline.stage_fetch)
+        self.assertIs(signature.parameters["video"].default, False,
+                      "fetch 가 기본으로 영상을 받는다")
+        signature = inspect.signature(pipeline.run)
+        self.assertIs(signature.parameters["video"].default, False)
+
+    def test_ensure_video_downloads_using_job_source(self) -> None:
+        self._job()
+        pipeline._download = self._fake_download()
+        found = pipeline.ensure_video(self.bundle)
+        self.assertIsNotNone(found, "영상을 받지 못했다")
+        self.assertEqual(self.calls, ["https://www.youtube.com/watch?v=vid"])
+        self.assertIsNotNone(pipeline.visual.source_video(self.bundle))
+
+    def test_ensure_video_reuses_existing_and_does_not_download(self) -> None:
+        self._job()
+        (self.bundle / "raw/source_video.mp4").write_bytes(b"already-here")
+        pipeline._download = self._fake_download()
+        found = pipeline.ensure_video(self.bundle)
+        self.assertIsNotNone(found)
+        self.assertEqual(self.calls, [], "이미 있는 영상을 다시 받았다")
+        self.assertEqual((self.bundle / "raw/source_video.mp4").read_bytes(), b"already-here")
+
+    def test_ensure_video_without_job_manifest_returns_none(self) -> None:
+        pipeline._download = self._fake_download()
+        self.assertIsNone(pipeline.ensure_video(self.bundle))
+        self.assertEqual(self.calls, [], "URL 도 모르면서 받으려 했다")
+
+    def test_ensure_video_survives_download_failure(self) -> None:
+        self._job()
+        pipeline._download = self._fake_download(ok=False)
+        self.assertIsNone(pipeline.ensure_video(self.bundle))
+
+    def test_visual_stage_acquires_video_then_extracts(self) -> None:
+        self._job()
+        (self.bundle / "derived").mkdir(parents=True, exist_ok=True)
+        (self.bundle / "derived/merged.json").write_text(json.dumps({
+            "schema_version": 1, "video_id": "vid",
+            "words": _words(["여기", "보시면", "그림이", "있습니다"], 10.0),
+        }, ensure_ascii=False), encoding="utf-8")
+        pipeline._download = self._fake_download()
+        result = pipeline.stage_visual(self.bundle)
+        self.assertEqual(self.calls, ["https://www.youtube.com/watch?v=vid"],
+                         "프레임 요청인데 영상을 받지 않았다")
+        self.assertTrue(result["candidates_considered"] >= 1)
+
+    def test_visual_stage_reports_when_video_cannot_be_had(self) -> None:
+        self._job()
+        (self.bundle / "derived").mkdir(parents=True, exist_ok=True)
+        (self.bundle / "derived/merged.json").write_text(json.dumps({
+            "schema_version": 1, "video_id": "vid",
+            "words": _words(["여기", "보시면", "그림이"], 10.0),
+        }, ensure_ascii=False), encoding="utf-8")
+        pipeline._download = self._fake_download(ok=False)
+        result = pipeline.stage_visual(self.bundle)
+        self.assertEqual(result["frames"], [])
+        self.assertTrue(result["note"], "조용히 빈 결과만 돌려줬다")

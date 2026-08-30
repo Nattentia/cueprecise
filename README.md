@@ -25,15 +25,25 @@ python src/pipeline.py purge jcBDSLSeud4 --scope chunks   # 청크 오디오만 
 ## 파이프라인
 
 ```
-fetch       URL           -> raw/source.<ext>, source_video.<ext>, captions.json
+fetch       URL           -> raw/source.<ext>, captions.json           쿼터 0
 plan        원본 오디오    -> job.json, raw/audio/chunk-NNN.mp3      쿼터 0
 transcribe  chunk-NNN.mp3 -> raw/transcripts/chunk-NNN.json         청크당 1콜
 assemble    chunk 전사    -> derived/transcript.json                쿼터 0
 merge       transcript+자막 -> derived/merged.json                  쿼터 0
 chapters    merged.json     -> derived/chapters.json                쿼터 0
 render      merged.json   -> derived/output.srt, output.txt         쿼터 0
-visual      merged+영상   -> raw/frames/, derived/frames.json       쿼터 0
+visual      merged+영상   -> raw/frames/, derived/frames.json       쿼터 0  선택
 index       bundle        -> index.sqlite3                          쿼터 0
+```
+
+기본 실행은 `visual` 을 뺀 나머지다. 프레임은 화면·도식·코드를 볼 때만
+필요하고, 영상 다운로드는 bundle 용량의 13~28% 를 차지한다. 나중에 프레임을
+요청하면 `job.json` 의 원본 URL 로 그때 360p 영상을 받는다.
+
+```powershell
+python src/pipeline.py run <url> --stages all      # 선택 단계까지 전부
+python src/pipeline.py run <url> --stages visual   # 나중에 프레임만
+python src/pipeline.py run <url> --with-video      # 처음부터 영상까지 미리
 ```
 
 단계는 JSON 파일로만 이어진다. 각각 독립적으로 재실행할 수 있고, 완료된
@@ -58,7 +68,8 @@ Gemini 는 긴 오디오에서 드물게 단어 하나의 timestamp 를 손상�
 남아 있으면 `plan` 단계가 필요할 때 다시 뽑는다.
 
 영상은 프레임 추출에만 쓴다. 360p 로 받으므로 23분 영상 기준 16MB 이고,
-필요 없으면 `--skip-video` 로 건너뛴다. bundle 용량 실측은 23분 55.8MB,
+기본 실행은 받지 않는다. `ytx_frames` 나 `--stages visual` 이 필요할 때 받아온다.
+bundle 용량 실측은 23분 55.8MB,
 58분 110.3MB 였고 그중 오디오가 72~80%, 영상은 13~28% 다.
 
 진행 로그는 stderr 로 나간다. stdout 은 요약 JSON 과 MCP 의 JSON-RPC 전용이다.
@@ -81,7 +92,7 @@ stdio JSON-RPC. 외부 패키지 없이 stdlib 만 쓴다.
 | `ytx_set_chapter_titles` | 호스트가 직접 지은 챕터 제목을 검증·저장 |
 | `ytx_query` | 내용 질의. 근거 span/frame 과 timestamp 반환 |
 | `ytx_excerpt` | 특정 시각 구간의 자막과 프레임 |
-| `ytx_frames` | 화면 참조 시각의 프레임 추출 |
+| `ytx_frames` | 화면 참조 시각의 프레임 추출. 영상이 없으면 그때 받는다 |
 | `ytx_purge` | derived 재생성 및 명시적 삭제 |
 
 ## 왜 이 구조인가

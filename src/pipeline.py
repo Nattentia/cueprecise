@@ -56,8 +56,12 @@ import visual
 STAGES = ("fetch", "plan", "transcribe", "assemble", "merge", "chapters",
           "render", "visual", "index")
 
-# 기본에서 빠지는 단계. 지금은 비어 있고 실제로 빼는 것은 뒤 작업이 한다.
-OPTIONAL_STAGES: tuple[str, ...] = ()
+# 기본에서 빠지는 단계. 요청이 있을 때만 돈다.
+#
+# visual — 프레임은 화면·도식·코드를 볼 때만 필요하다. 기본에서 빼면 360p
+# 영상 다운로드가 통째로 사라진다 (실측 bundle 의 13~28%). 나중에 프레임을
+# 요청하면 job.json 의 원본 URL 로 그때 받는다 (ensure_video).
+OPTIONAL_STAGES: tuple[str, ...] = ("visual",)
 
 DEFAULT_STAGES = tuple(s for s in STAGES if s not in OPTIONAL_STAGES)
 
@@ -232,8 +236,12 @@ def _download(url: str, fmt: str, raw: Path, stem: str,
 
 
 def stage_fetch(bundle: Path, url: str, *, force: bool = False,
-                video: bool = True) -> dict[str, Any]:
-    """오디오·영상·자막을 받는다. Gemini 호출 없음."""
+                video: bool = False) -> dict[str, Any]:
+    """오디오·자막을 받는다. 영상은 기본으로 받지 않는다. Gemini 호출 없음.
+
+    영상은 프레임 추출에만 쓰고, 프레임은 요청이 있을 때만 뽑는다. 기본에서
+    빼도 잃는 것이 없다 — 나중에 `ensure_video` 가 같은 URL 로 받아온다.
+    """
     raw = bundle / "raw"
     captions = raw / "captions.json"
     raw.mkdir(parents=True, exist_ok=True)
@@ -540,10 +548,53 @@ def stage_chapters(bundle: Path, *, url: str | None = None) -> dict[str, Any]:
     return result
 
 
+def ensure_video(bundle: Path, *, url: str | None = None) -> Path | None:
+    """프레임을 뽑기 직전에만 영상을 확보한다. Gemini 호출 없음.
+
+    기본 분석은 영상을 받지 않으므로 프레임 요청 시점에 없는 것이 정상이다.
+    URL 은 `job.json` 의 `input.source` 에 이미 있다 — 새 영속 설정을 만들지
+    않는다. 이미 받아둔 영상은 그대로 쓰고 절대 지우지 않는다.
+    """
+    found = visual.source_video(bundle)
+    if found is not None:
+        return found
+    if url is None:
+        job_path = bundle / "job.json"
+        if not job_path.exists():
+            _log("  영상이 없고 job.json 도 없어 원본 URL 을 모른다. "
+                 "fetch/plan 을 먼저 돌리거나 URL 을 직접 줘라")
+            return None
+        try:
+            url = _read_json(job_path).get("input", {}).get("source")
+        except (OSError, json.JSONDecodeError):
+            url = None
+        if not url:
+            _log("  job.json 에 원본 URL 이 없다")
+            return None
+    _log("  영상이 없다. 프레임용으로 지금 받는다 (%s)" % url)
+    raw = bundle / "raw"
+    raw.mkdir(parents=True, exist_ok=True)
+    downloaded, error = _download(url, VIDEO_FORMAT, raw, "source_video",
+                                  visual.VIDEO_NAMES)
+    if downloaded is None:
+        tail = error.strip().splitlines()
+        _log("  경고: 영상 취득 실패 (%s)" % (tail[-1][:200] if tail else "원인 불명"))
+        return None
+    _log("  영상 %.1fMB (%s)" % (downloaded.stat().st_size / 1048576, downloaded.name))
+    return visual.source_video(bundle)
+
+
 def stage_visual(bundle: Path, *, at: list[float] | None = None,
-                 max_frames: int = visual.DEFAULT_MAX_FRAMES) -> dict[str, Any]:
+                 max_frames: int = visual.DEFAULT_MAX_FRAMES,
+                 url: str | None = None, acquire: bool = True) -> dict[str, Any]:
     """화면 참조·복원 용어 시각의 프레임을 뽑는다 (CONTRACT 11절). Gemini 호출 없음."""
+    video_path = ensure_video(bundle, url=url) if acquire else visual.source_video(bundle)
     result = visual.build(bundle, at=at, max_frames=max_frames)
+    if video_path is None and not result["frames"]:
+        # 영상을 못 구한 것과 후보가 없던 것은 사용자가 할 일이 다르다.
+        result["note"] = ("영상을 확보하지 못해 프레임을 뽑지 못했다. "
+                          "후보 시각 %d개는 계산했다." % result["candidates_considered"])
+        _write_json(bundle / "derived" / "frames.json", result)
     frames = result["frames"]
     if frames:
         ocr = sum(1 for frame in frames if frame.get("ocr_text"))
@@ -573,7 +624,7 @@ def run(url: str, *, bundle_root: Path = Path("data"),
         rpm_limit: int | None = DEFAULT_RPM_LIMIT,
         request_interval: float = DEFAULT_REQUEST_INTERVAL,
         ledger: Path | None = None, force: bool = False,
-        video: bool = True, at: list[float] | None = None,
+        video: bool = False, at: list[float] | None = None,
         max_frames: int = visual.DEFAULT_MAX_FRAMES,
         transcriber=None) -> dict[str, Any]:
     video_id = video_id_from_url(url)
@@ -622,7 +673,7 @@ def run(url: str, *, bundle_root: Path = Path("data"),
             srt, txt = stage_render(bundle, width=width)
             summary["stages"][stage] = {"srt": str(srt), "txt": str(txt)}
         elif stage == "visual":
-            frames = stage_visual(bundle, at=at, max_frames=max_frames)
+            frames = stage_visual(bundle, at=at, max_frames=max_frames, url=url)
             summary["stages"][stage] = {
                 "frames": len(frames["frames"]),
                 "candidates": frames["candidates_considered"],
@@ -728,8 +779,11 @@ def main() -> int:
     run_cmd.add_argument("--rpm-limit", type=int, default=DEFAULT_RPM_LIMIT)
     run_cmd.add_argument("--request-interval", type=float, default=DEFAULT_REQUEST_INTERVAL)
     run_cmd.add_argument("--force", action="store_true", help="캐시를 무시하고 다시 만든다")
+    run_cmd.add_argument("--with-video", action="store_true",
+                         help="fetch 단계에서 영상까지 미리 받는다. "
+                              "기본은 받지 않고 프레임이 필요할 때 받는다")
     run_cmd.add_argument("--skip-video", action="store_true",
-                         help="영상을 받지 않는다. 프레임 추출도 건너뛴다")
+                         help="이제 기본이다. --with-video 를 이긴다")
     run_cmd.add_argument("--at", default=None, help="프레임을 뽑을 시각. 쉼표 구분 초")
     run_cmd.add_argument("--max-frames", type=int, default=visual.DEFAULT_MAX_FRAMES)
 
@@ -756,7 +810,8 @@ def main() -> int:
                       chunk_max_secs=args.chunk_max_secs, overlap_secs=args.overlap_secs,
                       language_codes=codes, width=args.width, daily_limit=args.daily_limit,
                       rpm_limit=args.rpm_limit, request_interval=args.request_interval,
-                      force=args.force, video=not args.skip_video, at=at,
+                      force=args.force,
+                      video=args.with_video and not args.skip_video, at=at,
                       max_frames=args.max_frames)
         print(json.dumps(summary, ensure_ascii=False, indent=1))
     elif args.command == "status":

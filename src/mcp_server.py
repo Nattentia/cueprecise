@@ -214,9 +214,12 @@ def tool_purge(bundle_root: Path, *, video_id: str,
 
 
 def tool_frames(bundle_root: Path, *, video_id: str,
-                at: list[float] | None = None) -> dict[str, Any]:
+                at: list[float] | None = None,
+                max_frames: int = visual.DEFAULT_MAX_FRAMES) -> dict[str, Any]:
+    # visual.build 를 직접 부르지 않는다. 기본 분석이 영상을 받지 않으므로
+    # 프레임 요청 시점에 영상을 확보하는 일까지 pipeline 이 맡는다.
     bundle = pipeline.bundle_path(bundle_root, video_id)
-    return visual.build(bundle, at=at)
+    return pipeline.stage_visual(bundle, at=at, max_frames=max_frames)
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -308,13 +311,18 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "ytx_frames",
-        "description": "화면 참조 시각의 프레임을 추출하고 frames.json 을 갱신한다.",
+        "description": "화면 참조 시각의 프레임을 추출하고 frames.json 을 갱신한다. "
+                       "기본 분석은 영상을 받지 않으므로 이 도구가 필요할 때 "
+                       "원본 URL 로 360p 영상을 받아온다. Gemini 호출 없음.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "video_id": {"type": "string"},
                 "at": {"type": "array", "items": {"type": "number"},
                        "description": "추가로 뽑을 초 단위 시각"},
+                "max_frames": {"type": "integer",
+                               "description": "최대 프레임 수. 기본 %d"
+                                              % visual.DEFAULT_MAX_FRAMES},
             },
             "required": ["video_id"],
         },
@@ -360,7 +368,9 @@ def dispatch(name: str, arguments: dict[str, Any], *, bundle_root: Path,
                             start=float(arguments["start"]), end=float(arguments["end"]))
     if name == "ytx_frames":
         return tool_frames(bundle_root, video_id=arguments["video_id"],
-                           at=arguments.get("at"))
+                           at=arguments.get("at"),
+                           max_frames=int(arguments.get("max_frames",
+                                                        visual.DEFAULT_MAX_FRAMES)))
     if name == "ytx_purge":
         return tool_purge(bundle_root, video_id=arguments["video_id"],
                           scope=arguments.get("scope", "derived"))
