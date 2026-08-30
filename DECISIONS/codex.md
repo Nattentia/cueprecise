@@ -32,3 +32,13 @@ frame 색인, pipeline/MCP 완료 조건을 추가했다.
 **왜:** 장기 영상과 세션 간 컨텍스트를 구현하려면 파일 소유권과 단계 간
 인터페이스가 먼저 고정돼야 한다. additive 필드와 schema_version으로 기존
 reader를 계속 동작시키고, raw는 불변으로 두어 rollback과 재생성을 보장한다.
+
+## 2026-08-30 · 컨텍스트는 bundle의 SQLite 근거 색인으로 복원
+
+**무엇:** merged/transcript를 최대 30초 span으로 묶고 chapter와 frame OCR을
+함께 `index.sqlite3`에 원자적으로 색인한다. 검색 결과는 video_id, 절대 시각,
+원문, source path/kind, confidence와 speaker를 반환한다.
+
+**왜:** 대화 기록에 전체 전사를 계속 싣지 않고도 새 세션에서 video_id로
+근거를 다시 찾을 수 있어야 한다. 원본 derived JSON을 유지한 채 index를 통째로
+재생성하므로 stale 자료를 섞지 않고 rollback도 단순하다.
