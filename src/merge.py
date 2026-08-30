@@ -15,7 +15,7 @@ from typing import Any
 
 MIN_MISSING_GAP = 1.5
 CAPTION_LOOKBACK = 0.5
-CAPTION_LOOKAHEAD = 4.0
+CAPTION_LOOKAHEAD = 0.5
 KOREAN_PARTICLE_PREFIXES = (
     "이라는", "라는", "이라고", "라고", "의", "와", "과", "을", "를",
 )
