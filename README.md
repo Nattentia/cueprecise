@@ -79,6 +79,8 @@ stdio JSON-RPC. 외부 패키지 없이 stdlib 만 쓴다.
 | `ytx_status` | 진행도 + 로컬 Gemini 사용량 추정 |
 | `ytx_outline` | 개요와 timestamp 목차, 복원 용어, 화자 상태 |
 | `ytx_set_chapter_titles` | 호스트가 직접 지은 챕터 제목을 검증·저장 |
+| `ytx_summary` | 요청할 때만 영속 요약 생성/조회. 로컬 폴백 포함 |
+| `ytx_set_summary` | 호스트가 압축 근거로 개선한 요약을 검증·저장 |
 | `ytx_query` | 내용 질의. 근거 span/frame 과 timestamp 반환 |
 | `ytx_excerpt` | 특정 시각 구간의 자막과 프레임 |
 | `ytx_frames` | 화면 참조 시각의 프레임 추출 |
