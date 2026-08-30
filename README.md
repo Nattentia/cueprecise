@@ -25,8 +25,8 @@ python src/pipeline.py purge jcBDSLSeud4 --scope chunks   # 청크 오디오만 
 ## 파이프라인
 
 ```
-fetch       URL           -> raw/source.mp3, source.mp4, captions.json  쿼터 0
-plan        source.mp3    -> job.json, raw/audio/chunk-NNN.mp3      쿼터 0
+fetch       URL           -> raw/source.<ext>, source_video.<ext>, captions.json
+plan        원본 오디오    -> job.json, raw/audio/chunk-NNN.mp3      쿼터 0
 transcribe  chunk-NNN.mp3 -> raw/transcripts/chunk-NNN.json         청크당 1콜
 assemble    chunk 전사    -> derived/transcript.json                쿼터 0
 merge       transcript+자막 -> derived/merged.json                  쿼터 0
@@ -48,12 +48,19 @@ Gemini 는 긴 오디오에서 드물게 단어 하나의 timestamp 를 손상�
 `timestamp_repairs` 에 기록한다. 손상이 단어 수의 0.5% 를 넘으면 응답 자체가
 망가진 것으로 보고 중단한다.
 
+오디오는 받은 형식 그대로 저장한다. mp3 로 변환하면 파일이 오히려 커지고
+(m4a 129k 21.7MB → mp3 160k 26.8MB) 재압축이라 음질도 떨어진다. 청크를 만들 때
+어차피 16kHz 모노로 낮춘다.
+
 전사가 끝나면 `raw/audio/` 의 청크 오디오는 쓸 데가 없다. bundle 용량의
-20~25% 를 차지하므로 `purge --scope chunks` 로 지울 수 있다. `source.mp3` 가
+20~25% 를 차지하므로 `purge --scope chunks` 로 지울 수 있다. 원본 오디오가
 남아 있으면 `plan` 단계가 필요할 때 다시 뽑는다.
 
 영상은 프레임 추출에만 쓴다. 360p 로 받으므로 23분 영상 기준 16MB 이고,
-필요 없으면 `--skip-video` 로 건너뛴다.
+필요 없으면 `--skip-video` 로 건너뛴다. bundle 용량 실측은 23분 55.8MB,
+58분 110.3MB 였고 그중 오디오가 72~80%, 영상은 13~28% 다.
+
+진행 로그는 stderr 로 나간다. stdout 은 요약 JSON 과 MCP 의 JSON-RPC 전용이다.
 
 인터페이스는 `CONTRACT.md` 가 정의한다. 그 파일이 유일한 진실이다.
 

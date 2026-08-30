@@ -1,6 +1,7 @@
 """MCP 도구 표면 테스트. 네트워크와 Gemini API 를 쓰지 않는다."""
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import sys
@@ -11,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 import context
 import mcp_server
+import pipeline
 
 
 def word(text: str, start: float, **extra) -> dict:
@@ -156,6 +158,29 @@ class PurgeTests(BundleFixture):
         self.assertTrue(result["removed"])
         self.assertFalse((self.bundle / "derived").exists())
         self.assertIn("재생성", result["note"])
+
+
+class StdoutIsProtocolOnlyTests(BundleFixture):
+    """stdout 은 JSON-RPC 전용이다. 진행 로그가 섞이면 클라이언트가 끊긴다."""
+
+    def test_pipeline_progress_log_goes_to_stderr(self) -> None:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            pipeline._log("[render]")
+        self.assertEqual(out.getvalue(), "", "진행 로그가 stdout 을 오염시켰다")
+        self.assertIn("[render]", err.getvalue())
+
+    def test_tool_call_writes_only_json_lines(self) -> None:
+        captured = io.StringIO()
+        request = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                   "params": {"name": "ytx_outline", "arguments": {"video_id": "vid"}}}
+        stream_in = io.StringIO(json.dumps(request) + "\n")
+        with contextlib.redirect_stdout(captured):
+            mcp_server.serve(stream_in, captured, bundle_root=self.root)
+        lines = [line for line in captured.getvalue().splitlines() if line.strip()]
+        self.assertEqual(len(lines), 1)
+        for line in lines:
+            json.loads(line)  # 하나라도 JSON 이 아니면 여기서 터진다
 
 
 if __name__ == "__main__":

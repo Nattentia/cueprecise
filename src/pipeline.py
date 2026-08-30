@@ -4,13 +4,13 @@ owner: claude
 
 단계는 JSON 파일로만 이어지고 각각 독립적으로 재실행할 수 있다.
 
-    fetch      URL -> raw/source.mp3, raw/source.mp4, raw/captions.json
-    plan       source.mp3 -> job.json, raw/audio/chunk-NNN.mp3
+    fetch      URL -> raw/source.<ext>, raw/source_video.<ext>, raw/captions.json
+    plan       source 오디오 -> job.json, raw/audio/chunk-NNN.mp3
     transcribe chunk-NNN.mp3 -> raw/transcripts/chunk-NNN.json   (Gemini 호출)
     assemble   chunk transcripts -> derived/transcript.json      (화자 정합)
     merge      transcript + captions -> derived/merged.json
     render     merged.json -> derived/output.srt, output.txt
-    visual     merged.json + source.mp4 -> raw/frames/, derived/frames.json
+    visual     merged.json + source_video -> raw/frames/, derived/frames.json
     index      bundle -> index.sqlite3
 
 사용법:
@@ -62,6 +62,11 @@ DEFAULT_WIDTH = 20
 VIDEO_FORMAT = ("bv*[height<=480][ext=mp4][protocol^=http]/"
                 "bv*[height<=480][protocol^=http]/bv*[height<=480]/wv*")
 
+# 오디오는 받은 형식 그대로 둔다. mp3 로 변환하면 파일이 오히려 커지고
+# (m4a 129k 21.7MB -> mp3 160k 26.8MB) 재압축이라 음질도 떨어진다. 어차피
+# 청크를 만들 때 16kHz 모노로 낮추므로 원본을 고음질로 보관할 이유가 없다.
+AUDIO_FORMAT = "ba[protocol^=http]/ba/bestaudio"
+
 _ID_RE = re.compile(r"(?:v=|youtu\.be/|/shorts/|/embed/)([0-9A-Za-z_-]{11})")
 
 
@@ -100,12 +105,20 @@ def _save_job(bundle: Path, job: dict[str, Any]) -> None:
 
 
 def _log(message: str) -> None:
-    """Windows cp949 등 좁은 콘솔 인코딩에서도 죽지 않게 출력한다."""
+    """진행 로그는 stderr 로 보낸다.
+
+    MCP 서버가 stdout 을 JSON-RPC 통신 통로로 쓴다. 진행 로그가 같은 곳으로
+    나가면 프로토콜이 깨져 클라이언트가 응답을 파싱하지 못한다. CLI 사용자는
+    터미널에서 그대로 보이므로 달라지는 것이 없다.
+
+    Windows cp949 등 좁은 콘솔 인코딩에서도 죽지 않게 감싼다.
+    """
     try:
-        print(message, flush=True)
+        print(message, file=sys.stderr, flush=True)
     except UnicodeEncodeError:
-        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
-        print(message.encode(encoding, "replace").decode(encoding), flush=True)
+        encoding = getattr(sys.stderr, "encoding", None) or "utf-8"
+        print(message.encode(encoding, "replace").decode(encoding),
+              file=sys.stderr, flush=True)
 
 
 # -------------------------------------------------------------------------- stages
@@ -113,22 +126,23 @@ def _log(message: str) -> None:
 def stage_fetch(bundle: Path, url: str, *, force: bool = False,
                 video: bool = True) -> dict[str, Any]:
     """오디오·영상·자막을 받는다. Gemini 호출 없음."""
-    source = bundle / "raw" / "source.mp3"
-    captions = bundle / "raw" / "captions.json"
-    source.parent.mkdir(parents=True, exist_ok=True)
+    raw = bundle / "raw"
+    captions = raw / "captions.json"
+    raw.mkdir(parents=True, exist_ok=True)
 
-    if force or not source.exists():
-        target = source.parent / "source"
+    source = audio.source_audio(bundle)
+    if force or source is None:
         command = [
-            "yt-dlp", "--no-playlist", "-x", "--audio-format", "mp3",
-            "--audio-quality", "0", "-o", str(target) + ".%(ext)s", url,
+            "yt-dlp", "--no-playlist", "-f", AUDIO_FORMAT,
+            "-o", str(raw / "source") + ".%(ext)s", url,
         ]
         result = subprocess.run(command, capture_output=True, text=True)
-        if result.returncode != 0 or not source.exists():
-            raise StageError("오디오 다운로드 실패: " + result.stderr[-500:])
-        _log("  오디오 %.1fMB" % (source.stat().st_size / 1048576))
+        source = audio.source_audio(bundle)
+        if result.returncode != 0 or source is None:
+            raise StageError("오디오 다운로드 실패: " + (result.stderr or "")[-500:])
+        _log("  오디오 %.1fMB (%s)" % (source.stat().st_size / 1048576, source.name))
     else:
-        _log("  오디오 재사용")
+        _log("  오디오 재사용 (%s)" % source.name)
 
     # 영상은 프레임 추출에만 쓴다. 자막과 마찬가지로 실패해도 치명이 아니다.
     if video:
@@ -138,7 +152,7 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False,
         else:
             command = [
                 "yt-dlp", "--no-playlist", "-f", VIDEO_FORMAT,
-                "-o", str(source.parent / "source") + ".%(ext)s", url,
+                "-o", str(raw / "source_video") + ".%(ext)s", url,
             ]
             result = subprocess.run(command, capture_output=True, text=True)
             downloaded = visual.source_video(bundle)
@@ -160,7 +174,7 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False,
     cue_count = len(_read_json(captions).get("cues", []))
     _log("  자막 %d cues" % cue_count)
     found = visual.source_video(bundle)
-    return {"source_mp3": str(source), "captions": str(captions), "cues": cue_count,
+    return {"source_audio": str(source), "captions": str(captions), "cues": cue_count,
             "video": str(found) if found else None}
 
 
@@ -169,9 +183,9 @@ def stage_plan(bundle: Path, url: str, *, chunk_max_secs: float, overlap_secs: f
                force: bool = False) -> dict[str, Any]:
     """청크 계획과 분할. Gemini 호출 없음."""
     job_path = bundle / "job.json"
-    source = bundle / "raw" / "source.mp3"
-    if not source.exists():
-        raise StageError("raw/source.mp3 가 없습니다. fetch 단계를 먼저 실행하세요.")
+    source = audio.source_audio(bundle)
+    if source is None:
+        raise StageError("raw 에 원본 오디오가 없습니다. fetch 단계를 먼저 실행하세요.")
 
     config = {"chunk_max_secs": chunk_max_secs, "overlap_secs": overlap_secs,
               "language_codes": language_codes, "diarization": diarization}
@@ -511,7 +525,7 @@ PURGE_SCOPES = ("chunks", "derived", "raw", "all")
 def purge(bundle: Path, *, scope: str = "derived") -> list[str]:
     """raw 자료 삭제와 derived 재생성을 위한 명시적 삭제 (CONTRACT 12절).
 
-    `chunks` 는 전사용 청크 오디오만 지운다. 청크는 `source.mp3` 에서 언제든
+    `chunks` 는 전사용 청크 오디오만 지운다. 청크는 원본 오디오에서 언제든
     다시 뽑을 수 있고(`stage_plan` 이 없으면 자동으로 다시 뽑는다), 전사가
     끝난 뒤에는 재개에도 쓰이지 않는다. bundle 용량의 20~25% 를 차지한다.
     """
@@ -522,9 +536,9 @@ def purge(bundle: Path, *, scope: str = "derived") -> list[str]:
     if scope == "chunks":
         # 원본이 없으면 청크가 이 bundle 의 유일한 오디오다. 지우면 되돌릴 수
         # 없으므로 거부한다.
-        if not (bundle / "raw" / "source.mp3").exists():
+        if audio.source_audio(bundle) is None:
             raise ValueError(
-                "raw/source.mp3 가 없어 청크를 다시 만들 수 없습니다. "
+                "raw 에 원본 오디오가 없어 청크를 다시 만들 수 없습니다. "
                 "청크가 이 bundle 의 유일한 오디오이므로 지우지 않습니다.")
         targets.append(bundle / "raw" / "audio")
     if scope in {"derived", "all"}:
@@ -576,7 +590,7 @@ def main() -> int:
     purge_cmd.add_argument("video_id")
     purge_cmd.add_argument("--bundle-root", type=Path, default=Path("data"))
     purge_cmd.add_argument("--scope", choices=list(PURGE_SCOPES), default="derived",
-                           help="chunks 는 전사용 청크 오디오만 지운다 (source.mp3 에서 재생성 가능)")
+                           help="chunks 는 전사용 청크 오디오만 지운다 (원본 오디오에서 재생성 가능)")
 
     args = parser.parse_args()
 

@@ -160,5 +160,33 @@ class BuildTests(unittest.TestCase):
                 visual.build(Path(name) / "empty")
 
 
+
+class SourceVideoLookupTests(unittest.TestCase):
+    """오디오와 영상이 둘 다 webm 일 수 있다. 이름이 부딪히면 안 된다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "raw").mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _touch(self, name: str) -> None:
+        (self.bundle / "raw" / name).write_bytes(b"x")
+
+    def test_audio_webm_is_not_treated_as_video(self) -> None:
+        self._touch("source.webm")   # 오디오
+        self.assertIsNone(visual.source_video(self.bundle))
+
+    def test_finds_downloaded_video(self) -> None:
+        self._touch("source.webm")
+        self._touch("source_video.webm")
+        self.assertEqual(visual.source_video(self.bundle).name, "source_video.webm")
+
+    def test_legacy_bundle_video_still_found(self) -> None:
+        self._touch("source.mp4")
+        self.assertEqual(visual.source_video(self.bundle).name, "source.mp4")
+
 if __name__ == "__main__":
     unittest.main()

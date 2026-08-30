@@ -27,8 +27,14 @@ DEFAULT_MAX_FRAMES = 40
 MIN_SEPARATION_SECS = 8.0
 """이보다 가까운 후보는 하나로 합친다. 같은 슬라이드를 여러 장 뽑지 않는다."""
 
-VIDEO_NAMES = ("source.mp4", "source.webm", "source.mkv")
-"""프레임을 뽑을 수 있는 파일. 오디오(source.mp3)는 여기 없다."""
+VIDEO_NAMES = ("source_video.mp4", "source_video.webm", "source_video.mkv",
+               "source.mp4")
+"""프레임을 뽑을 수 있는 파일.
+
+영상은 `source_video.*` 로 받는다. 오디오도 받은 형식을 그대로 두므로, 둘 다
+`source.*` 를 쓰면 webm 끼리 이름이 부딪힐 수 있다. `source.mp4` 는 이 규칙
+이전에 받은 bundle 을 위해 남긴다.
+"""
 
 SCREEN_REFERENCE_PATTERNS = (
     # 한국어 — 네 갈래: 보다 / 이 그림 / 여기·좌우 / 그림에서

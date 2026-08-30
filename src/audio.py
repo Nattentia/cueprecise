@@ -15,6 +15,23 @@ from typing import Any
 DEFAULT_CHUNK_MAX_SECS = 1790.0
 DEFAULT_OVERLAP_SECS = 10.0
 
+AUDIO_NAMES = ("source.m4a", "source.webm", "source.opus", "source.mp3")
+"""전사 원본 오디오 후보. 받은 형식을 그대로 두므로 확장자가 여러 개다.
+
+`source.mp3` 는 맨 뒤다. 예전 bundle 이 그 이름을 쓰므로 계속 인식하되,
+새로 받을 때는 변환 없이 원본 형식을 쓴다. `source.mp4` 는 프레임용 영상이라
+여기 없다.
+"""
+
+
+def source_audio(bundle: Path) -> Path | None:
+    """bundle 의 원본 오디오. 없으면 None."""
+    for name in AUDIO_NAMES:
+        candidate = bundle / "raw" / name
+        if candidate.exists():
+            return candidate
+    return None
+
 
 def probe_duration(path: Path) -> float:
     command = [
