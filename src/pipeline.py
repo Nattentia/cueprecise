@@ -354,6 +354,67 @@ def _raw_meta(job: dict[str, Any], chunk: dict[str, Any], langs: str) -> dict[st
     }
 
 
+# 번역문 가드 ------------------------------------------------------------------
+#
+# Gemini 는 소리가 흐릿하면 "받아적기" 대신 "알아듣고 영어로 다시 쓰기" 로
+# 미끄러진다 (실측: DECISIONS/claude.md 2026-08-31). 번역문은 단어 수도 많고
+# 문장도 자연스러워 사람 눈에는 정상으로 보이지만 원문 근거로 쓸 수 없다.
+#
+# 판단 근거 둘. 이미 공짜로 가진 자료만 쓴다.
+#   1. 유튜브 원어 자막이 한글투성이인데 전사에 한글이 없다
+#   2. 자막이 없어도, ko 를 요청했는데 한글이 없다
+# 둘 다 임계값을 넉넉히 잡아 영어 용어가 섞인 한국어 강의를 오탐하지 않는다.
+
+_TRANSLATION_MIN_CHARS = 40
+"""이보다 짧은 표본은 근거로 쓰지 않는다."""
+
+_TRANSLATION_CAPTION_MIN_CHARS = 20
+"""자막 표본의 최소 길이. 실제 자막 파일은 수천 자라 넉넉히 통과한다."""
+
+_TRANSLATION_CAPTION_SHARE = 0.3
+"""자막이 이만큼 한글이면 원문이 한국어라고 본다."""
+
+_TRANSLATION_TRANSCRIPT_SHARE = 0.05
+"""전사가 이보다 한글이 적으면 한국어를 받아적은 것이 아니다."""
+
+
+def _hangul_share(text: str) -> float:
+    """글자 중 한글 비율. 숫자·기호·공백은 세지 않는다."""
+    hangul = latin = 0
+    for char in text:
+        if "가" <= char <= "힣" or "ㄱ" <= char <= "ㆎ":
+            hangul += 1
+        elif char.isascii() and char.isalpha():
+            latin += 1
+    total = hangul + latin
+    return (hangul / total) if total else 0.0
+
+
+def _looks_translated(transcript: str, *, captions: str, langs: str) -> bool:
+    """받아적기가 아니라 번역문으로 보이는가."""
+    if len(transcript) < _TRANSLATION_MIN_CHARS:
+        return False
+    if _hangul_share(transcript) >= _TRANSLATION_TRANSCRIPT_SHARE:
+        return False
+    korean_expected = (len(captions) >= _TRANSLATION_CAPTION_MIN_CHARS
+                       and _hangul_share(captions) >= _TRANSLATION_CAPTION_SHARE)
+    if not korean_expected:
+        korean_expected = any(code.strip().lower().startswith("ko")
+                              for code in langs.split(","))
+    return korean_expected
+
+
+def _captions_text(bundle: Path) -> str:
+    path = bundle / "raw" / "captions.json"
+    if not path.exists():
+        return ""
+    try:
+        cues = _read_json(path).get("cues", [])
+    except (OSError, json.JSONDecodeError):
+        return ""
+    return " ".join(str(cue.get("text", "")) for cue in cues)
+
+
 def _reusable_raw(bundle: Path, job: dict[str, Any], chunk: dict[str, Any],
                   langs: str) -> Path | None:
     """호출 없이 다시 파싱할 수 있는 저장된 응답.
@@ -396,6 +457,7 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
         _save_job(bundle, job)
         return job
 
+    captions_text = _captions_text(bundle)
     codes = job["config"]["language_codes"]
     langs = ",".join(codes) if codes else "auto"
 
@@ -463,6 +525,20 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
                     "실행하면 이어서 진행한다.%s 원인: %s"
                     % (chunk["index"], hint, error)
                 ) from error
+
+        text = " ".join(str(word.get("text", "")) for word in result["words"])
+        if _looks_translated(text, captions=captions_text, langs=langs):
+            chunk["status"] = "failed"
+            chunk["error"] = "번역문으로 보임"
+            job["status"] = "partial"
+            _save_job(bundle, job)
+            raise StageError(
+                "청크 %d 는 받아적기가 아니라 번역문으로 보인다 (한글 %.0f%%). "
+                "원문이 아니므로 근거로 쓸 수 없어 여기서 멈춘다 — 남은 청크의 "
+                "호출을 아낀다. --language 로 원어를 지정하고 다시 실행해라. "
+                "응답 원문은 %s 에 남는다."
+                % (chunk["index"], 100 * _hangul_share(text), _raw_path(bundle, chunk))
+            )
 
         offset = float(chunk["start"])
         for word in result["words"]:

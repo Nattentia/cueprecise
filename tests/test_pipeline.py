@@ -743,3 +743,112 @@ class OptionalRenderTests(unittest.TestCase):
         self.assertIn("txt", info["optional_artifacts"])
         self.assertNotIn("frames", info["optional_artifacts"],
                          "프레임은 선택이 아니다")
+
+
+class TranslationGuardTests(unittest.TestCase):
+    """Gemini 가 받아적기 대신 번역문을 돌려주는 경우를 잡는다."""
+
+    def test_hangul_share_counts_only_letters(self) -> None:
+        self.assertGreater(pipeline._hangul_share("안녕하세요 여러분"), 0.9)
+        self.assertEqual(pipeline._hangul_share("Hello everyone, 2026"), 0.0)
+        self.assertEqual(pipeline._hangul_share("   "), 0.0)
+
+    def test_detects_translation_against_captions(self) -> None:
+        korean = "안녕하세요 오늘은 자기지도학습에 대해 말씀드리겠습니다"
+        english = "Hello, today I will talk about self supervised learning"
+        self.assertTrue(pipeline._looks_translated(english, captions=korean, langs="auto"))
+        self.assertFalse(pipeline._looks_translated(korean, captions=korean, langs="auto"))
+
+    def test_detects_translation_from_requested_language_alone(self) -> None:
+        """자막이 없어도 ko 를 요청했는데 한글이 없으면 번역이다."""
+        english = "Hello, today I will talk about self supervised learning"
+        self.assertTrue(pipeline._looks_translated(english, captions="", langs="ko-KR"))
+        self.assertFalse(pipeline._looks_translated(english, captions="", langs="en-US"))
+        self.assertFalse(pipeline._looks_translated(english, captions="", langs="auto"))
+
+    def test_english_video_with_english_captions_is_not_flagged(self) -> None:
+        english = "Large language models get the hype but the work is data"
+        self.assertFalse(
+            pipeline._looks_translated(english, captions=english, langs="en-US"))
+
+    def test_bilingual_korean_lecture_is_not_flagged(self) -> None:
+        """영어 용어가 섞인 한국어 강의를 오탐하면 안 된다."""
+        mixed = ("self supervised learning 이라는 방법을 오늘 설명드리겠습니다 "
+                 "transformer 구조와 attention 을 함께 봅니다")
+        self.assertFalse(pipeline._looks_translated(mixed, captions=mixed, langs="ko-KR"))
+
+    def test_short_captions_do_not_trigger_on_their_own(self) -> None:
+        """자막이 몇 글자뿐이면 근거로 쓰지 않는다."""
+        self.assertFalse(
+            pipeline._looks_translated("Hello there friends", captions="안녕", langs="auto"))
+
+
+class TranslationGuardInPipelineTests(unittest.TestCase):
+    """번역문이 오면 첫 청크에서 멈춰 남은 호출을 아낀다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "raw/audio").mkdir(parents=True)
+        (self.bundle / "raw/transcripts").mkdir(parents=True)
+        (self.bundle / "raw/captions.json").write_text(json.dumps({
+            "source": "youtube-ko-orig", "video_id": "vid",
+            "cues": [{"start": 0.0, "end": 5.0,
+                      "text": "안녕하세요 오늘은 자기지도학습에 대해 말씀드리겠습니다"}],
+        }, ensure_ascii=False), encoding="utf-8")
+        self.job = {
+            "schema_version": 1, "video_id": "vid",
+            "input": {"source": "u", "fingerprint": "sha256:x"},
+            "config": {"chunk_max_secs": 600.0, "overlap_secs": 10.0,
+                       "language_codes": None, "diarization": True},
+            "status": "planned",
+            "chunks": [
+                {"index": i, "start": i * 100.0, "end": (i + 1) * 100.0,
+                 "path": "raw/audio/chunk-%03d.mp3" % i, "status": "pending",
+                 "attempts": 0,
+                 "transcript_path": "raw/transcripts/chunk-%03d.json" % i,
+                 "error": None}
+                for i in range(3)
+            ],
+        }
+        for chunk in self.job["chunks"]:
+            (self.bundle / chunk["path"]).write_bytes(b"x")
+        (self.bundle / "job.json").write_text(json.dumps(self.job, ensure_ascii=False),
+                                              encoding="utf-8")
+        self.ledger = Path(self.tmp.name) / "usage.json"
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _run(self, transcriber):
+        return pipeline.stage_transcribe(
+            self.bundle, self.job, ledger=self.ledger, api_key="k",
+            daily_limit=25, rpm_limit=None, request_interval=0.0,
+            transcriber=transcriber)
+
+    def test_translation_stops_after_first_chunk(self) -> None:
+        calls: list[str] = []
+
+        def transcriber(path, langs):
+            calls.append(path)
+            return {"words": [{"text": t, "start": i * 0.5, "end": i * 0.5 + 0.3,
+                               "speaker": "spk:0"}
+                              for i, t in enumerate(
+                                  "Hello today I will talk about self supervised "
+                                  "learning methods".split())]}
+
+        with self.assertRaises(pipeline.StageError) as caught:
+            self._run(transcriber)
+        self.assertEqual(len(calls), 1, "번역문을 받고도 나머지 청크를 계속 불렀다")
+        self.assertIn("번역", str(caught.exception))
+
+    def test_korean_transcription_passes(self) -> None:
+        def transcriber(path, langs):
+            return {"words": [{"text": t, "start": i * 0.5, "end": i * 0.5 + 0.3,
+                               "speaker": "spk:0"}
+                              for i, t in enumerate(
+                                  "안녕하세요 오늘은 자기지도학습에 대해 "
+                                  "말씀드리겠습니다".split())]}
+
+        job = self._run(transcriber)
+        self.assertEqual(job["status"], "complete")
