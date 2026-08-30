@@ -19,39 +19,76 @@ import json
 import os
 import re
 import sys
+import warnings
+from typing import Any
 
 from google import genai
-from google.genai._gaos.types import interactions as GI
 
 MODEL = "gemini-3.5-transcribe"
 
 
-def _offset(v) -> float | None:
+class TranscriptionResultError(ValueError):
+    """The API completed but did not return the contracted word annotations."""
+
+
+def _offset(v: Any) -> float | None:
     """'12.34s' 또는 12.34 -> 12.34"""
     if v is None:
         return None
-    m = re.match(r"([0-9.]+)s?", str(v))
-    return float(m.group(1)) if m else None
+    match = re.fullmatch(r"(?:([0-9]+(?:\.[0-9]+)?)s?)", str(v).strip())
+    return float(match.group(1)) if match else None
 
 
-def _extract_words(raw: dict) -> list[dict]:
-    words = []
+def _extract_words(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(raw, dict):
+        raise TranscriptionResultError("Gemini 응답이 JSON 객체가 아닙니다.")
+    words: list[dict[str, Any]] = []
     for step in raw.get("steps") or []:
         for content in step.get("content") or []:
             for a in content.get("annotations") or []:
                 if a.get("type") != "word_info":
                     continue
+                text = (a.get("text") or "").strip()
+                if not text:
+                    continue
+                start = _offset(a.get("start_offset"))
+                end = _offset(a.get("end_offset"))
+                position = len(words)
+                if start is None or end is None:
+                    raise TranscriptionResultError(
+                        f"word_info[{position}] {text!r}에 start/end timestamp가 없습니다."
+                    )
+                if start < 0 or end < start:
+                    raise TranscriptionResultError(
+                        f"word_info[{position}] {text!r}의 timestamp가 비정상입니다: "
+                        f"start={start}, end={end}"
+                    )
+                if words and start < words[-1]["start"]:
+                    raise TranscriptionResultError(
+                        f"word_info[{position}] {text!r}의 start가 앞 단어보다 이릅니다: "
+                        f"{start} < {words[-1]['start']}"
+                    )
                 words.append({
-                    "text": (a.get("text") or "").strip(),
-                    "start": _offset(a.get("start_offset")),
-                    "end": _offset(a.get("end_offset")),
+                    "text": text,
+                    "start": start,
+                    "end": end,
                     "speaker": a.get("speaker"),
                 })
-    return [w for w in words if w["text"] and w["start"] is not None]
+    if not words:
+        raise TranscriptionResultError(
+            "Gemini 응답에 word_info가 없습니다. verbatim/word timestamp 설정과 "
+            "오디오 내용을 확인하세요."
+        )
+    return words
 
 
 def transcribe(audio: str, langs: str | None) -> dict:
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    if not os.path.isfile(audio):
+        raise FileNotFoundError(f"오디오 파일이 없습니다: {audio}")
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise EnvironmentError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
+    client = genai.Client(api_key=api_key)
     uploaded = client.files.upload(file=audio)
     try:
         cfg: dict = {"mode": {
@@ -67,23 +104,27 @@ def transcribe(audio: str, langs: str | None) -> dict:
         interaction = client.interactions.create(
             model=MODEL,
             input=[{"type": "audio", "uri": uploaded.uri,
-                    "mime_type": "audio/mpeg"}],
-            generation_config=GI.GenerationConfig(
-                transcription_config=GI.TranscriptionConfig(**cfg)),
+                    "mime_type": uploaded.mime_type or "audio/mpeg"}],
+            generation_config={"transcription_config": cfg},
         )
     finally:
         try:
             client.files.delete(name=uploaded.name)
-        except Exception:  # 삭제 실패는 전사 결과에 영향 없음
-            pass
+        except Exception as error:  # 전사 결과는 살리되 서버 잔존 가능성을 알린다.
+            warnings.warn(
+                f"업로드 파일 정리에 실패했습니다 ({uploaded.name}): {error}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     raw = json.loads(interaction.model_dump_json(exclude_none=True))
+    words = _extract_words(raw)
     return {
         "source": "gemini",
         "model": MODEL,
         "language_codes": codes,
         "video_id": None,
-        "words": _extract_words(raw),
+        "words": words,
         "_raw": raw,
     }
 

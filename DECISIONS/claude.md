@@ -72,3 +72,14 @@ append-only. 최신이 아래.
 늘어난다. `이라는`처럼 앞 명사가 사라진 증거와 시간 일치가 동시에 있는 좁은
 구간만 복원한다. 롤링 cue는 실제 발화보다 뒤까지 이어질 수 있어, 복원 단어의
 시각은 Gemini 공백 안에 원래 순서대로 균등 배분한다.
+
+## 2026-08-30 · 전사 응답은 word timestamp 계약을 엄격히 검증
+
+**무엇:** auto에서는 `language_codes`를 요청에서 생략하고 결과에 `null`을
+기록한다. verbatim + diarization + word timestamp를 함께 요청하며, 빈 word_info,
+누락·역전·역순 timestamp는 단어와 위치를 포함한 오류로 중단한다. 성공과 API
+실패 모두 업로드 파일 삭제를 시도하고, 삭제 실패는 경고로 드러낸다.
+
+**왜:** word timestamp가 없는 성공 응답을 빈 transcript.json으로 저장하면 다음
+단계에서 원인을 찾을 수 없다. 공식 Python 예제와 같이 공개 dict 설정을 사용해
+SDK 내부 `_gaos` 타입에 대한 결합도도 제거했다.
