@@ -22,3 +22,13 @@ append-only. 최신이 아래.
 
 **왜:** 완성된 긴 cue를 두 줄로 잘라내면 복구할 수 없는 텍스트 소실이 난다.
 fixture의 Gemini 단어 2,856개가 출력에서도 동일 순서로 100% 보존됨을 확인했다.
+
+## 2026-08-30 · 기존 JSON을 보존하며 장기 작업 계약을 확장
+
+**무엇:** 기존 captions/transcript/merged 형식을 삭제하거나 바꾸지 않고,
+job manifest, optional 청크·화자 필드, 로컬 사용량 원장, knowledge bundle,
+frame 색인, pipeline/MCP 완료 조건을 추가했다.
+
+**왜:** 장기 영상과 세션 간 컨텍스트를 구현하려면 파일 소유권과 단계 간
+인터페이스가 먼저 고정돼야 한다. additive 필드와 schema_version으로 기존
+reader를 계속 동작시키고, raw는 불변으로 두어 rollback과 재생성을 보장한다.
