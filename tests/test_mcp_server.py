@@ -114,6 +114,18 @@ class OutlineTests(BundleFixture):
         result = mcp_server.tool_outline(self.root, video_id="vid", max_entries=2)
         self.assertLessEqual(len(result["outline"]), 2)
 
+    def test_unresolved_speaker_is_not_presented_as_confirmed(self) -> None:
+        path = self.bundle / "derived" / "merged.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        for item in payload["words"]:
+            item["speaker_global"] = "speaker:7"
+            item["speaker_status"] = "unresolved"
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        result = mcp_server.tool_outline(self.root, video_id="vid")
+        self.assertEqual(result["speakers"], [])
+        self.assertEqual(result["unresolved_speaker_candidates"], ["speaker:7"])
+        self.assertEqual(result["unresolved_speaker_words"], len(payload["words"]))
+
 
 class QueryTests(BundleFixture):
     def test_query_returns_evidence_with_timestamps(self) -> None:

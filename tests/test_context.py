@@ -71,6 +71,35 @@ class ContextIndexTests(unittest.TestCase):
             context.build_index(bundle)
             self.assertEqual(context.search(index, "검색"), [])
 
+    def test_unresolved_speaker_is_candidate_not_asserted_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle(Path(directory))
+            payload = json.loads((bundle / "derived" / "merged.json").read_text(encoding="utf-8"))
+            for word in payload["words"]:
+                word["speaker_global"] = "speaker:1"
+                word["speaker_status"] = "unresolved"
+            (bundle / "derived" / "merged.json").write_text(json.dumps(payload), encoding="utf-8")
+            results = context.search(context.build_index(bundle), "self")
+            transcript = next(hit for hit in results if hit["source_kind"] == "transcript")
+            self.assertIsNone(transcript["speaker"])
+            self.assertEqual(transcript["speaker_candidate"], "speaker:1")
+            self.assertEqual(transcript["speaker_status"], "unresolved")
+            self.assertEqual(transcript["speaker_confidence"], 0.0)
+
+    def test_inferred_speaker_remains_attributed_with_reduced_confidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle(Path(directory))
+            payload = json.loads((bundle / "derived" / "merged.json").read_text(encoding="utf-8"))
+            for word in payload["words"]:
+                word["speaker_global"] = "speaker:0"
+                word["speaker_status"] = "inferred"
+            (bundle / "derived" / "merged.json").write_text(json.dumps(payload), encoding="utf-8")
+            results = context.search(context.build_index(bundle), "self")
+            transcript = next(hit for hit in results if hit["source_kind"] == "transcript")
+            self.assertEqual(transcript["speaker"], "speaker:0")
+            self.assertEqual(transcript["speaker_status"], "inferred")
+            self.assertEqual(transcript["speaker_confidence"], 0.75)
+
     def test_missing_transcript_fails_clearly(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(FileNotFoundError):

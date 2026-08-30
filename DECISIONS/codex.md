@@ -52,3 +52,16 @@ reader를 계속 동작시키고, raw는 불변으로 두어 rollback과 재생�
 **왜:** Gemini의 `spk:1`은 호출별 로컬 라벨이다. 서로 다른 청크의 `spk:1`을
 그대로 렌더·색인하면 다른 사람을 한 사람으로 합친다. 고유 표시 ID와 신원
 확신도를 분리하면 잘못된 병합을 막으면서 raw 라벨도 보존할 수 있다.
+
+## 2026-08-31 · 내용 근거와 화자 확신도를 분리
+
+**무엇:** SQLite 근거 span에 `speaker_candidate`, `speaker_status`,
+`speaker_confidence`를 저장한다. `unresolved` 화자는 후보 라벨만 보존하고
+확정 `speaker`는 null로 색인한다. MCP 개요에서도 확정·추론 화자와 미해결
+후보를 별도 필드로 반환한다.
+
+**왜:** 겹친 발화, 짧은 맞장구, 청크별 독립 라벨에서는 화자 연결이 틀릴 수
+있지만 발화 내용까지 버릴 이유는 없다. 내용은 100% 검색 가능하게 유지하면서
+요약기가 불확실한 화자를 사실처럼 단정하지 않게 해야 한다. 실제 3청크
+Stanford 번들에서 speaker:0은 confirmed/inferred로, 702단어의 speaker:1은
+candidate+unresolved로 색인됨을 확인했다.

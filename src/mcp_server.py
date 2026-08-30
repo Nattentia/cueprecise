@@ -128,8 +128,17 @@ def tool_outline(bundle_root: Path, *, video_id: str,
         "duration": float(words[-1]["end"]),
         "word_count": len(words),
         "restored_terms": sorted({str(w["text"]) for w in restored}),
+        # unresolved 라벨은 화자 목록에서 확정 정체성처럼 노출하지 않는다.
         "speakers": sorted({str(w.get("speaker_global") or w.get("speaker"))
-                            for w in words if w.get("speaker") or w.get("speaker_global")}),
+                            for w in words
+                            if (w.get("speaker") or w.get("speaker_global"))
+                            and w.get("speaker_status") in {"confirmed", "inferred"}}),
+        "unresolved_speaker_candidates": sorted({
+            str(w.get("speaker_global") or w.get("speaker"))
+            for w in words
+            if (w.get("speaker") or w.get("speaker_global"))
+            and w.get("speaker_status") == "unresolved"
+        }),
         "unresolved_speaker_words": sum(
             1 for w in words if w.get("speaker_status") == "unresolved"),
         "outline": entries,
