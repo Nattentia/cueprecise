@@ -331,3 +331,72 @@ transcript 에 덮어쓰지 않는다.
 규약 변경이라 계약 판단이 필요하다.
 
 **Gemini API 호출:** 이 작업에서 0회. 단계 3 점검의 1회가 전부다.
+
+## 2026-08-30 · 실영상 검증 1번 — assemble 이 인접 반복어를 지우던 버그
+
+**실행:** `jcBDSLSeud4` (23분, 한국어) 전체 파이프라인 `fetch → index` 첫
+실행. Gemini 실호출 1회 성공 (`gemini-3.5-transcribe`, `client.interactions`,
+google-genai 2.20.0). exit 0, 7단계 완료.
+
+**정상 확인:** 롤링 중복 제거 cues 603 (CONTRACT §4 일치), `self supervised
+learning` 208~210초 복원 (origin=youtube), `RG` 오탐 재발 없음 (PR #7 유지),
+srt 391 큐, render 100% 보존, SQLite 색인 48 span 전 구간 커버, `ytx_query`
+근거 timestamp 반환.
+
+**버그:** `assemble` 이 `transcribe` 2829단어를 2822단어로 줄였다. 7단어
+조용히 소실. `render` 는 그 뒤라 "100% 보존" 으로 보고했다. 손실 수치는
+`transcript.json` 의 `speaker_mapping.duplicates_removed` 에만 있고 콘솔에
+안 떴다.
+
+원인은 `speakers.reconcile_chunks` 의 `_same_word` 중복 필터가 **모든 청크
+(첫 청크 포함)** 에 무조건 돌면서, 같은 청크에서 만들어지는 `merged` 리스트에
+자기 형제 단어를 비교한 것이다. `_same_word` 는 정규화 텍스트 일치 + start
+0.75초 이내 + end 0.75초 이내면 참이므로, 더듬음·열거로 생기는 정상 인접
+반복어가 삭제됐다.
+
+소실된 7건 중 3건은 의미가 바뀌었다.
+
+| 시각 | 원문 | 삭제 후 |
+|---|---|---|
+| 1018초 | `메드 팜, 메드 팜 2` | `메드 팜, 팜 2` (MedPalm ↔ MedPalm 2) |
+| 1153초 | `의사 A와 의사 B가` | `의사 A와 B가` |
+| 1194초 | `몇 년, 몇 월, 며칠` | `몇 년, 월, 며칠` |
+
+CONTRACT §8 은 중복 제거를 overlap 구간으로만 한정한다. 코드가 계약을
+어기고 있었다.
+
+**수정:**
+
+1. `speakers.py` — 중복 제거를 `position > 0` 이면서 단어 시각이 직전 청크
+   overlap 구간 `[chunk_start, 직전 chunk_end]` (양끝 `MAX_TIME_DELTA` 여유)
+   안에 들 때만 적용. 첫/유일 청크는 스킵. `chunk_start`/`chunk_end` 가 없는
+   standalone·test 경로는 관측 min start / max end 로 폴백. 비교 대상
+   `merged` 도 같은 창으로 필터해 기존 O(n²) → O(n·k) 로 줄었다.
+2. `pipeline.py` — `stage_assemble` 로그에 `overlap 중복 제거 N` 추가.
+3. `tests/test_speakers.py` — 단일 청크 인접 반복어 보존, N>1 에서 overlap
+   중복은 지우되 고유 구간 반복어는 보존, 두 케이스 추가. 전체 117건 통과.
+
+**재검증** (`jcBDSLSeud4`, `--stages assemble,merge,render,index`, Gemini 0콜):
+assemble 2829단어 (7단어 복원), `overlap 중복 제거 0`, 위 3구절 원문 복원,
+merge 삽입 11 유지, render 2840단어 100% 보존.
+
+**완전성 영향 없음:** 진성 overlap 중복은 정의상 시각이 직전 청크 오디오
+구간 안에 있으므로 새 게이트가 정확히 덮는다. 게이트 밖 진성 중복은
+물리적으로 생길 수 없다. 잡던 것 중 놓치는 것은 없고, 가짜 중복(인접
+반복어)만 이제 보존한다.
+
+**쿼터/시간:** 수정은 전부 `assemble` (쿼터 0). 새 API 호출 없음. 첫 청크는
+중복 제거를 통째로 건너뛰므로 오히려 빨라진다.
+
+**남은 검증** (이 PR 범위 밖):
+
+1. 30분 초과 영상(`vRTcE19M-KE`, 58분) 2청크 실행 — 실제 overlap 중복 제거,
+   청크 경계 문장, 다청크 화자 정합, 절대 타임스탬프
+2. 청크 실패 후 재개가 실제 API 경로에서 동작하는지
+3. `stage_fetch` 가 영상 파일을 안 받아 `visual.py` 프레임 추출 불가 — 구현 남음
+4. CONTRACT §4 Gemini 단어 밴드(2856~2898) 재보정 — 이번 실측 2829, 청크
+   재인코딩(16kHz mono 64kbps) + API 비결정성 영향으로 추정
+5. 첫 청크 `speaker_status` 가 `inferred`/`evidence:null` — `confirmed` 가 맞음
+6. Windows 콘솔 cp949 mojibake — `_log` 폴백이 안 죽지만 여전히 깨져 보임
+
+**Gemini API 호출:** 이 작업에서 1회 (검증 1번 전체 실행).

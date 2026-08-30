@@ -260,8 +260,9 @@ def stage_assemble(bundle: Path, job: dict[str, Any]) -> dict[str, Any]:
 
     unresolved = sum(1 for w in payload["words"]
                      if w.get("speaker_status") == "unresolved")
-    _log("  transcript %d단어, 화자 미확정 %d단어"
-         % (len(payload["words"]), unresolved))
+    removed = payload.get("speaker_mapping", {}).get("duplicates_removed", 0)
+    _log("  transcript %d단어, 화자 미확정 %d단어, overlap 중복 제거 %d"
+         % (len(payload["words"]), unresolved, removed))
     return payload
 
 
