@@ -230,12 +230,20 @@ def request_raw(audio: str, langs: str | None) -> tuple[dict[str, Any], list[str
     return json.loads(interaction.model_dump_json(exclude_none=True)), codes
 
 
-def transcribe(audio: str, langs: str | None, raw_path: Path | None = None) -> dict:
+def transcribe(audio: str, langs: str | None, raw_path: Path | None = None,
+               meta: dict[str, Any] | None = None) -> dict:
+    """`meta` 는 이 응답이 어느 입력에 대한 것인지 적어 두는 꼬리표다.
+
+    저장된 응답을 나중에 재사용할 때, 그 사이 청크 경계나 입력 오디오가
+    바뀌었으면 재사용하면 안 된다. 그 판단에 쓸 근거를 함께 남긴다.
+    """
     raw, codes = request_raw(audio, langs)
     if raw_path is not None:
         # 파싱 전에 저장한다. 파싱이 실패해도 소모한 호출이 날아가지 않는다.
-        _write_raw(Path(raw_path), {"model": MODEL, "requested_langs": langs or "auto",
-                                    "language_codes": codes, "response": raw})
+        payload: dict[str, Any] = {"model": MODEL, "requested_langs": langs or "auto",
+                                   "language_codes": codes, "response": raw}
+        payload.update(meta or {})
+        _write_raw(Path(raw_path), payload)
     return parse_raw(raw, codes)
 
 

@@ -123,6 +123,21 @@ def _log(message: str) -> None:
 
 # -------------------------------------------------------------------------- stages
 
+def _remove_stale_sources(bundle: Path, names: tuple[str, ...]) -> list[str]:
+    """--force 로 다시 받기 전에 이전 원본을 지운다.
+
+    형식이 바뀌면(mp3 -> webm, source.mp4 -> source_video.mp4) 옛 파일이 그대로
+    남아 용량만 두 배가 된다. 다시 받는 자리이므로 지워도 잃는 것이 없다.
+    """
+    removed: list[str] = []
+    for name in names:
+        path = bundle / "raw" / name
+        if path.exists():
+            path.unlink()
+            removed.append(name)
+    return removed
+
+
 def stage_fetch(bundle: Path, url: str, *, force: bool = False,
                 video: bool = True) -> dict[str, Any]:
     """오디오·영상·자막을 받는다. Gemini 호출 없음."""
@@ -132,6 +147,8 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False,
 
     source = audio.source_audio(bundle)
     if force or source is None:
+        if force:
+            _remove_stale_sources(bundle, audio.AUDIO_NAMES)
         command = [
             "yt-dlp", "--no-playlist", "-f", AUDIO_FORMAT,
             "-o", str(raw / "source") + ".%(ext)s", url,
@@ -150,6 +167,8 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False,
         if existing is not None and not force:
             _log("  영상 재사용 (%s)" % existing.name)
         else:
+            if force:
+                _remove_stale_sources(bundle, visual.VIDEO_NAMES)
             command = [
                 "yt-dlp", "--no-playlist", "-f", VIDEO_FORMAT,
                 "-o", str(raw / "source_video") + ".%(ext)s", url,
@@ -226,8 +245,25 @@ def _raw_path(bundle: Path, chunk: dict[str, Any]) -> Path:
     return bundle / (stem + ".raw.json")
 
 
-def _reusable_raw(bundle: Path, chunk: dict[str, Any], langs: str) -> Path | None:
-    """호출 없이 다시 파싱할 수 있는 저장된 응답. 요청 설정이 다르면 안 쓴다."""
+def _raw_meta(job: dict[str, Any], chunk: dict[str, Any], langs: str) -> dict[str, Any]:
+    """응답 원문에 함께 저장할 꼬리표. 나중에 재사용해도 되는지 판단할 근거다."""
+    return {
+        "requested_langs": langs,
+        "fingerprint": job.get("input", {}).get("fingerprint"),
+        "chunk_index": chunk["index"],
+        "chunk_start": chunk["start"],
+        "chunk_end": chunk["end"],
+    }
+
+
+def _reusable_raw(bundle: Path, job: dict[str, Any], chunk: dict[str, Any],
+                  langs: str) -> Path | None:
+    """호출 없이 다시 파싱할 수 있는 저장된 응답.
+
+    언어 설정뿐 아니라 입력 오디오와 청크 구간까지 같아야 쓴다. `--force` 로
+    다시 받아 오디오 형식이 바뀌거나 `--chunk-max-secs` 를 고치면 경계가
+    옮겨가는데, 그때 옛 응답을 그대로 쓰면 타임스탬프가 조용히 어긋난다.
+    """
     path = _raw_path(bundle, chunk)
     if not path.exists():
         return None
@@ -235,7 +271,11 @@ def _reusable_raw(bundle: Path, chunk: dict[str, Any], langs: str) -> Path | Non
         stored = _read_json(path)
     except (OSError, json.JSONDecodeError):
         return None
-    if stored.get("requested_langs") != langs:
+    expected = _raw_meta(job, chunk, langs)
+    if any(stored.get(key) != value for key, value in expected.items()):
+        # 꼬리표가 없던 시절의 응답도 여기서 걸린다. 조용히 어긋난 결과를
+        # 내느니 호출 한 번을 더 쓰는 편이 낫다. 원문은 그대로 남으므로
+        # `transcribe.py --from-raw` 로 수동 복구할 수 있다.
         return None
     return path
 
@@ -259,7 +299,7 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
     reusable = {} if force else {
         chunk["index"]: path
         for chunk in pending
-        if (path := _reusable_raw(bundle, chunk, langs)) is not None
+        if (path := _reusable_raw(bundle, job, chunk, langs)) is not None
     }
     to_call = [chunk for chunk in pending if chunk["index"] not in reusable]
     if to_call:
@@ -302,8 +342,9 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
             calls_made += 1
             try:
                 result = (transcriber(str(chunk_mp3), langs) if transcriber is not None
-                          else transcribe_mod.transcribe(str(chunk_mp3), langs,
-                                                         raw_path=raw_path))
+                          else transcribe_mod.transcribe(
+                              str(chunk_mp3), langs, raw_path=raw_path,
+                              meta=_raw_meta(job, chunk, langs)))
             except Exception as error:
                 chunk["status"] = "failed"
                 chunk["error"] = str(error)[:500]
