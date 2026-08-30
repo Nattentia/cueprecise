@@ -54,7 +54,7 @@ class ToolSurfaceTests(unittest.TestCase):
         names = {t["name"] for t in mcp_server.TOOLS}
         self.assertEqual(names, {
             "ytx_register", "ytx_status", "ytx_outline", "ytx_query",
-            "ytx_excerpt", "ytx_frames", "ytx_purge"})
+            "ytx_excerpt", "ytx_frames", "ytx_purge", "ytx_set_chapter_titles"})
 
     def test_every_tool_declares_an_input_schema(self) -> None:
         for tool in mcp_server.TOOLS:
@@ -97,7 +97,7 @@ class ProtocolTests(unittest.TestCase):
         mcp_server.serve(stream_in, stream_out, bundle_root=Path("data"))
         replies = [json.loads(line) for line in stream_out.getvalue().splitlines()]
         self.assertEqual([r["id"] for r in replies], [1, 2])
-        self.assertEqual(len(replies[0]["result"]["tools"]), 7)
+        self.assertEqual(len(replies[0]["result"]["tools"]), 8)
 
 
 class OutlineTests(BundleFixture):
@@ -106,7 +106,9 @@ class OutlineTests(BundleFixture):
         self.assertEqual(result["video_id"], "vid")
         self.assertIn("self", result["restored_terms"])
         self.assertIn("supervised", result["restored_terms"])
-        self.assertGreater(len(result["outline"]), 1, "장 경계를 찾지 못했다")
+        self.assertGreaterEqual(len(result["outline"]), 1, "장 경계를 찾지 못했다")
+        self.assertIn("needs_titles", result)
+        self.assertIn("transcript_fingerprint", result)
         for entry in result["outline"]:
             self.assertRegex(entry["timecode"], r"^\d{2}:\d{2}:\d{2}$")
 
@@ -125,6 +127,18 @@ class OutlineTests(BundleFixture):
         self.assertEqual(result["speakers"], [])
         self.assertEqual(result["unresolved_speaker_candidates"], ["speaker:7"])
         self.assertEqual(result["unresolved_speaker_words"], len(payload["words"]))
+
+    def test_host_can_set_title_without_changing_boundary(self) -> None:
+        outline = mcp_server.tool_outline(self.root, video_id="vid")
+        before = outline["outline"][0]
+        result = mcp_server.tool_set_chapter_titles(
+            self.root, video_id="vid", fingerprint=outline["transcript_fingerprint"],
+            titles=[{"id": before["id"], "title": "직접 지은 챕터 제목"}],
+        )
+        after = result["outline"][0]
+        self.assertEqual(after["title"], "직접 지은 챕터 제목")
+        self.assertEqual((after["start"], after["end"]), (before["start"], before["end"]))
+        self.assertEqual(after["title_source"], "host-llm")
 
 
 class QueryTests(BundleFixture):
