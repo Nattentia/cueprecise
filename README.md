@@ -25,27 +25,31 @@ python src/pipeline.py purge jcBDSLSeud4 --scope chunks   # 청크 오디오만 
 ## 파이프라인
 
 ```
-fetch       URL           -> raw/source.<ext>, captions.json           쿼터 0
+fetch       URL           -> raw/source.<ext>, source_video.<ext>, captions.json
 plan        원본 오디오    -> job.json, raw/audio/chunk-NNN.mp3      쿼터 0
 transcribe  chunk-NNN.mp3 -> raw/transcripts/chunk-NNN.json         청크당 1콜
 assemble    chunk 전사    -> derived/transcript.json                쿼터 0
 merge       transcript+자막 -> derived/merged.json                  쿼터 0
 chapters    merged.json     -> derived/chapters.json                쿼터 0
 render      merged.json   -> derived/output.srt, output.txt         쿼터 0  선택
-visual      merged+영상   -> raw/frames/, derived/frames.json       쿼터 0  선택
+visual      merged+영상   -> raw/frames/, derived/frames.json       쿼터 0
 index       bundle        -> index.sqlite3                          쿼터 0
 ```
 
-기본 실행은 `render` 와 `visual` 을 뺀 나머지다. 요약과 원문 검색에 필요한
-자료는 전부 만들고, 자막 파일과 프레임은 요청이 있을 때 만든다. 프레임을
-빼면 360p 영상 다운로드가 통째로 사라진다 (bundle 용량의 13~28%). 나중에
-요청하면 `job.json` 의 원본 URL 로 그때 받는다.
+기본 실행은 `render` 를 뺀 나머지다. 자막 파일(SRT/TXT)은 사람이 볼 때만
+필요하고 근거 검색은 `merged.json` 과 색인이 한다.
+
+`visual` 은 기본에 남는다. 오디오에 안 잡히는 화면 정보를 프레임으로 가져오는
+것이 이 도구의 목적 절반이다. 실측(58분)으로도 360p 영상 14.5MB 는 지금 받는
+소리 42.6MB 보다 작다.
+
+`--skip-video` 로 영상을 건너뛴 bundle 에서도 나중에 프레임을 요청하면
+`job.json` 의 원본 URL 로 그때 받아온다.
 
 ```powershell
 python src/pipeline.py run <url> --stages all      # 선택 단계까지 전부
 python src/pipeline.py run <url> --stages render   # 나중에 SRT/TXT 만
 python src/pipeline.py run <url> --stages visual   # 나중에 프레임만
-python src/pipeline.py run <url> --with-video      # 처음부터 영상까지 미리
 ```
 
 단계는 JSON 파일로만 이어진다. 각각 독립적으로 재실행할 수 있고, 완료된
@@ -69,8 +73,8 @@ Gemini 는 긴 오디오에서 드물게 단어 하나의 timestamp 를 손상�
 20~25% 를 차지하므로 `purge --scope chunks` 로 지울 수 있다. 원본 오디오가
 남아 있으면 `plan` 단계가 필요할 때 다시 뽑는다.
 
-영상은 프레임 추출에만 쓴다. 360p 로 받으므로 23분 영상 기준 16MB 이고,
-기본 실행은 받지 않는다. `ytx_frames` 나 `--stages visual` 이 필요할 때 받아온다.
+영상은 프레임 추출에만 쓴다. 360p 로 받으므로 23분 영상 기준 16MB 다.
+`--skip-video` 로 건너뛰어도 `ytx_frames` 나 `--stages visual` 이 그때 받아온다.
 bundle 용량 실측은 23분 55.8MB,
 58분 110.3MB 였고 그중 오디오가 72~80%, 영상은 13~28% 다.
 

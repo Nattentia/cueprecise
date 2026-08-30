@@ -639,18 +639,18 @@ class OnDemandVideoTests(unittest.TestCase):
             return target, ""
         return download
 
-    def test_visual_is_optional_and_not_in_default_stages(self) -> None:
+    def test_visual_stays_in_default_stages(self) -> None:
+        """화면 정보를 캡처로 가져오는 것이 이 도구의 목적 절반이다."""
         self.assertIn("visual", pipeline.STAGES)
-        self.assertNotIn("visual", pipeline.DEFAULT_STAGES)
-        self.assertIn("visual", pipeline.OPTIONAL_STAGES)
+        self.assertIn("visual", pipeline.DEFAULT_STAGES)
+        self.assertNotIn("visual", pipeline.OPTIONAL_STAGES)
 
-    def test_fetch_skips_video_by_default(self) -> None:
+    def test_fetch_downloads_video_by_default(self) -> None:
         import inspect
         signature = inspect.signature(pipeline.stage_fetch)
-        self.assertIs(signature.parameters["video"].default, False,
-                      "fetch 가 기본으로 영상을 받는다")
+        self.assertIs(signature.parameters["video"].default, True)
         signature = inspect.signature(pipeline.run)
-        self.assertIs(signature.parameters["video"].default, False)
+        self.assertIs(signature.parameters["video"].default, True)
 
     def test_ensure_video_downloads_using_job_source(self) -> None:
         self._job()
@@ -741,3 +741,5 @@ class OptionalRenderTests(unittest.TestCase):
         info = pipeline.status(self.bundle)
         self.assertIn("srt", info["optional_artifacts"])
         self.assertIn("txt", info["optional_artifacts"])
+        self.assertNotIn("frames", info["optional_artifacts"],
+                         "프레임은 선택이 아니다")

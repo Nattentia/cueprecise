@@ -58,15 +58,15 @@ STAGES = ("fetch", "plan", "transcribe", "assemble", "merge", "chapters",
 
 # 기본에서 빠지는 단계. 요청이 있을 때만 돈다.
 #
-# visual — 프레임은 화면·도식·코드를 볼 때만 필요하다. 기본에서 빼면 360p
-# 영상 다운로드가 통째로 사라진다 (실측 bundle 의 13~28%). 나중에 프레임을
-# 요청하면 job.json 의 원본 URL 로 그때 받는다 (ensure_video).
+# render — SRT/TXT 는 사람이 자막 파일을 원할 때 쓴다. 근거 검색은
+# merged.json 과 index 로 하므로 기본 산출물에 있을 이유가 없다. 기능은
+# 그대로다. `--stages render` / `ytx_register(stages=["render"])` 로 언제든
+# 만들 수 있고 단어 보존율 100% 도 그대로다.
 #
-# render — SRT/TXT 는 사람이 자막 파일을 원할 때 쓴다. 용량 절감은 거의 없지만
-# 근거 검색은 merged.json 과 index 로 하므로 기본 산출물에 있을 이유가 없다.
-# 기능은 그대로다. `--stages render` / `ytx_register(stages=["render"])` 로
-# 언제든 만들 수 있고 단어 보존율 100% 도 그대로다.
-OPTIONAL_STAGES: tuple[str, ...] = ("render", "visual")
+# visual 은 기본에 남긴다. 이 도구의 목적이 "오디오에 안 잡히는 화면 정보를
+# 캡처로 가져오는 것" 이라 프레임이 없으면 목적의 절반이 빠진다. 실측(58분):
+# 360p 영상 14.5MB < 지금 받는 소리 42.6MB. 줄일 곳은 영상이 아니라 소리다.
+OPTIONAL_STAGES: tuple[str, ...] = ("render",)
 
 DEFAULT_STAGES = tuple(s for s in STAGES if s not in OPTIONAL_STAGES)
 
@@ -241,11 +241,11 @@ def _download(url: str, fmt: str, raw: Path, stem: str,
 
 
 def stage_fetch(bundle: Path, url: str, *, force: bool = False,
-                video: bool = False) -> dict[str, Any]:
-    """오디오·자막을 받는다. 영상은 기본으로 받지 않는다. Gemini 호출 없음.
+                video: bool = True) -> dict[str, Any]:
+    """오디오·영상·자막을 받는다. Gemini 호출 없음.
 
-    영상은 프레임 추출에만 쓰고, 프레임은 요청이 있을 때만 뽑는다. 기본에서
-    빼도 잃는 것이 없다 — 나중에 `ensure_video` 가 같은 URL 로 받아온다.
+    영상 취득에 실패해도 치명이 아니다. 나중에 `ensure_video` 가 같은 URL 로
+    다시 시도한다.
     """
     raw = bundle / "raw"
     captions = raw / "captions.json"
@@ -629,7 +629,7 @@ def run(url: str, *, bundle_root: Path = Path("data"),
         rpm_limit: int | None = DEFAULT_RPM_LIMIT,
         request_interval: float = DEFAULT_REQUEST_INTERVAL,
         ledger: Path | None = None, force: bool = False,
-        video: bool = False, at: list[float] | None = None,
+        video: bool = True, at: list[float] | None = None,
         max_frames: int = visual.DEFAULT_MAX_FRAMES,
         transcriber=None) -> dict[str, Any]:
     video_id = video_id_from_url(url)
@@ -784,11 +784,8 @@ def main() -> int:
     run_cmd.add_argument("--rpm-limit", type=int, default=DEFAULT_RPM_LIMIT)
     run_cmd.add_argument("--request-interval", type=float, default=DEFAULT_REQUEST_INTERVAL)
     run_cmd.add_argument("--force", action="store_true", help="캐시를 무시하고 다시 만든다")
-    run_cmd.add_argument("--with-video", action="store_true",
-                         help="fetch 단계에서 영상까지 미리 받는다. "
-                              "기본은 받지 않고 프레임이 필요할 때 받는다")
     run_cmd.add_argument("--skip-video", action="store_true",
-                         help="이제 기본이다. --with-video 를 이긴다")
+                         help="영상을 받지 않는다. 프레임이 필요해지면 그때 받는다")
     run_cmd.add_argument("--at", default=None, help="프레임을 뽑을 시각. 쉼표 구분 초")
     run_cmd.add_argument("--max-frames", type=int, default=visual.DEFAULT_MAX_FRAMES)
 
@@ -815,8 +812,7 @@ def main() -> int:
                       chunk_max_secs=args.chunk_max_secs, overlap_secs=args.overlap_secs,
                       language_codes=codes, width=args.width, daily_limit=args.daily_limit,
                       rpm_limit=args.rpm_limit, request_interval=args.request_interval,
-                      force=args.force,
-                      video=args.with_video and not args.skip_video, at=at,
+                      force=args.force, video=not args.skip_video, at=at,
                       max_frames=args.max_frames)
         print(json.dumps(summary, ensure_ascii=False, indent=1))
     elif args.command == "status":
