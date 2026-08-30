@@ -30,6 +30,7 @@ plan        원본 오디오    -> job.json, raw/audio/chunk-NNN.mp3      쿼터
 transcribe  chunk-NNN.mp3 -> raw/transcripts/chunk-NNN.json         청크당 1콜
 assemble    chunk 전사    -> derived/transcript.json                쿼터 0
 merge       transcript+자막 -> derived/merged.json                  쿼터 0
+chapters    merged.json     -> derived/chapters.json                쿼터 0
 render      merged.json   -> derived/output.srt, output.txt         쿼터 0
 visual      merged+영상   -> raw/frames/, derived/frames.json       쿼터 0
 index       bundle        -> index.sqlite3                          쿼터 0
@@ -77,6 +78,7 @@ stdio JSON-RPC. 외부 패키지 없이 stdlib 만 쓴다.
 | `ytx_register` | 영상 등록/분석. 단계 선택 가능 |
 | `ytx_status` | 진행도 + 로컬 Gemini 사용량 추정 |
 | `ytx_outline` | 개요와 timestamp 목차, 복원 용어, 화자 상태 |
+| `ytx_set_chapter_titles` | 호스트가 직접 지은 챕터 제목을 검증·저장 |
 | `ytx_query` | 내용 질의. 근거 span/frame 과 timestamp 반환 |
 | `ytx_excerpt` | 특정 시각 구간의 자막과 프레임 |
 | `ytx_frames` | 화면 참조 시각의 프레임 추출 |
@@ -128,6 +130,8 @@ stdlib `unittest` 만 쓴다. 테스트 의존성이 없고 네트워크와 Gemi
   복원 용어가 없으면 후보가 잡히지 않는다.
 - 청크가 3개 이상일 때, 앞 청크와 겹치지 않는 새 화자는 global 라벨을 못 받고
   호출별 로컬 라벨(`spk:1`)로 남는다. 서로 다른 사람이 합쳐질 수 있다.
-- 목차(`chapters.json`)를 만드는 단계가 없어 `ytx_outline` 의 목차가 한 항목뿐이다.
-- 실영상 검증은 23분(단일 청크)과 58분(2청크)까지 마쳤다. 3청크 이상과
-  실 API 경로의 중단·재개는 아직이다.
+- 챕터 경계는 YouTube 원본 목차와 2~8분 로컬 구간을 혼합한다. 제목이 없는
+  구간은 키워드 폴백으로 즉시 완성되며, MCP 호스트가 압축 근거를 보고 지은
+  제목만 선택적으로 저장할 수 있다. 별도 Gemini 호출이나 MCP sampling은 없다.
+- 실영상 검증은 23분(단일 청크)과 58분(3청크)까지 마쳤다. 실 API 경로의
+  중단·재개는 아직이다.

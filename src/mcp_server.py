@@ -28,15 +28,12 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import context
+import chapters
 import pipeline
 import visual
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "ytx", "version": "1.0.0"}
-
-OUTLINE_GAP_SECS = 12.0
-"""이보다 긴 무음을 장 경계 후보로 본다."""
-
 
 class ToolError(RuntimeError):
     """도구 실행 실패. 호출자에게 그대로 전달한다."""
@@ -87,40 +84,27 @@ def tool_status(bundle_root: Path, *, video_id: str, api_key: str | None = None,
 
 
 def tool_outline(bundle_root: Path, *, video_id: str,
-                 max_entries: int = 30) -> dict[str, Any]:
-    """무음 간격으로 장 경계를 잡아 timestamp 목차를 만든다."""
+                 max_entries: int = 100) -> dict[str, Any]:
+    """영속 chapter를 만들거나 읽고, host가 지을 제목 후보를 반환한다."""
     bundle = pipeline.bundle_path(bundle_root, video_id)
     payload = _transcript(bundle)
     words = payload["words"]
     if not words:
         raise ToolError("전사에 단어가 없다.")
-
-    boundaries = [0]
-    for index in range(1, len(words)):
-        if float(words[index]["start"]) - float(words[index - 1]["end"]) > OUTLINE_GAP_SECS:
-            boundaries.append(index)
-
-    # 목차가 너무 길면 간격이 큰 경계부터 남긴다.
-    if len(boundaries) > max_entries:
-        scored = sorted(
-            boundaries[1:],
-            key=lambda i: float(words[i]["start"]) - float(words[i - 1]["end"]),
-            reverse=True,
-        )[: max_entries - 1]
-        boundaries = [0] + sorted(scored)
-
+    chapter_path = bundle / "derived" / "chapters.json"
+    chapter_payload = _read_json(chapter_path) if chapter_path.exists() else None
+    if (chapter_payload is None
+            or chapter_payload.get("transcript_fingerprint")
+            != chapters.transcript_fingerprint(bundle)):
+        job_path = bundle / "job.json"
+        source_url = None
+        if job_path.exists():
+            source_url = (_read_json(job_path).get("input") or {}).get("source")
+        chapter_payload = chapters.build(bundle, url=source_url)
+    selected_chapters = chapter_payload["chapters"][:max_entries]
     entries = []
-    for position, start_index in enumerate(boundaries):
-        end_index = boundaries[position + 1] if position + 1 < len(boundaries) else len(words)
-        segment = words[start_index:end_index]
-        title = " ".join(str(w["text"]) for w in segment[:12])
-        entries.append({
-            "start": float(segment[0]["start"]),
-            "end": float(segment[-1]["end"]),
-            "timecode": _fmt(float(segment[0]["start"])),
-            "title": title[:120],
-            "words": len(segment),
-        })
+    for item in selected_chapters:
+        entries.append({**item, "timecode": _fmt(float(item["start"]))})
 
     restored = [w for w in words if w.get("origin") == "youtube"]
     return {
@@ -141,8 +125,30 @@ def tool_outline(bundle_root: Path, *, video_id: str,
         }),
         "unresolved_speaker_words": sum(
             1 for w in words if w.get("speaker_status") == "unresolved"),
+        "transcript_fingerprint": chapter_payload["transcript_fingerprint"],
+        "needs_titles": [
+            {"id": item["id"], "start": item["start"], "end": item["end"],
+             "keywords": item["keywords"], "excerpts": item["excerpts"]}
+            for item in selected_chapters if item["needs_title"]
+        ],
+        "title_action": ("needs_titles 각각에 짧은 title을 직접 지은 뒤 "
+                         "ytx_set_chapter_titles를 한 번 호출하라. 설명은 만들지 마라."
+                         if any(item["needs_title"] for item in selected_chapters) else None),
         "outline": entries,
     }
+
+
+def tool_set_chapter_titles(bundle_root: Path, *, video_id: str, fingerprint: str,
+                            titles: list[dict[str, Any]]) -> dict[str, Any]:
+    """호스트가 처음부터 지은 짧은 title만 검증해 일괄 저장한다."""
+    bundle = pipeline.bundle_path(bundle_root, video_id)
+    result = chapters.set_titles(bundle, fingerprint=fingerprint, titles=titles)
+    return {"video_id": video_id, "updated": len(titles),
+            "quality": result["generation"]["quality"],
+            "outline": [{"id": item["id"], "start": item["start"],
+                         "end": item["end"], "title": item["title"],
+                         "title_source": item["title_source"]}
+                        for item in result["chapters"]]}
 
 
 def tool_query(bundle_root: Path, *, video_id: str, query: str,
@@ -242,12 +248,13 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "ytx_outline",
-        "description": "영상 개요와 timestamp 목차, 복원된 영어 용어, 화자 상태를 조회한다.",
+        "description": "영상 개요와 timestamp 목차를 조회한다. needs_titles가 있으면 "
+                       "근거를 보고 제목을 직접 지은 뒤 ytx_set_chapter_titles를 호출한다.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "video_id": {"type": "string"},
-                "max_entries": {"type": "integer", "description": "기본 30"},
+                "max_entries": {"type": "integer", "description": "기본 100"},
             },
             "required": ["video_id"],
         },
@@ -264,6 +271,23 @@ TOOLS: list[dict[str, Any]] = [
                 "limit": {"type": "integer", "description": "기본 8"},
             },
             "required": ["video_id", "query"],
+        },
+    },
+    {
+        "name": "ytx_set_chapter_titles",
+        "description": "ytx_outline의 needs_titles에 대해 호스트가 직접 지은 제목을 "
+                       "검증 후 저장한다. 경계와 원문은 바꿀 수 없다.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "video_id": {"type": "string"},
+                "fingerprint": {"type": "string"},
+                "titles": {"type": "array", "items": {"type": "object",
+                           "properties": {"id": {"type": "string"},
+                                          "title": {"type": "string"}},
+                           "required": ["id", "title"]}},
+            },
+            "required": ["video_id", "fingerprint", "titles"],
         },
     },
     {
@@ -320,10 +344,14 @@ def dispatch(name: str, arguments: dict[str, Any], *, bundle_root: Path,
         return tool_status(bundle_root, video_id=arguments["video_id"], api_key=api_key)
     if name == "ytx_outline":
         return tool_outline(bundle_root, video_id=arguments["video_id"],
-                            max_entries=int(arguments.get("max_entries", 30)))
+                            max_entries=int(arguments.get("max_entries", 100)))
     if name == "ytx_query":
         return tool_query(bundle_root, video_id=arguments["video_id"],
                           query=arguments["query"], limit=int(arguments.get("limit", 8)))
+    if name == "ytx_set_chapter_titles":
+        return tool_set_chapter_titles(
+            bundle_root, video_id=arguments["video_id"],
+            fingerprint=arguments["fingerprint"], titles=arguments["titles"])
     if name == "ytx_excerpt":
         return tool_excerpt(bundle_root, video_id=arguments["video_id"],
                             start=float(arguments["start"]), end=float(arguments["end"]))

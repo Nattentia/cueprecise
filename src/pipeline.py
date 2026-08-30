@@ -36,6 +36,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import audio
+import chapters
 import context
 import fetch_youtube
 import merge as merge_mod
@@ -49,7 +50,8 @@ import visual
 # (transcribe.request_raw) 안에서만 불러오므로 fetch/merge/render/index/status
 # 와 저장된 응답 재파싱은 SDK 없이 동작한다.
 
-STAGES = ("fetch", "plan", "transcribe", "assemble", "merge", "render", "visual", "index")
+STAGES = ("fetch", "plan", "transcribe", "assemble", "merge", "chapters",
+          "render", "visual", "index")
 
 DEFAULT_DAILY_LIMIT = 25
 DEFAULT_RPM_LIMIT = 2
@@ -484,6 +486,14 @@ def stage_render(bundle: Path, *, width: int) -> tuple[Path, Path]:
     return srt, txt
 
 
+def stage_chapters(bundle: Path, *, url: str | None = None) -> dict[str, Any]:
+    result = chapters.build(bundle, url=url)
+    needs_titles = sum(1 for item in result["chapters"] if item["needs_title"])
+    _log("  chapters %d개, host 제목 후보 %d개"
+         % (len(result["chapters"]), needs_titles))
+    return result
+
+
 def stage_visual(bundle: Path, *, at: list[float] | None = None,
                  max_frames: int = visual.DEFAULT_MAX_FRAMES) -> dict[str, Any]:
     """화면 참조·복원 용어 시각의 프레임을 뽑는다 (CONTRACT 11절). Gemini 호출 없음."""
@@ -557,6 +567,12 @@ def run(url: str, *, bundle_root: Path = Path("data"), stages: tuple[str, ...] =
                 "words": len(merged["words"]),
                 "inserted": sum(1 for w in merged["words"] if w.get("origin") == "youtube"),
             }
+        elif stage == "chapters":
+            result = stage_chapters(bundle, url=url)
+            summary["stages"][stage] = {
+                "chapters": len(result["chapters"]),
+                "needs_titles": sum(1 for item in result["chapters"] if item["needs_title"]),
+            }
         elif stage == "render":
             srt, txt = stage_render(bundle, width=width)
             summary["stages"][stage] = {"srt": str(srt), "txt": str(txt)}
@@ -589,6 +605,7 @@ def status(bundle: Path, *, ledger: Path | None = None, api_key: str | None = No
             ("captions", "raw/captions.json"),
             ("transcript", "derived/transcript.json"),
             ("merged", "derived/merged.json"),
+            ("chapters", "derived/chapters.json"),
             ("srt", "derived/output.srt"),
             ("txt", "derived/output.txt"),
             ("frames", "derived/frames.json"),
