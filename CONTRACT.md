@@ -106,8 +106,51 @@
 | Gemini 단어 수 | 2856 ~ 2898 |
 | 렌더 결과 단어 보존율 | 100% (소실 0) |
 
-## 5. 커밋 규약
+## 5. 협업 규약
+
+원격: `https://github.com/Nattentia/ytx` (private)
+
+### 작업 공간 분리
+
+같은 클론에서 둘이 동시에 작업하면 브랜치를 나눠도 워킹 트리에서
+서로 덮어쓴다. 각자 자기 클론을 쓴다.
+
+| 에이전트 | 디렉터리 |
+|---|---|
+| claude | `C:\dev\ytx` |
+| codex | `C:\dev\ytx-codex` |
+
+codex 최초 설정:
+
+```
+git clone https://github.com/Nattentia/ytx.git C:\dev\ytx-codex
+```
+
+### 브랜치
+
+- `main` 에 직접 커밋하지 않는다.
+- 자기 접두사 브랜치를 판다: `claude/<주제>`, `codex/<주제>`
+- 푸시 후 PR 을 연다. 사람이 검토하고 머지한다.
+
+```
+git switch -c codex/fetch-youtube
+git add src/fetch_youtube.py
+git commit -m "feat: youtube ko-orig 자막 취득 및 롤링 중복 제거"
+git push -u origin codex/fetch-youtube
+gh pr create --fill
+```
+
+### 커밋
 
 - 자기 소유 파일만 담는다.
 - 한 커밋에 한 가지 변경.
 - 작업을 마치면 `DECISIONS/<자기이름>.md`에 append: 날짜 / 무엇을 / 왜.
+
+### 상대 작업 확인
+
+머지된 결과는 `git pull` 로 받는다. 진행 중인 것은 PR 에서 본다.
+
+```
+git pull origin main
+gh pr list
+```
