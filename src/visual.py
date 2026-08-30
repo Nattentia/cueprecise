@@ -31,12 +31,24 @@ VIDEO_NAMES = ("source.mp4", "source.webm", "source.mkv")
 """프레임을 뽑을 수 있는 파일. 오디오(source.mp3)는 여기 없다."""
 
 SCREEN_REFERENCE_PATTERNS = (
+    # 한국어 — 네 갈래: 보다 / 이 그림 / 여기·좌우 / 그림에서
     r"보시면", r"보시다시피", r"보면", r"보겠습니다",
     r"이\s*그림", r"이\s*표", r"이\s*그래프", r"이\s*슬라이드", r"이\s*화면",
     r"여기\s*보", r"왼쪽", r"오른쪽", r"위\s*쪽", r"아래\s*쪽",
     r"그림에서", r"표에서", r"그래프에서", r"화면에",
+    # 영어 — 같은 네 갈래를 그대로 옮겼다.
+    r"\byou can see\b", r"\byou['’]?ll see\b", r"\bas you see\b",
+    r"\blet['’]?s look at\b", r"\blook at th(?:is|e)\b",
+    r"\bif you look\b", r"\btake a look\b",
+    r"\bthis (?:figure|table|graph|chart|slide|diagram|plot|image|picture)\b",
+    r"\bup here\b", r"\bdown here\b", r"\bover here\b", r"\bright here\b",
+    r"\bon the left\b", r"\bon the right\b",
+    r"\bat the top\b", r"\bat the bottom\b",
+    r"\bin the (?:figure|table|graph|chart|diagram|plot)\b",
+    r"\bon the (?:slide|screen)\b",
 )
-_SCREEN_RE = re.compile("|".join(SCREEN_REFERENCE_PATTERNS))
+_SCREEN_RE = re.compile("|".join(SCREEN_REFERENCE_PATTERNS), re.IGNORECASE)
+"""대소문자를 가리지 않는다. 한국어 패턴에는 영향이 없다."""
 
 _WINDOW_SECS = 6.0
 """화면 참조 표현을 찾을 때 묶어서 볼 문맥 길이."""
