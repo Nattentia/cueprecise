@@ -153,7 +153,7 @@ class SubtitleLanguageTests(unittest.TestCase):
         fetch_youtube.subprocess.run = run
 
     def test_korean_original_captions(self) -> None:
-        self._fake_yt_dlp({"*-orig": "ko-orig"})
+        self._fake_yt_dlp({fetch_youtube.ORIGINAL_LANGS[0]: "ko-orig"})
         result = fetch_youtube.fetch("u", self.out)
         self.assertEqual(result["language"], "ko-orig")
         self.assertEqual(result["source"], "youtube-ko-orig")
@@ -161,7 +161,7 @@ class SubtitleLanguageTests(unittest.TestCase):
 
     def test_english_original_captions(self) -> None:
         """ko-orig 고정 때문에 못 받던 영어 영상."""
-        self._fake_yt_dlp({"*-orig": "en-orig"})
+        self._fake_yt_dlp({fetch_youtube.ORIGINAL_LANGS[0]: "en-orig"})
         result = fetch_youtube.fetch("u", self.out)
         self.assertEqual(result["language"], "en-orig")
         self.assertEqual(result["source"], "youtube-en-orig")
@@ -186,6 +186,6 @@ class SubtitleLanguageTests(unittest.TestCase):
             fetch_youtube.fetch("u", self.out)
 
     def test_original_track_wins_over_others(self) -> None:
-        self._fake_yt_dlp({"*-orig": "ko-orig", "en": "en"})
+        self._fake_yt_dlp({fetch_youtube.ORIGINAL_LANGS[0]: "ko-orig", "en": "en"})
         result = fetch_youtube.fetch("u", self.out)
         self.assertEqual(result["language"], "ko-orig", "원어 자막을 두고 다른 것을 골랐다")
