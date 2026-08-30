@@ -116,6 +116,16 @@ Gemini 는 4회 실행 모두 실패. YouTube 자막은 무료로 갖고 있다.
 `merge.py` 가 시간 공백과 조사 잔존을 **함께** 근거로 삼아 그 구간에만 영어를
 복원한다. Gemini 원본 단어는 삭제·재작성하지 않는다.
 
+## 언어를 지정하는 편이 낫다
+
+`--language` 를 생략하면 Gemini 가 알아서 고른다. 같은 한국어 영상
+(`jcBDSLSeud4`)에서 한 번은 한국어 전사가, 한 번은 **영어 번역문**이 나왔다
+(2,902단어 한국어 vs 3,559단어 영어). 번역은 원문이 아니므로 근거로 쓸 수 없다.
+
+```powershell
+python src/pipeline.py run <url> --language ko-KR
+```
+
 ## 요구 사항
 
 - Python 3.11+
