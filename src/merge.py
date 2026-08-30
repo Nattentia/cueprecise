@@ -1,188 +1,196 @@
-"""Merge missing Latin terms from YouTube captions into a Gemini transcript.
+"""transcript.json + captions.json -> merged.json (CONTRACT.md 2절 준수).
 
-Gemini words are immutable: this stage only annotates them with
-``origin="gemini"`` and inserts evidence-backed YouTube words into grammatical
-gaps. See CONTRACT.md section 2.
+owner: claude
+
+Gemini 전사를 골격으로 두고, 조사만 남고 앞 성분이 사라진 공백 구간에
+YouTube 자막의 영어 용어를 시각 기준으로 끌어와 채운다.
+
+사용법:
+    python src/merge.py <transcript.json> <captions.json> <merged.json>
+
+판정 근거는 둘을 함께 쓴다. 하나만으로는 삽입하지 않는다.
+  1. Gemini 단어 사이 시간 공백이 MIN_GAP 초과
+  2. 공백 직후 단어가 조사로 시작 (앞 명사가 사라진 문법적 흔적)
+
+확신이 낮으면 넣지 않는다. 오탐보다 누락을 택한다.
+영어 표기 정규화(retrievered, RG, EMR 등)는 이 단계에서 하지 않는다.
+
+타임스탬프 배분: YouTube 롤링 자막은 cue 구간이 구조적으로 서로 겹친다.
+따라서 cue 구간별로 균등 배분하면 인접 cue의 토큰끼리 시각이 뒤섞여
+전역 순서가 깨진다. 대신 (cue 순서, cue 안 토큰 순서)로 정렬한 목록을
+공백 구간 전체에 균등 배분한다. 순서 보존을 우선한 선택이다.
 """
-
 from __future__ import annotations
 
-import argparse
+import io
 import json
 import re
-from pathlib import Path
+import sys
 from typing import Any
 
-MIN_MISSING_GAP = 1.5
-CAPTION_LOOKBACK = 0.5
-CAPTION_LOOKAHEAD = 4.0
-KOREAN_PARTICLE_PREFIXES = (
-    "이라는", "라는", "이라고", "라고", "의", "와", "과", "을", "를",
-)
-LATIN_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[-'][A-Za-z0-9]+)*")
+# --- 내부 상수 (CONTRACT 미규정. 변경 근거는 DECISIONS/claude.md 에 남긴다) ---
+
+MIN_GAP = 1.5
+"""소실 후보로 볼 최소 공백(초). 강의 발화에서 이보다 짧은 쉼은 흔하다."""
+
+DEDUPE_WINDOW = 5.0
+"""공백 앞뒤 이 범위 안에 Gemini 가 이미 같은 라틴 토큰을 갖고 있으면 넣지 않는다."""
+
+PARTICLE_EXACT = {
+    "의", "와", "과", "은", "는", "이", "가", "를", "을",
+    "라는", "이라는", "라고", "이라고", "란", "이란",
+}
+"""단독으로 나오면 앞 명사가 사라졌다는 신호가 되는 조사."""
+
+PARTICLE_PREFIX = ("이라는", "라는", "이라고", "라고", "이란", "란")
+"""이것으로 시작하는 어절도 같은 신호로 본다. 예: '라는데'."""
+
+LATIN_RE = re.compile(r"[A-Za-z][A-Za-z\-']*")
 
 
-def _number(value: Any, field: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{field}는 숫자여야 합니다: {value!r}")
-    return float(value)
+def _is_dangling_particle(text: str) -> bool:
+    t = text.strip()
+    return t in PARTICLE_EXACT or t.startswith(PARTICLE_PREFIX)
 
 
-def _validate_words(words: Any) -> list[dict[str, Any]]:
-    if not isinstance(words, list):
-        raise ValueError("transcript.json에 words 배열이 없습니다.")
-    validated: list[dict[str, Any]] = []
-    previous_start = -1.0
-    for index, word in enumerate(words):
-        if not isinstance(word, dict) or not str(word.get("text", "")).strip():
-            raise ValueError(f"words[{index}]가 올바른 단어가 아닙니다.")
-        start = _number(word.get("start"), f"words[{index}].start")
-        end = _number(word.get("end"), f"words[{index}].end")
-        if start < previous_start or end < start:
-            raise ValueError(f"words[{index}]의 timestamp 순서가 잘못되었습니다.")
-        previous_start = start
-        validated.append(word)
-    return validated
+def _latin(text: str) -> list[str]:
+    return LATIN_RE.findall(text)
 
 
-def _validate_cues(cues: Any) -> list[dict[str, Any]]:
-    if not isinstance(cues, list):
-        raise ValueError("captions.json에 cues 배열이 없습니다.")
-    validated: list[dict[str, Any]] = []
-    previous_start = -1.0
-    for index, cue in enumerate(cues):
-        if not isinstance(cue, dict):
-            raise ValueError(f"cues[{index}]가 객체가 아닙니다.")
-        start = _number(cue.get("start"), f"cues[{index}].start")
-        end = _number(cue.get("end"), f"cues[{index}].end")
-        if start < previous_start or end < start:
-            raise ValueError(f"cues[{index}]의 timestamp 순서가 잘못되었습니다.")
-        previous_start = start
-        validated.append(cue)
-    return validated
+def find_gaps(words: list[dict]) -> list[dict]:
+    """소실 후보 구간. 시간 공백과 조사 잔존을 모두 만족해야 한다."""
+    gaps = []
+    for i in range(1, len(words)):
+        prev, cur = words[i - 1], words[i]
+        gap = float(cur["start"]) - float(prev["end"])
+        if gap <= MIN_GAP:
+            continue
+        if not _is_dangling_particle(cur["text"]):
+            continue
+        gaps.append({
+            "start": float(prev["end"]),
+            "end": float(cur["start"]),
+            "after": cur["text"],
+            "before": prev["text"],
+            "index": i,
+        })
+    return gaps
 
 
-def _is_particle_fragment(text: str) -> bool:
-    compact = text.strip().lstrip(".,!?;:()[]{}\"'")
-    return compact.startswith(KOREAN_PARTICLE_PREFIXES)
-
-
-def _caption_latin_tokens(
-    cues: list[dict[str, Any]], gap_start: float, gap_end: float
-) -> list[str]:
-    tokens: list[str] = []
+def _nearby_latin(words: list[dict], start: float, end: float) -> set[str]:
+    lo, hi = start - DEDUPE_WINDOW, end + DEDUPE_WINDOW
     seen: set[str] = set()
-    window_start = max(0.0, gap_start - CAPTION_LOOKBACK)
-    window_end = gap_end + CAPTION_LOOKAHEAD
-    for cue in cues:
-        start = float(cue["start"])
-        end = float(cue["end"])
-        if start > window_end:
-            break
-        if end < window_start:
+    for w in words:
+        if lo <= float(w["start"]) <= hi:
+            seen.update(t.lower() for t in _latin(w["text"]))
+    return seen
+
+
+def collect_inserts(gap: dict, cues: list[dict], words: list[dict],
+                    consumed: set[tuple[int, int]]) -> list[dict]:
+    """공백 구간에 넣을 YouTube 영어 토큰.
+
+    cue 순서와 cue 안 토큰 순서를 유지한 채 공백 구간에 균등 배분한다.
+    `consumed` 는 이미 다른 공백에서 소비한 (cue 인덱스, 토큰 위치) 집합이다.
+    롤링 자막에서 한 cue 가 인접한 두 공백에 걸치면 같은 토큰이 두 번
+    삽입되므로 전역으로 소비 여부를 추적한다.
+    """
+    already = _nearby_latin(words, gap["start"], gap["end"])
+    picked: list[tuple[int, int, str]] = []
+    for ci, cue in enumerate(cues):
+        cs, ce = float(cue["start"]), float(cue["end"])
+        if min(ce, gap["end"]) <= max(cs, gap["start"]):
             continue
-        for token in LATIN_TOKEN_RE.findall(str(cue.get("text", ""))):
-            key = token.casefold()
-            if key not in seen:
-                seen.add(key)
-                tokens.append(token)
-    return tokens
+        for ti, tok in enumerate(LATIN_RE.findall(cue["text"])):
+            if (ci, ti) in consumed or tok.lower() in already:
+                continue
+            picked.append((ci, ti, tok))
+            already.add(tok.lower())
+
+    if not picked:
+        return []
+
+    span = gap["end"] - gap["start"]
+    step = span / len(picked)
+    out = []
+    for k, (ci, ti, tok) in enumerate(picked):
+        consumed.add((ci, ti))
+        out.append({
+            "text": tok,
+            "start": round(gap["start"] + step * k, 3),
+            "end": round(gap["start"] + step * (k + 1), 3),
+            "origin": "youtube",
+        })
+    return out
 
 
-def _nearby_gemini_latin(
-    words: list[dict[str, Any]], start: float, end: float
-) -> set[str]:
-    present: set[str] = set()
-    for word in words:
-        if float(word["start"]) > end:
-            break
-        if float(word["end"]) < start:
-            continue
-        present.update(token.casefold() for token in LATIN_TOKEN_RE.findall(str(word["text"])))
-    return present
+def merge(transcript: dict, captions: dict) -> tuple[dict, dict]:
+    words = [w for w in transcript["words"] if str(w.get("text", "")).strip()]
+    cues = sorted(captions["cues"], key=lambda c: (float(c["start"]), float(c["end"])))
 
+    base = [{
+        "text": w["text"],
+        "start": float(w["start"]),
+        "end": float(w["end"]),
+        "speaker": w.get("speaker"),
+        "origin": "gemini",
+    } for w in words]
 
-def merge_payloads(
-    transcript: dict[str, Any], captions: dict[str, Any]
-) -> dict[str, Any]:
-    words = _validate_words(transcript.get("words"))
-    cues = _validate_cues(captions.get("cues"))
-    transcript_id = transcript.get("video_id")
-    captions_id = captions.get("video_id")
-    if transcript_id and captions_id and transcript_id != captions_id:
-        raise ValueError(f"video_id가 다릅니다: {transcript_id!r} != {captions_id!r}")
+    gaps = find_gaps(words)
+    inserted: list[dict] = []
+    per_gap = []
+    consumed: set[tuple[int, int]] = set()
+    for g in gaps:
+        got = collect_inserts(g, cues, words, consumed)
+        per_gap.append({
+            "at": round(g["start"], 2),
+            "context": f"{g['before']} ___ {g['after']}",
+            "inserted": [x["text"] for x in got],
+        })
+        for x in got:
+            # 공백 양쪽 Gemini 단어의 화자를 물려받는다. 다르면 비운다.
+            lo_spk = words[g["index"] - 1].get("speaker")
+            hi_spk = words[g["index"]].get("speaker")
+            x["speaker"] = lo_spk if lo_spk == hi_spk else None
+        inserted.extend(got)
 
-    output: list[dict[str, Any]] = []
-    inserted_count = 0
-    for index, word in enumerate(words):
-        output.append({**word, "origin": "gemini"})
-        if index + 1 >= len(words):
-            continue
-        following = words[index + 1]
-        gap_start = float(word["end"])
-        gap_end = float(following["start"])
-        if gap_end - gap_start <= MIN_MISSING_GAP:
-            continue
-        if not _is_particle_fragment(str(following["text"])):
-            continue
+    merged = sorted(base + inserted, key=lambda w: (w["start"], w["end"]))
 
-        candidates = _caption_latin_tokens(cues, gap_start, gap_end)
-        present = _nearby_gemini_latin(words, gap_start - 1.0, gap_end + CAPTION_LOOKAHEAD)
-        candidates = [token for token in candidates if token.casefold() not in present]
-        if not candidates:
-            continue
-
-        # YouTube rolling cues extend beyond the actual phrase. Keep restored
-        # terms inside the missing Gemini interval and preserve source order.
-        slot = (gap_end - gap_start) / len(candidates)
-        speaker = word.get("speaker") if word.get("speaker") == following.get("speaker") else None
-        for position, token in enumerate(candidates):
-            start = gap_start + position * slot
-            end = gap_start + (position + 1) * slot
-            output.append({
-                "text": token,
-                "start": start,
-                "end": end,
-                "speaker": speaker,
-                "origin": "youtube",
-            })
-            inserted_count += 1
-
-    return {
-        "source": "merged",
-        "model": transcript.get("model"),
-        "language_codes": transcript.get("language_codes"),
-        "video_id": transcript_id or captions_id,
-        "words": output,
-        "merge_stats": {
-            "gemini_words": len(words),
-            "youtube_words_inserted": inserted_count,
-        },
+    report = {
+        "gemini_words_in": len(words),
+        "gemini_words_out": sum(1 for w in merged if w["origin"] == "gemini"),
+        "inserted": len(inserted),
+        "gap_candidates": len(gaps),
+        "gaps": per_gap,
     }
+    out = {
+        "source": "merged",
+        "video_id": transcript.get("video_id") or captions.get("video_id"),
+        "words": merged,
+    }
+    return out, report
 
 
-def merge_files(transcript_path: Path, captions_path: Path, output_path: Path) -> dict[str, Any]:
-    transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
-    captions = json.loads(captions_path.read_text(encoding="utf-8"))
-    result = merge_payloads(transcript, captions)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return result
+def main() -> int:
+    if len(sys.argv) < 4:
+        print(__doc__)
+        return 2
+    tpath, cpath, opath = sys.argv[1], sys.argv[2], sys.argv[3]
+    transcript = json.load(io.open(tpath, encoding="utf-8"))
+    captions = json.load(io.open(cpath, encoding="utf-8"))
 
+    merged, report = merge(transcript, captions)
+    with io.open(opath, "w", encoding="utf-8") as f:
+        json.dump(merged, f, ensure_ascii=False, indent=1)
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("transcript", type=Path)
-    parser.add_argument("captions", type=Path)
-    parser.add_argument("-o", "--output", type=Path, default=Path("merged.json"))
-    args = parser.parse_args()
-    result = merge_files(args.transcript, args.captions, args.output)
-    stats = result["merge_stats"]
-    print(
-        f"{args.output}: gemini={stats['gemini_words']} "
-        f"youtube_inserted={stats['youtube_words_inserted']}"
-    )
+    print(f"gemini {report['gemini_words_in']} -> {report['gemini_words_out']} "
+          f"(보존율 {report['gemini_words_out'] / report['gemini_words_in']:.1%})")
+    print(f"공백 후보 {report['gap_candidates']}건, 삽입 {report['inserted']}단어")
+    for g in report["gaps"]:
+        if g["inserted"]:
+            print(f"  {g['at']:>8.2f}s  {g['context']}  <- {' '.join(g['inserted'])}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
