@@ -42,9 +42,9 @@ class SpeakerReconciliationTests(unittest.TestCase):
         ]
         result = speakers.reconcile_chunks(chunks)
         later = next(item for item in result["words"] if item["text"] == "later")
-        self.assertIsNone(later["speaker_global"])
+        self.assertEqual(later["speaker_global"], "speaker:1")
         self.assertEqual(later["speaker_status"], "unresolved")
-        self.assertEqual(later["speaker"], "spk:1")
+        self.assertEqual(later["speaker"], "speaker:1")
 
     def test_two_local_labels_cannot_claim_one_global_speaker(self) -> None:
         chunks = [
@@ -68,12 +68,25 @@ class SpeakerReconciliationTests(unittest.TestCase):
         ])
         self.assertEqual(result["words"][0]["speaker_raw"], "spk:7")
         self.assertEqual(result["words"][0]["speaker_global"], "speaker:0")
+        self.assertEqual(result["words"][0]["speaker_status"], "confirmed")
 
     def test_missing_speaker_remains_unresolved(self) -> None:
         item = {"text": "hello", "start": 0.0, "end": 0.2, "speaker": None}
         result = speakers.reconcile_chunks([{"chunk_index": 0, "words": [item]}])
         self.assertIsNone(result["words"][0]["speaker_raw"])
         self.assertEqual(result["words"][0]["speaker_status"], "unresolved")
+
+    def test_same_unmatched_local_label_in_later_chunks_gets_unique_globals(self) -> None:
+        chunks = [
+            {"chunk_index": 0, "words": [word("host", 0.0, "spk:0")]},
+            {"chunk_index": 1, "words": [word("guest-a", 20.0, "spk:1")]},
+            {"chunk_index": 2, "words": [word("guest-b", 40.0, "spk:1")]},
+        ]
+        result = speakers.reconcile_chunks(chunks)
+        guests = [item for item in result["words"] if item["text"].startswith("guest")]
+        self.assertEqual([item["speaker_status"] for item in guests], ["unresolved", "unresolved"])
+        self.assertEqual({item["speaker_global"] for item in guests}, {"speaker:1", "speaker:2"})
+        self.assertEqual([item["speaker_raw"] for item in guests], ["spk:1", "spk:1"])
 
     def test_single_chunk_keeps_adjacent_repeats(self) -> None:
         # 더듬음·열거로 같은 단어가 0.75초 안에 다시 나온다. 단일 청크에는
