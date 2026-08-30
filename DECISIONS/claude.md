@@ -235,3 +235,15 @@ transcript 단독으로 영상을 식별하지 못한다. CLI 인자 추가는 �
 **왜:** 실패와 429도 서버 quota를 소비할 수 있고, 다른 도구가 같은 key를 쓴
 호출은 이 원장에서 볼 수 없다. 따라서 성공 후가 아니라 요청 직전에 올리고,
 화면에는 항상 `local estimate`라고 표시해야 한다.
+
+## 2026-08-30 · 청크 화자는 overlap 다수 증거로만 연결
+
+**무엇:** 첫 청크의 raw label은 등장 순서대로 내부 global label을 부여한다.
+다음 청크는 같은 절대 시각·같은 단어가 최소 2개 겹치고, 1위 표가 단독일
+때만 local→global을 `inferred/overlap`으로 연결한다. 두 local label이 같은
+global을 요구하면 강한 한쪽만 받아들이고 나머지는 `unresolved`로 둔다.
+
+**왜:** 호출마다 `spk:0`과 `spk:1`이 바뀔 수 있다. raw 번호를 직접 합치면
+청크 전체 화자가 뒤집히므로, `speaker_raw`는 불변 보존하고 증거 부족 시 기존
+reader용 `speaker`만 raw로 유지한다. overlap 중복 단어는 derived 결과에서만
+제거하고 제거 수를 metadata에 남긴다.
