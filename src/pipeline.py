@@ -40,10 +40,12 @@ import fetch_youtube
 import merge as merge_mod
 import render as render_mod
 import speakers
+import transcribe as transcribe_mod
 import usage
 
-# transcribe 는 google-genai 에 의존한다. fetch/merge/render/index/status 는
-# SDK 없이 동작해야 하므로 실제 전사 시점에만 불러온다.
+# transcribe 임포트는 SDK 를 요구하지 않는다. google-genai 는 실제 호출 경로
+# (transcribe.request_raw) 안에서만 불러오므로 fetch/merge/render/index/status
+# 와 저장된 응답 재파싱은 SDK 없이 동작한다.
 
 STAGES = ("fetch", "plan", "transcribe", "assemble", "merge", "render", "index")
 
@@ -172,16 +174,32 @@ def _pending_chunks(job: dict[str, Any], bundle: Path) -> list[dict[str, Any]]:
     return pending
 
 
+def _raw_path(bundle: Path, chunk: dict[str, Any]) -> Path:
+    """청크 응답 원문 경로. transcript_path 와 같은 자리에 .raw.json 으로 둔다."""
+    transcript = str(chunk["transcript_path"])
+    stem = transcript[: -len(".json")] if transcript.endswith(".json") else transcript
+    return bundle / (stem + ".raw.json")
+
+
+def _reusable_raw(bundle: Path, chunk: dict[str, Any], langs: str) -> Path | None:
+    """호출 없이 다시 파싱할 수 있는 저장된 응답. 요청 설정이 다르면 안 쓴다."""
+    path = _raw_path(bundle, chunk)
+    if not path.exists():
+        return None
+    try:
+        stored = _read_json(path)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if stored.get("requested_langs") != langs:
+        return None
+    return path
+
+
 def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key: str,
                      daily_limit: int, rpm_limit: int | None,
                      request_interval: float, free_mode: bool = True,
-                     transcriber=None) -> dict[str, Any]:
-    """청크별 Gemini 전사. 완료 청크는 재호출하지 않는다."""
-    if transcriber is None:
-        import transcribe as transcribe_mod  # noqa: PLC0415 - SDK 의존성 지연 로딩
-        call = transcribe_mod.transcribe
-    else:
-        call = transcriber
+                     transcriber=None, force: bool = False) -> dict[str, Any]:
+    """청크별 Gemini 전사. 완료 청크도, 응답 원문이 남은 청크도 재호출하지 않는다."""
     pending = _pending_chunks(job, bundle)
     if not pending:
         _log("  전사 완료된 청크만 있음, 호출 없음")
@@ -189,42 +207,77 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
         _save_job(bundle, job)
         return job
 
-    status_line = usage.preflight(ledger, api_key, len(pending), daily_limit=daily_limit,
-                                  rpm_limit=rpm_limit, free_mode=free_mode)
-    _log(usage.format_status(status_line))
-
     codes = job["config"]["language_codes"]
     langs = ",".join(codes) if codes else "auto"
+
+    # 저장된 응답으로 되살릴 수 있는 청크는 쿼터 추정에서 뺀다.
+    reusable = {} if force else {
+        chunk["index"]: path
+        for chunk in pending
+        if (path := _reusable_raw(bundle, chunk, langs)) is not None
+    }
+    to_call = [chunk for chunk in pending if chunk["index"] not in reusable]
+    if to_call:
+        status_line = usage.preflight(ledger, api_key, len(to_call), daily_limit=daily_limit,
+                                      rpm_limit=rpm_limit, free_mode=free_mode)
+        _log(usage.format_status(status_line))
+
     job["status"] = "running"
     _save_job(bundle, job)
+    calls_made = 0
 
-    for position, chunk in enumerate(pending):
+    for chunk in pending:
         chunk_mp3 = bundle / chunk["path"]
-        if not chunk_mp3.exists():
-            raise StageError("청크 오디오가 없습니다: %s" % chunk_mp3)
-        if position:
-            time.sleep(request_interval)
-        chunk["attempts"] += 1
-        chunk["status"] = "running"
-        _save_job(bundle, job)  # 요청 직전 checkpoint
-        usage.record_attempt(ledger, api_key)
-        try:
-            result = call(str(chunk_mp3), langs)
-        except Exception as error:
-            chunk["status"] = "failed"
-            chunk["error"] = str(error)[:500]
-            job["status"] = "partial"
-            _save_job(bundle, job)
-            raise StageError(
-                "청크 %d 전사 실패. 완료된 청크는 보존된다. 같은 명령을 다시 "
-                "실행하면 이어서 진행한다. 원인: %s" % (chunk["index"], error)
-            ) from error
+        raw_path = _raw_path(bundle, chunk)
+        stored = reusable.get(chunk["index"])
+
+        if stored is not None:
+            try:
+                result = transcribe_mod.from_raw(stored)
+            except Exception as error:
+                chunk["status"] = "failed"
+                chunk["error"] = str(error)[:500]
+                job["status"] = "partial"
+                _save_job(bundle, job)
+                raise StageError(
+                    "청크 %d: 저장된 응답으로 복구하지 못했습니다. 다시 호출하려면 "
+                    "%s 를 삭제하고 재실행하세요. 원인: %s"
+                    % (chunk["index"], raw_path, error)
+                ) from error
+            _log("  청크 %d: 저장된 응답 재사용 (Gemini 호출 없음)" % chunk["index"])
+        else:
+            if not chunk_mp3.exists():
+                raise StageError("청크 오디오가 없습니다: %s" % chunk_mp3)
+            if calls_made:
+                time.sleep(request_interval)
+            chunk["attempts"] += 1
+            chunk["status"] = "running"
+            _save_job(bundle, job)  # 요청 직전 checkpoint
+            usage.record_attempt(ledger, api_key)
+            calls_made += 1
+            try:
+                result = (transcriber(str(chunk_mp3), langs) if transcriber is not None
+                          else transcribe_mod.transcribe(str(chunk_mp3), langs,
+                                                         raw_path=raw_path))
+            except Exception as error:
+                chunk["status"] = "failed"
+                chunk["error"] = str(error)[:500]
+                job["status"] = "partial"
+                _save_job(bundle, job)
+                hint = ""
+                if raw_path.exists():
+                    hint = (" 응답 원문은 %s 에 남아 있으므로 재실행 시 호출 없이 "
+                            "다시 시도한다." % raw_path)
+                raise StageError(
+                    "청크 %d 전사 실패. 완료된 청크는 보존된다. 같은 명령을 다시 "
+                    "실행하면 이어서 진행한다.%s 원인: %s"
+                    % (chunk["index"], hint, error)
+                ) from error
 
         offset = float(chunk["start"])
         for word in result["words"]:
             word["start"] = round(float(word["start"]) + offset, 3)
             word["end"] = round(float(word["end"]) + offset, 3)
-        result.pop("_raw", None)
         result.update({
             "video_id": job["video_id"],
             "chunk_index": chunk["index"],
@@ -235,7 +288,10 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
         chunk["status"] = "complete"
         chunk["error"] = None
         _save_job(bundle, job)
-        _log("  청크 %d: %d단어" % (chunk["index"], len(result["words"])))
+        repairs = len(result.get("timestamp_repairs", []))
+        _log("  청크 %d: %d단어%s"
+             % (chunk["index"], len(result["words"]),
+                (", timestamp 보정 %d" % repairs) if repairs else ""))
 
     job["status"] = "complete"
     _save_job(bundle, job)
@@ -260,8 +316,9 @@ def stage_assemble(bundle: Path, job: dict[str, Any]) -> dict[str, Any]:
 
     unresolved = sum(1 for w in payload["words"]
                      if w.get("speaker_status") == "unresolved")
-    _log("  transcript %d단어, 화자 미확정 %d단어"
-         % (len(payload["words"]), unresolved))
+    removed = payload.get("speaker_mapping", {}).get("duplicates_removed", 0)
+    _log("  transcript %d단어, 화자 미확정 %d단어, overlap 중복 제거 %d"
+         % (len(payload["words"]), unresolved, removed))
     return payload
 
 
@@ -342,7 +399,7 @@ def run(url: str, *, bundle_root: Path = Path("data"), stages: tuple[str, ...] =
             job = stage_transcribe(bundle, job, ledger=ledger, api_key=api_key,
                                    daily_limit=daily_limit, rpm_limit=rpm_limit,
                                    request_interval=request_interval,
-                                   transcriber=transcriber)
+                                   transcriber=transcriber, force=force)
             summary["stages"][stage] = {"status": job["status"]}
         elif stage == "assemble":
             job = job if job is not None else _read_json(bundle / "job.json")

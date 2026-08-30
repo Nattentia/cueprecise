@@ -75,6 +75,40 @@ class SpeakerReconciliationTests(unittest.TestCase):
         self.assertIsNone(result["words"][0]["speaker_raw"])
         self.assertEqual(result["words"][0]["speaker_status"], "unresolved")
 
+    def test_single_chunk_keeps_adjacent_repeats(self) -> None:
+        # 더듬음·열거로 같은 단어가 0.75초 안에 다시 나온다. 단일 청크에는
+        # overlap 이 없으므로 하나도 지우면 안 된다.
+        chunks = [{"chunk_index": 0, "chunk_start": 0.0, "chunk_end": 20.0, "words": [
+            word("의사", 8.0, "spk:0"), word("A", 8.4, "spk:0"),
+            word("의사", 8.9, "spk:0"), word("B", 9.3, "spk:0"),
+            word("메드", 12.0, "spk:0"), word("팜", 12.3, "spk:0"),
+            word("메드", 12.6, "spk:0"), word("팜", 12.9, "spk:0"),
+        ]}]
+        result = speakers.reconcile_chunks(chunks)
+        self.assertEqual(len(result["words"]), 8)
+        self.assertEqual(result["speaker_mapping"]["duplicates_removed"], 0)
+
+    def test_repeats_outside_overlap_survive_but_overlap_dupes_go(self) -> None:
+        # 청크 경계는 30.0. overlap 재전사(28~30초)는 지우고, 청크 고유
+        # 구간의 인접 반복어는 보존한다.
+        chunks = [
+            {"chunk_index": 0, "chunk_start": 0.0, "chunk_end": 30.0, "words": [
+                word("몇", 10.0, "spk:0"), word("년", 10.4, "spk:0"),
+                word("몇", 10.8, "spk:0"), word("월", 11.2, "spk:0"),
+                word("tail", 29.0, "spk:0"),
+            ]},
+            {"chunk_index": 1, "chunk_start": 28.0, "chunk_end": 60.0, "words": [
+                word("tail", 29.0, "spk:0"),            # 진짜 overlap 중복
+                word("또", 40.0, "spk:0"), word("또", 40.4, "spk:0"),  # 고유 반복어
+            ]},
+        ]
+        result = speakers.reconcile_chunks(chunks)
+        texts = [w["text"] for w in result["words"]]
+        self.assertEqual(result["speaker_mapping"]["duplicates_removed"], 1)
+        self.assertEqual(texts.count("tail"), 1)
+        self.assertEqual(texts.count("몇"), 2)
+        self.assertEqual(texts.count("또"), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

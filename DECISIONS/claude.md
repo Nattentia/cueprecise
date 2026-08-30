@@ -331,3 +331,180 @@ transcript 에 덮어쓰지 않는다.
 규약 변경이라 계약 판단이 필요하다.
 
 **Gemini API 호출:** 이 작업에서 0회. 단계 3 점검의 1회가 전부다.
+
+## 2026-08-30 · 실영상 검증 1번 — assemble 이 인접 반복어를 지우던 버그
+
+**실행:** `jcBDSLSeud4` (23분, 한국어) 전체 파이프라인 `fetch → index` 첫
+실행. Gemini 실호출 1회 성공 (`gemini-3.5-transcribe`, `client.interactions`,
+google-genai 2.20.0). exit 0, 7단계 완료.
+
+**정상 확인:** 롤링 중복 제거 cues 603 (CONTRACT §4 일치), `self supervised
+learning` 208~210초 복원 (origin=youtube), `RG` 오탐 재발 없음 (PR #7 유지),
+srt 391 큐, render 100% 보존, SQLite 색인 48 span 전 구간 커버, `ytx_query`
+근거 timestamp 반환.
+
+**버그:** `assemble` 이 `transcribe` 2829단어를 2822단어로 줄였다. 7단어
+조용히 소실. `render` 는 그 뒤라 "100% 보존" 으로 보고했다. 손실 수치는
+`transcript.json` 의 `speaker_mapping.duplicates_removed` 에만 있고 콘솔에
+안 떴다.
+
+원인은 `speakers.reconcile_chunks` 의 `_same_word` 중복 필터가 **모든 청크
+(첫 청크 포함)** 에 무조건 돌면서, 같은 청크에서 만들어지는 `merged` 리스트에
+자기 형제 단어를 비교한 것이다. `_same_word` 는 정규화 텍스트 일치 + start
+0.75초 이내 + end 0.75초 이내면 참이므로, 더듬음·열거로 생기는 정상 인접
+반복어가 삭제됐다.
+
+소실된 7건 중 3건은 의미가 바뀌었다.
+
+| 시각 | 원문 | 삭제 후 |
+|---|---|---|
+| 1018초 | `메드 팜, 메드 팜 2` | `메드 팜, 팜 2` (MedPalm ↔ MedPalm 2) |
+| 1153초 | `의사 A와 의사 B가` | `의사 A와 B가` |
+| 1194초 | `몇 년, 몇 월, 며칠` | `몇 년, 월, 며칠` |
+
+CONTRACT §8 은 중복 제거를 overlap 구간으로만 한정한다. 코드가 계약을
+어기고 있었다.
+
+**수정:**
+
+1. `speakers.py` — 중복 제거를 `position > 0` 이면서 단어 시각이 직전 청크
+   overlap 구간 `[chunk_start, 직전 chunk_end]` (양끝 `MAX_TIME_DELTA` 여유)
+   안에 들 때만 적용. 첫/유일 청크는 스킵. `chunk_start`/`chunk_end` 가 없는
+   standalone·test 경로는 관측 min start / max end 로 폴백. 비교 대상
+   `merged` 도 같은 창으로 필터해 기존 O(n²) → O(n·k) 로 줄었다.
+2. `pipeline.py` — `stage_assemble` 로그에 `overlap 중복 제거 N` 추가.
+3. `tests/test_speakers.py` — 단일 청크 인접 반복어 보존, N>1 에서 overlap
+   중복은 지우되 고유 구간 반복어는 보존, 두 케이스 추가. 전체 117건 통과.
+
+**재검증** (`jcBDSLSeud4`, `--stages assemble,merge,render,index`, Gemini 0콜):
+assemble 2829단어 (7단어 복원), `overlap 중복 제거 0`, 위 3구절 원문 복원,
+merge 삽입 11 유지, render 2840단어 100% 보존.
+
+**완전성 영향 없음:** 진성 overlap 중복은 정의상 시각이 직전 청크 오디오
+구간 안에 있으므로 새 게이트가 정확히 덮는다. 게이트 밖 진성 중복은
+물리적으로 생길 수 없다. 잡던 것 중 놓치는 것은 없고, 가짜 중복(인접
+반복어)만 이제 보존한다.
+
+**쿼터/시간:** 수정은 전부 `assemble` (쿼터 0). 새 API 호출 없음. 첫 청크는
+중복 제거를 통째로 건너뛰므로 오히려 빨라진다.
+
+**남은 검증** (이 PR 범위 밖):
+
+1. 30분 초과 영상(`vRTcE19M-KE`, 58분) 2청크 실행 — 실제 overlap 중복 제거,
+   청크 경계 문장, 다청크 화자 정합, 절대 타임스탬프
+2. 청크 실패 후 재개가 실제 API 경로에서 동작하는지
+3. `stage_fetch` 가 영상 파일을 안 받아 `visual.py` 프레임 추출 불가 — 구현 남음
+4. CONTRACT §4 Gemini 단어 밴드(2856~2898) 재보정 — 이번 실측 2829, 청크
+   재인코딩(16kHz mono 64kbps) + API 비결정성 영향으로 추정
+5. 첫 청크 `speaker_status` 가 `inferred`/`evidence:null` — `confirmed` 가 맞음
+6. Windows 콘솔 cp949 mojibake — `_log` 폴백이 안 죽지만 여전히 깨져 보임
+
+**Gemini API 호출:** 이 작업에서 1회 (검증 1번 전체 실행).
+
+## 2026-08-30 · 단어 하나가 깨졌다고 청크 전체를 버리지 않는다
+
+**실행:** `vRTcE19M-KE` (58분 05초, 영어 강의) 2청크 실행. chunk 0 성공
+(5309단어). chunk 1 실패.
+
+```
+TranscriptionResultError: word_info[3341] 'language'의 timestamp가 비정상입니다: start=1119.8, end=120.3
+```
+
+**원인:** Gemini 가 긴 오디오에서 비결정적으로 단어 하나의 offset 을 손상시킨다.
+같은 `chunk-001.mp3` 를 같은 설정으로 다시 요청하니 5288단어 전부 정상이었고
+(`end<start` 0건, 단조증가 위반 0건), 그 단어는 `1119.8-1120.3` 이었다. 즉
+원본은 `1120.3` 인데 앞자리 `1` 이 누락돼 `120.3` 으로 왔다. 코드 결함이 아니라
+상류 API 의 산발적 결함이다.
+
+**설계 문제:** `2026-08-30 · 전사 응답은 word timestamp 계약을 엄격히 검증`
+항목이 첫 이상 단어에서 청크 전체를 중단시킨다. 그 판단의 근거("빈 응답을
+조용히 저장하면 다음 단계에서 원인을 못 찾는다")는 지금도 맞다. 다만
+**5,300단어 중 1건**에도 같은 잣대를 댄 것이 과했다. 게다가 응답 원문을
+어디에도 남기지 않아, 이미 소모한 호출 결과가 통째로 사라졌다. 실패 1건이
+호출 2회(실패 + 재실행)를 먹고, 재실행도 같은 확률로 또 깨진다.
+
+**수정 — 세 가지. 호출을 늘리지 않는 것이 제약이었다.**
+
+1. **응답 원문을 파싱 전에 저장한다.** `transcribe.request_raw` / `parse_raw`
+   로 호출과 파싱을 분리하고, `transcribe()` 가 `raw_path` 를 받으면 검증 전에
+   `chunk-NNN.raw.json` 을 쓴다. 파싱이 실패해도 소모한 호출이 남는다.
+   29분 청크 기준 0.9MB (source.mp3 64MB 대비 무시할 수준). 덤으로 지금
+   버리던 Gemini 부가 정보가 보존돼, 나중에 필요해지면 호출 없이 꺼낸다.
+2. **깨진 timestamp 를 이웃으로 복구한다.** `end < start` 면 다음 단어의
+   start 를, 그게 없으면 `start + cap` 을 쓴다. `cap` 은 그 응답 안 정상
+   단어들의 p99 길이라 응답마다 자체 보정된다. `start` 역행·누락·음수도
+   앞 단어의 end 로 되돌린다. **단어는 지우지 않는다.**
+   실측 근거: 이 응답에서 앞 단어 end == 다음 단어 start 가 89.7%(4742/5287),
+   단어 길이 중간값 0.20초·최대 1.50초. 관측 사례에 적용하면
+   `min(다음 단어 start 1120.3, 1119.8+cap)` = **1120.3** 으로 정답과 일치한다.
+3. **무더기 손상은 여전히 중단한다.** 보정이 `max(3, 단어수의 0.5%)` 를
+   넘으면 `TranscriptionResultError`. 산발적 잡음과 체계적 손상을 가른다.
+   이때도 원문은 저장돼 있어 원인 조사에 호출을 다시 쓰지 않는다.
+
+**저장된 응답 재사용 경로.** 위 1번만으로는 "복구 가능"에 그친다. 호출 0회로
+실제 되살리려면 재파싱 경로가 있어야 한다. `transcribe.from_raw()` 와
+`pipeline._reusable_raw()` 를 넣어, 미완료 청크에 쓸 수 있는 원문이 있으면
+API 대신 그것을 파싱한다. 쿼터 preflight 도 실제 호출할 청크 수만 센다.
+요청 언어가 다르면(`requested_langs` 비교) 재사용하지 않고, `--force` 는
+무시한다. 재파싱마저 실패하면 임의로 호출하지 않고 "원문 파일을 삭제하고
+재실행하라"고 안내한다. 쿼터 소비는 언제나 사람이 정한다.
+
+`google-genai` 임포트를 `request_raw` 안으로 옮겼다. 파싱·복구·재사용은
+SDK 없이 돌아가고, `pipeline.py` 의 지연 임포트도 필요 없어졌다.
+`transcribe.py` 단독 실행도 `--from-raw` 를 받는다.
+
+**보정 흔적은 숨기지 않는다** (CONTRACT §6). 보정된 단어에
+`timestamp_repaired: ["end"]`, 페이로드에 `timestamp_repairs` 목록(index/
+text/field/from/to), `speakers.reconcile_chunks` 가 이를 `chunk_index` 를
+붙여 derived 까지 옮긴다. `pipeline` 은 `청크 N: M단어, timestamp 보정 K` 를
+찍는다. 전부 optional 필드라 CONTRACT 개정은 필요 없다(§6).
+
+**검증 A 재개 결과** (저장해 둔 원문으로 재파싱, **Gemini 호출 0회**):
+
+| 항목 | 결과 |
+|---|---|
+| chunk 0 / chunk 1 | 5309 / 5288 단어 |
+| assemble | 10566단어, overlap 중복 제거 **31** |
+| 제거된 31단어 시각 | 1732.6~1742.2 — overlap 창 [1732.6, 1742.6] **안에만** |
+| 창 밖 제거 | **0건** |
+| 청크 간 화자 정합 | chunk1 `spk:0` → `speaker:0`, evidence `overlap`, 표 31 |
+| 절대 timestamp | 단조증가, 3484.0/3485.2초 커버, 경계 1738초 문장 안 끊김 |
+| merge | 삽입 0 (영어 영상이라 `ko-orig` 자막 없음. 설계대로 무해 통과) |
+| render | 803큐, 10566단어 100% 보존 |
+| index | evidence 124 span |
+
+`output.txt` 를 공백으로 쪼개면 10567 토큰이라 1개 많은데, Gemini 가
+`"1 It's"` 처럼 내부에 공백이 있는 토큰을 하나 준 탓이다. 보존율의 정본은
+단어 객체 수이고 그 기준으로 100% 다.
+
+**PR #16 의 dedup 수정이 실 2청크 데이터로 처음 검증됐다.** 수정 전 코드였다면
+이 영상에서 **153단어**를 지웠을 것이고, 그중 122단어는 overlap 과 무관한
+진짜 발화다. 수정 후 31단어, 전부 진성 overlap.
+
+**쿼터 영향:** 정상 흐름은 그대로 1콜. 단어 1건 손상 시 기존 2콜 → **1콜**.
+저장된 원문이 있으면 재개가 **0콜**. 늘어나는 경로가 없다.
+
+**테스트:** 132건 통과 (117 + 15). 복구 정확성, 마지막 단어 폴백, start 역행,
+offset 누락, 무더기 손상 중단, 재파싱 왕복, 저장 원문 재사용 시 호출 0회,
+언어 불일치 시 재사용 안 함, `--force` 무시, 재파싱 실패 시 임의 호출 금지.
+
+**Gemini API 호출:** 이 작업에서 3회 (A chunk0 1, A chunk1 실패 1, 원인 규명용
+재요청 1). 재개와 재검증은 0회.
+
+## 2026-08-30 · 새 화자에게 global 라벨을 주지 않는다 (미해결, 별건)
+
+검증 A 에서 드러났다. `vRTcE19M-KE` chunk 1 에만 두 번째 화자가 등장한다
+(질의응답 구간). `_reconcile_mapping` 은 overlap 표가 없는 raw 라벨을 전부
+`unresolved` 로 두고 `global` 을 `null` 로 남긴다. 새 라벨에 새 global 을
+발급하는 분기가 없다. 결과로 710단어가 `speaker: "spk:1"` 이라는 **호출별
+로컬 라벨**을 그대로 달고 derived 까지 나간다.
+
+CONTRACT §8 의 "근거가 약하면 임의 확정하지 않는다" 를 어기지는 않는다.
+다만 청크가 3개 이상이면 서로 다른 사람이 각각 `spk:1` 로 나올 수 있고,
+`render.py` 의 큐 분할과 `context.py` 의 span 묶기가 `speaker` 값 동일성으로
+판단하므로 **다른 사람이 한 사람으로 합쳐진다.**
+
+새 라벨에 새 global(`speaker:N`)을 발급하고 `speaker_status` 를
+`unresolved` 로 유지하는 방향이 맞아 보인다. "이 사람이 누구인지 모른다" 와
+"이 사람은 speaker:0 이 아니다" 는 다른 정보이고, 후자는 확실히 안다.
+2청크에서는 피해가 없어 이번 PR 에 섞지 않는다. 별도 판단이 필요하다.

@@ -117,6 +117,20 @@ def _enrich(word: dict[str, Any], mapping: dict[str, dict[str, Any]]) -> dict[st
     }
 
 
+def _overlap_bounds(
+    previous: dict[str, Any], current: dict[str, Any], words: list[dict[str, Any]]
+) -> tuple[float, float]:
+    """직전 청크와 겹치는 시각 구간 [lo, hi]. 실 파이프라인은 chunk_start/
+    chunk_end 를 넣어준다. 없으면(standalone/test) 관측값으로 폴백한다."""
+    hi = previous.get("chunk_end")
+    if hi is None:
+        hi = max((float(w["end"]) for w in previous.get("words") or []), default=0.0)
+    lo = current.get("chunk_start")
+    if lo is None:
+        lo = min((float(w["start"]) for w in words), default=0.0)
+    return float(lo), float(hi)
+
+
 def reconcile_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
     if not chunks:
         raise ValueError("최소 한 개의 chunk transcript가 필요합니다.")
@@ -134,16 +148,32 @@ def reconcile_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
             "chunk_index": chunk.get("chunk_index", position),
             "labels": mapping,
         })
+
+        # 중복 제거는 직전 청크와 겹치는 재전사 구간에서만 한다 (CONTRACT §8).
+        # 첫 청크는 비교 대상이 없고, 인접 반복어(더듬음·열거)는 진짜 중복이
+        # 아니므로 여기서 지우면 안 된다.
+        if position == 0:
+            lo = hi = None
+        else:
+            lo, hi = _overlap_bounds(ordered[position - 1], chunk, words)
+            lo -= MAX_TIME_DELTA
+            hi += MAX_TIME_DELTA
+
         for word in words:
             enriched = _enrich(word, mapping)
-            if any(_same_word(previous, enriched) for previous in merged):
+            in_overlap = position > 0 and lo <= float(word["start"]) < hi
+            if in_overlap and any(
+                _same_word(previous, enriched)
+                for previous in merged
+                if lo <= float(previous["start"]) < hi
+            ):
                 duplicates_removed += 1
                 continue
             merged.append(enriched)
         merged.sort(key=lambda word: (float(word["start"]), float(word["end"])))
 
     first = ordered[0]
-    return {
+    result = {
         "source": "gemini-chunks-reconciled",
         "model": first.get("model"),
         "language_codes": first.get("language_codes"),
@@ -154,6 +184,16 @@ def reconcile_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
             "duplicates_removed": duplicates_removed,
         },
     }
+    # 청크가 기록한 timestamp 보정 내역은 derived 까지 그대로 들고 간다
+    # (CONTRACT §6: 부분 실패를 성공으로 숨기지 않는다).
+    repairs = [
+        {**item, "chunk_index": chunk.get("chunk_index", position)}
+        for position, chunk in enumerate(ordered)
+        for item in chunk.get("timestamp_repairs") or []
+    ]
+    if repairs:
+        result["timestamp_repairs"] = repairs
+    return result
 
 
 def main() -> None:
