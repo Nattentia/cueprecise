@@ -50,8 +50,63 @@ import visual
 # (transcribe.request_raw) 안에서만 불러오므로 fetch/merge/render/index/status
 # 와 저장된 응답 재파싱은 SDK 없이 동작한다.
 
+# STAGES 는 "실행할 수 있는 단계" 이고 DEFAULT_STAGES 는 "생략했을 때 도는
+# 단계" 다. 둘을 한 상수로 겸하면 기본을 줄일 때마다 호출부마다 예외를 심게
+# 된다. OPTIONAL_STAGES 만 고치면 CLI·MCP·status 가 함께 따라온다.
 STAGES = ("fetch", "plan", "transcribe", "assemble", "merge", "chapters",
           "render", "visual", "index")
+
+# 기본에서 빠지는 단계. 요청이 있을 때만 돈다.
+#
+# render — SRT/TXT 는 사람이 자막 파일을 원할 때 쓴다. 근거 검색은
+# merged.json 과 index 로 하므로 기본 산출물에 있을 이유가 없다. 기능은
+# 그대로다. `--stages render` / `ytx_register(stages=["render"])` 로 언제든
+# 만들 수 있고 단어 보존율 100% 도 그대로다.
+#
+# visual 은 기본에 남긴다. 이 도구의 목적이 "오디오에 안 잡히는 화면 정보를
+# 캡처로 가져오는 것" 이라 프레임이 없으면 목적의 절반이 빠진다. 실측(58분):
+# 360p 영상 14.5MB < 지금 받는 소리 42.6MB. 줄일 곳은 영상이 아니라 소리다.
+OPTIONAL_STAGES: tuple[str, ...] = ("render",)
+
+DEFAULT_STAGES = tuple(s for s in STAGES if s not in OPTIONAL_STAGES)
+
+# 단계가 만드는 산출물. status 가 선택 산출물의 부재를 실패로 보이지 않게
+# 하는 데 쓴다.
+STAGE_ARTIFACTS: dict[str, tuple[str, ...]] = {
+    "fetch": ("captions",),
+    "assemble": ("transcript",),
+    "merge": ("merged",),
+    "chapters": ("chapters",),
+    "render": ("srt", "txt"),
+    "visual": ("frames",),
+    "index": ("index",),
+}
+
+ALL_STAGES_KEYWORD = "all"
+
+
+def resolve_stages(value: object = None) -> tuple[str, ...]:
+    """단계 선택을 정규화한다.
+
+    생략(`None` 또는 빈 값)은 `DEFAULT_STAGES`, `"all"` 은 `STAGES` 전체다.
+    명시적 선택은 기본 목록이 아니라 항상 `STAGES` 전체에서 검증한다 —
+    기본에서 빠진 단계도 이름을 대면 돌아가야 한다.
+    """
+    if value is None:
+        return DEFAULT_STAGES
+    if isinstance(value, str):
+        items = [s.strip() for s in value.split(",") if s.strip()]
+    else:
+        items = [str(s).strip() for s in value if str(s).strip()]
+    if not items:
+        return DEFAULT_STAGES
+    if len(items) == 1 and items[0] == ALL_STAGES_KEYWORD:
+        return STAGES
+    for stage in items:
+        if stage not in STAGES:
+            raise ValueError("알 수 없는 단계: %s (가능: %s, %s)"
+                             % (stage, ", ".join(STAGES), ALL_STAGES_KEYWORD))
+    return tuple(items)
 
 DEFAULT_DAILY_LIMIT = 25
 DEFAULT_RPM_LIMIT = 2
@@ -187,7 +242,11 @@ def _download(url: str, fmt: str, raw: Path, stem: str,
 
 def stage_fetch(bundle: Path, url: str, *, force: bool = False,
                 video: bool = True) -> dict[str, Any]:
-    """오디오·영상·자막을 받는다. Gemini 호출 없음."""
+    """오디오·영상·자막을 받는다. Gemini 호출 없음.
+
+    영상 취득에 실패해도 치명이 아니다. 나중에 `ensure_video` 가 같은 URL 로
+    다시 시도한다.
+    """
     raw = bundle / "raw"
     captions = raw / "captions.json"
     raw.mkdir(parents=True, exist_ok=True)
@@ -227,7 +286,7 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False,
             fetch_youtube.fetch(url, captions)
         except Exception as error:  # 자막은 선택 자료다. 없어도 파이프라인은 진행한다.
             _log("  경고: 자막 취득 실패, 영어 용어 복원을 건너뛴다 (%s)" % error)
-            _write_json(captions, {"source": "youtube-ko-orig",
+            _write_json(captions, {"source": "youtube", "language": None,
                                    "video_id": bundle.name, "cues": []})
     cue_count = len(_read_json(captions).get("cues", []))
     _log("  자막 %d cues" % cue_count)
@@ -295,6 +354,109 @@ def _raw_meta(job: dict[str, Any], chunk: dict[str, Any], langs: str) -> dict[st
     }
 
 
+# 번역문 가드 ------------------------------------------------------------------
+#
+# Gemini 는 소리가 흐릿하면 "받아적기" 대신 "알아듣고 영어로 다시 쓰기" 로
+# 미끄러진다 (실측: DECISIONS/claude.md 2026-08-31). 번역문은 단어 수도 많고
+# 문장도 자연스러워 사람 눈에는 정상으로 보이지만 원문 근거로 쓸 수 없다.
+#
+# 판단 근거 둘. 이미 공짜로 가진 자료만 쓴다.
+#   1. 유튜브 원어 자막이 한글투성이인데 전사에 한글이 없다
+#   2. 자막이 없어도, ko 를 요청했는데 한글이 없다
+# 둘 다 임계값을 넉넉히 잡아 영어 용어가 섞인 한국어 강의를 오탐하지 않는다.
+
+_TRANSLATION_MIN_CHARS = 40
+"""이보다 짧은 표본은 근거로 쓰지 않는다."""
+
+_TRANSLATION_CAPTION_MIN_CHARS = 20
+"""자막 표본의 최소 길이. 실제 자막 파일은 수천 자라 넉넉히 통과한다."""
+
+_TRANSLATION_CAPTION_SHARE = 0.3
+"""자막이 이만큼 한글이면 원문이 한국어라고 본다."""
+
+_TRANSLATION_TRANSCRIPT_SHARE = 0.05
+"""전사가 이보다 한글이 적으면 한국어를 받아적은 것이 아니다."""
+
+
+def _hangul_share(text: str) -> float:
+    """글자 중 한글 비율. 숫자·기호·공백은 세지 않는다."""
+    hangul = latin = 0
+    for char in text:
+        if "가" <= char <= "힣" or "ㄱ" <= char <= "ㆎ":
+            hangul += 1
+        elif char.isascii() and char.isalpha():
+            latin += 1
+    total = hangul + latin
+    return (hangul / total) if total else 0.0
+
+
+def _captions_are_original(language: str | None) -> bool:
+    """그 자막이 영상의 원어 트랙인가.
+
+    `-orig` 만 원어다. `ko` / `en` 같은 트랙은 YouTube 가 기계 번역한 것일 수
+    있고, 실제로 영어 영상에 `ko` 를 요청하면 한국어 번역 자막이 내려온다.
+    번역된 자막을 "원문이 한국어" 의 근거로 쓰면 멀쩡한 영어 전사를 번역문으로
+    오판해 막는다.
+    """
+    return bool(language) and str(language).endswith("-orig")
+
+
+def _looks_translated(transcript: str, *, captions: str, langs: str,
+                      captions_language: str | None = None) -> bool:
+    """받아적기가 아니라 번역문으로 보이는가."""
+    if len(transcript) < _TRANSLATION_MIN_CHARS:
+        return False
+    if _hangul_share(transcript) >= _TRANSLATION_TRANSCRIPT_SHARE:
+        return False
+    korean_expected = (_captions_are_original(captions_language)
+                       and len(captions) >= _TRANSLATION_CAPTION_MIN_CHARS
+                       and _hangul_share(captions) >= _TRANSLATION_CAPTION_SHARE)
+    if not korean_expected:
+        korean_expected = any(code.strip().lower().startswith("ko")
+                              for code in langs.split(","))
+    return korean_expected
+
+
+def _captions_evidence(bundle: Path) -> tuple[str, str | None]:
+    """자막 본문과 그 언어. 언어를 모르면 근거로 쓰지 않는다."""
+    path = bundle / "raw" / "captions.json"
+    if not path.exists():
+        return "", None
+    try:
+        payload = _read_json(path)
+    except (OSError, json.JSONDecodeError):
+        return "", None
+    cues = payload.get("cues", []) or []
+    language = payload.get("language")
+    if language is None:
+        # `language` 가 없던 시절 파일. 그때는 ko-orig 만 받았다.
+        source = str(payload.get("source", ""))
+        language = source[len("youtube-"):] if source.startswith("youtube-") else None
+    if payload.get("original") is False:
+        # 폴백으로 받은 트랙. 번역일 수 있어 원어 근거로 쓰지 않는다.
+        language = None
+    return cues, language
+
+
+def _captions_in_range(cues: list[dict[str, Any]], start: float, end: float) -> str:
+    """그 구간과 겹치는 자막만 잇는다.
+
+    영상 전체 자막과 청크 하나를 대조하면, 한국어 강의 중간의 영어 발표
+    구간이나 음악 구간이 통째로 번역문으로 몰린다. 판단은 같은 시간대끼리
+    한다.
+    """
+    parts = []
+    for cue in cues:
+        try:
+            cue_start = float(cue.get("start", 0.0))
+            cue_end = float(cue.get("end", cue_start))
+        except (TypeError, ValueError):
+            continue
+        if cue_end >= start and cue_start <= end:
+            parts.append(str(cue.get("text", "")))
+    return " ".join(parts)
+
+
 def _reusable_raw(bundle: Path, job: dict[str, Any], chunk: dict[str, Any],
                   langs: str) -> Path | None:
     """호출 없이 다시 파싱할 수 있는 저장된 응답.
@@ -337,6 +499,7 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
         _save_job(bundle, job)
         return job
 
+    caption_cues, captions_language = _captions_evidence(bundle)
     codes = job["config"]["language_codes"]
     langs = ",".join(codes) if codes else "auto"
 
@@ -405,6 +568,30 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
                     % (chunk["index"], hint, error)
                 ) from error
 
+        text = " ".join(str(word.get("text", "")) for word in result["words"])
+        in_range = _captions_in_range(caption_cues, float(chunk["start"]),
+                                      float(chunk["end"]))
+        if _looks_translated(text, captions=in_range, langs=langs,
+                             captions_language=captions_language):
+            chunk["status"] = "failed"
+            chunk["error"] = "번역문으로 보임"
+            job["status"] = "partial"
+            _save_job(bundle, job)
+            raise StageError(
+                "청크 %d 는 받아적기가 아니라 번역문으로 보인다 (한글 %.0f%%). "
+                "원문이 아니므로 근거로 쓸 수 없어 여기서 멈춘다 — 남은 청크의 "
+                "호출을 아낀다. "
+                "이어가려면 --language 로 원어를 지정하고 같은 명령을 다시 "
+                "실행해라 (예: --language ko-KR). 언어를 바꾸면 config 가 달라져 "
+                "이 영상의 청크를 전부 다시 부른다. 설정을 바꾸지 않고 다시 "
+                "실행하면 저장된 응답을 그대로 다시 읽어 같은 판정이 나온다 "
+                "(호출은 쓰지 않는다). 판정이 틀렸다면 그 언어를 --language 로 "
+                "지정하거나 `python src/transcribe.py --from-raw %s <out.json>` "
+                "로 호출 없이 수동 복구할 수 있다."
+                % (chunk["index"], 100 * _hangul_share(text),
+                   _raw_path(bundle, chunk))
+            )
+
         offset = float(chunk["start"])
         for word in result["words"]:
             word["start"] = round(float(word["start"]) + offset, 3)
@@ -461,7 +648,7 @@ def stage_merge(bundle: Path) -> dict[str, Any]:
     if not transcript.exists():
         raise StageError("derived/transcript.json 이 없습니다. assemble 단계를 먼저 실행하세요.")
     if not captions.exists():
-        _write_json(captions, {"source": "youtube-ko-orig",
+        _write_json(captions, {"source": "youtube", "language": None,
                                "video_id": bundle.name, "cues": []})
     merged = merge_mod.merge_files(transcript, captions, output)
     inserted = sum(1 for w in merged["words"] if w.get("origin") == "youtube")
@@ -494,10 +681,63 @@ def stage_chapters(bundle: Path, *, url: str | None = None) -> dict[str, Any]:
     return result
 
 
+def ensure_video(bundle: Path, *, url: str | None = None) -> Path | None:
+    """프레임을 뽑기 직전에만 영상을 확보한다. Gemini 호출 없음.
+
+    기본 분석은 영상을 받지 않으므로 프레임 요청 시점에 없는 것이 정상이다.
+    URL 은 `job.json` 의 `input.source` 에 이미 있다 — 새 영속 설정을 만들지
+    않는다. 이미 받아둔 영상은 그대로 쓰고 절대 지우지 않는다.
+    """
+    found = visual.source_video(bundle)
+    if found is not None:
+        return found
+    if url is None:
+        job_path = bundle / "job.json"
+        if not job_path.exists():
+            _log("  영상이 없고 job.json 도 없어 원본 URL 을 모른다. "
+                 "fetch/plan 을 먼저 돌리거나 URL 을 직접 줘라")
+            return None
+        try:
+            url = _read_json(job_path).get("input", {}).get("source")
+        except (OSError, json.JSONDecodeError):
+            url = None
+        if not url:
+            _log("  job.json 에 원본 URL 이 없다")
+            return None
+    _log("  영상이 없다. 프레임용으로 지금 받는다 (%s)" % url)
+    raw = bundle / "raw"
+    raw.mkdir(parents=True, exist_ok=True)
+    downloaded, error = _download(url, VIDEO_FORMAT, raw, "source_video",
+                                  visual.VIDEO_NAMES)
+    if downloaded is None:
+        tail = error.strip().splitlines()
+        _log("  경고: 영상 취득 실패 (%s)" % (tail[-1][:200] if tail else "원인 불명"))
+        return None
+    _log("  영상 %.1fMB (%s)" % (downloaded.stat().st_size / 1048576, downloaded.name))
+    return visual.source_video(bundle)
+
+
 def stage_visual(bundle: Path, *, at: list[float] | None = None,
-                 max_frames: int = visual.DEFAULT_MAX_FRAMES) -> dict[str, Any]:
-    """화면 참조·복원 용어 시각의 프레임을 뽑는다 (CONTRACT 11절). Gemini 호출 없음."""
+                 max_frames: int = visual.DEFAULT_MAX_FRAMES,
+                 url: str | None = None, acquire: bool = True) -> dict[str, Any]:
+    """화면 참조·복원 용어 시각의 프레임을 뽑는다 (CONTRACT 11절). Gemini 호출 없음.
+
+    `acquire` 가 거짓이면 이미 받아둔 영상만 쓴다. `--skip-video` 로 껐는데
+    여기서 곧바로 받아오면 그 옵션이 무의미해진다.
+    """
+    # 전사가 없으면 visual.build 가 어차피 실패한다. 쓰지도 못할 영상을 먼저
+    # 받아 버리지 않는다.
+    if not any((bundle / "derived" / name).exists()
+               for name in ("merged.json", "transcript.json")):
+        raise StageError(
+            "derived 전사가 없습니다. assemble/merge 단계를 먼저 실행하세요.")
+    video_path = ensure_video(bundle, url=url) if acquire else visual.source_video(bundle)
     result = visual.build(bundle, at=at, max_frames=max_frames)
+    if video_path is None and not result["frames"]:
+        # 영상을 못 구한 것과 후보가 없던 것은 사용자가 할 일이 다르다.
+        result["note"] = ("영상을 확보하지 못해 프레임을 뽑지 못했다. "
+                          "후보 시각 %d개는 계산했다." % result["candidates_considered"])
+        _write_json(bundle / "derived" / "frames.json", result)
     frames = result["frames"]
     if frames:
         ocr = sum(1 for frame in frames if frame.get("ocr_text"))
@@ -518,7 +758,8 @@ def stage_index(bundle: Path) -> Path:
 
 # ----------------------------------------------------------------------------- run
 
-def run(url: str, *, bundle_root: Path = Path("data"), stages: tuple[str, ...] = STAGES,
+def run(url: str, *, bundle_root: Path = Path("data"),
+        stages: tuple[str, ...] | None = None,
         chunk_max_secs: float = audio.DEFAULT_CHUNK_MAX_SECS,
         overlap_secs: float = audio.DEFAULT_OVERLAP_SECS,
         language_codes: list[str] | None = None, diarization: bool = True,
@@ -536,9 +777,7 @@ def run(url: str, *, bundle_root: Path = Path("data"), stages: tuple[str, ...] =
     summary: dict[str, Any] = {"video_id": video_id, "bundle": str(bundle), "stages": {}}
     job: dict[str, Any] | None = None
 
-    for stage in stages:
-        if stage not in STAGES:
-            raise ValueError("알 수 없는 단계: %s" % stage)
+    for stage in resolve_stages(stages):
         _log("[%s]" % stage)
         if stage == "fetch":
             summary["stages"][stage] = stage_fetch(bundle, url, force=force, video=video)
@@ -577,7 +816,8 @@ def run(url: str, *, bundle_root: Path = Path("data"), stages: tuple[str, ...] =
             srt, txt = stage_render(bundle, width=width)
             summary["stages"][stage] = {"srt": str(srt), "txt": str(txt)}
         elif stage == "visual":
-            frames = stage_visual(bundle, at=at, max_frames=max_frames)
+            frames = stage_visual(bundle, at=at, max_frames=max_frames, url=url,
+                                  acquire=video)
             summary["stages"][stage] = {
                 "frames": len(frames["frames"]),
                 "candidates": frames["candidates_considered"],
@@ -612,6 +852,10 @@ def status(bundle: Path, *, ledger: Path | None = None, api_key: str | None = No
             ("index", "index.sqlite3"),
         )
     }
+    # 기본에서 빠진 단계의 산출물은 없는 것이 정상이다. 읽는 쪽이 그것을
+    # 실패로 오인하지 않도록 이름을 함께 준다.
+    info["optional_artifacts"] = [name for stage in OPTIONAL_STAGES
+                                  for name in STAGE_ARTIFACTS.get(stage, ())]
     if ledger is not None and api_key:
         current = usage.get_usage(ledger, api_key)
         info["usage"] = {**current, "daily_limit": daily_limit,
@@ -668,7 +912,9 @@ def main() -> int:
     run_cmd = sub.add_parser("run", help="전체 또는 일부 단계 실행")
     run_cmd.add_argument("url")
     run_cmd.add_argument("--bundle-root", type=Path, default=Path("data"))
-    run_cmd.add_argument("--stages", default=",".join(STAGES), help="쉼표 구분")
+    run_cmd.add_argument("--stages", default=None,
+                         help="쉼표 구분. 생략하면 기본(%s), all 이면 전체"
+                              % ",".join(DEFAULT_STAGES))
     run_cmd.add_argument("--chunk-max-secs", type=float, default=audio.DEFAULT_CHUNK_MAX_SECS)
     run_cmd.add_argument("--overlap-secs", type=float, default=audio.DEFAULT_OVERLAP_SECS)
     run_cmd.add_argument("--language", default=None, help="쉼표 구분. 생략하면 자동 감지")
@@ -678,7 +924,7 @@ def main() -> int:
     run_cmd.add_argument("--request-interval", type=float, default=DEFAULT_REQUEST_INTERVAL)
     run_cmd.add_argument("--force", action="store_true", help="캐시를 무시하고 다시 만든다")
     run_cmd.add_argument("--skip-video", action="store_true",
-                         help="영상을 받지 않는다. 프레임 추출도 건너뛴다")
+                         help="영상을 받지 않는다. 프레임이 필요해지면 그때 받는다")
     run_cmd.add_argument("--at", default=None, help="프레임을 뽑을 시각. 쉼표 구분 초")
     run_cmd.add_argument("--max-frames", type=int, default=visual.DEFAULT_MAX_FRAMES)
 
@@ -701,7 +947,7 @@ def main() -> int:
             codes = [s.strip() for s in args.language.split(",") if s.strip()]
         at = [float(s) for s in args.at.split(",") if s.strip()] if args.at else None
         summary = run(args.url, bundle_root=args.bundle_root,
-                      stages=tuple(s.strip() for s in args.stages.split(",") if s.strip()),
+                      stages=resolve_stages(args.stages),
                       chunk_max_secs=args.chunk_max_secs, overlap_secs=args.overlap_secs,
                       language_codes=codes, width=args.width, daily_limit=args.daily_limit,
                       rpm_limit=args.rpm_limit, request_interval=args.request_interval,

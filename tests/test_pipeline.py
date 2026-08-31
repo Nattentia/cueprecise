@@ -345,6 +345,16 @@ class StatusAndPurgeTests(unittest.TestCase):
         self.assertTrue(info["artifacts"]["srt"])
         self.assertFalse(info["artifacts"]["merged"])
 
+    def test_status_marks_optional_artifacts(self) -> None:
+        """선택 산출물이 없다고 해서 실패로 보이면 안 된다."""
+        info = pipeline.status(self.bundle)
+        expected = sorted(name for stage in pipeline.OPTIONAL_STAGES
+                          for name in pipeline.STAGE_ARTIFACTS[stage])
+        self.assertEqual(sorted(info["optional_artifacts"]), expected)
+        for name in info["optional_artifacts"]:
+            self.assertIn(name, info["artifacts"],
+                          "선택 산출물 이름이 artifacts 에 없다")
+
     def test_purge_derived_keeps_raw(self) -> None:
         pipeline.purge(self.bundle, scope="derived")
         self.assertFalse((self.bundle / "derived").exists())
@@ -561,3 +571,465 @@ class ForceAndMissingJobTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StageSelectionTests(unittest.TestCase):
+    """유효 단계 목록과 기본 실행 목록의 분리 (LIGHTWEIGHT_HANDOFF 작업 D)."""
+
+    def test_default_stages_are_valid_and_ordered(self) -> None:
+        for stage in pipeline.DEFAULT_STAGES:
+            self.assertIn(stage, pipeline.STAGES, "기본 단계가 유효 목록에 없다")
+        order = [s for s in pipeline.STAGES if s in pipeline.DEFAULT_STAGES]
+        self.assertEqual(list(pipeline.DEFAULT_STAGES), order,
+                         "기본 단계 순서가 파이프라인 순서와 다르다")
+
+    def test_optional_stages_are_the_difference(self) -> None:
+        remainder = tuple(s for s in pipeline.STAGES if s not in pipeline.DEFAULT_STAGES)
+        self.assertEqual(remainder, pipeline.OPTIONAL_STAGES,
+                         "OPTIONAL_STAGES 가 STAGES - DEFAULT_STAGES 와 다르다")
+
+    def test_resolve_stages_defaults_and_all(self) -> None:
+        self.assertEqual(pipeline.resolve_stages(None), pipeline.DEFAULT_STAGES)
+        self.assertEqual(pipeline.resolve_stages(()), pipeline.DEFAULT_STAGES)
+        self.assertEqual(pipeline.resolve_stages(["all"]), pipeline.STAGES)
+        self.assertEqual(pipeline.resolve_stages("all"), pipeline.STAGES)
+
+    def test_resolve_stages_keeps_explicit_selection(self) -> None:
+        self.assertEqual(pipeline.resolve_stages(["merge", "index"]), ("merge", "index"))
+        self.assertEqual(pipeline.resolve_stages("merge, index"), ("merge", "index"))
+
+    def test_resolve_stages_rejects_unknown(self) -> None:
+        with self.assertRaises(ValueError):
+            pipeline.resolve_stages(["nope"])
+
+    def test_resolve_stages_validates_against_full_list(self) -> None:
+        """명시적 입력은 기본 목록이 아니라 STAGES 전체에서 검증한다."""
+        for stage in pipeline.OPTIONAL_STAGES:
+            self.assertEqual(pipeline.resolve_stages([stage]), (stage,))
+
+
+class OnDemandVideoTests(unittest.TestCase):
+    """영상은 기본으로 받지 않고, 프레임이 필요할 때 그때 받는다 (작업 A)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "raw").mkdir(parents=True)
+        self.original_download = pipeline._download
+        self.calls: list[str] = []
+
+    def tearDown(self) -> None:
+        pipeline._download = self.original_download
+        self.tmp.cleanup()
+
+    def _job(self, source: str = "https://www.youtube.com/watch?v=vid") -> None:
+        (self.bundle / "job.json").write_text(json.dumps({
+            "schema_version": 1, "video_id": "vid",
+            "input": {"source": source, "fingerprint": "sha256:x"},
+            "config": {}, "status": "complete", "chunks": [],
+        }, ensure_ascii=False), encoding="utf-8")
+
+    def _fake_download(self, *, ok: bool = True):
+        def download(url, fmt, raw, stem, names):
+            self.calls.append(url)
+            if not ok:
+                return None, "네트워크 없음"
+            target = Path(raw) / (stem + ".mp4")
+            target.write_bytes(b"fake-video")
+            return target, ""
+        return download
+
+    def test_visual_stays_in_default_stages(self) -> None:
+        """화면 정보를 캡처로 가져오는 것이 이 도구의 목적 절반이다."""
+        self.assertIn("visual", pipeline.STAGES)
+        self.assertIn("visual", pipeline.DEFAULT_STAGES)
+        self.assertNotIn("visual", pipeline.OPTIONAL_STAGES)
+
+    def test_fetch_downloads_video_by_default(self) -> None:
+        import inspect
+        signature = inspect.signature(pipeline.stage_fetch)
+        self.assertIs(signature.parameters["video"].default, True)
+        signature = inspect.signature(pipeline.run)
+        self.assertIs(signature.parameters["video"].default, True)
+
+    def test_ensure_video_downloads_using_job_source(self) -> None:
+        self._job()
+        pipeline._download = self._fake_download()
+        found = pipeline.ensure_video(self.bundle)
+        self.assertIsNotNone(found, "영상을 받지 못했다")
+        self.assertEqual(self.calls, ["https://www.youtube.com/watch?v=vid"])
+        self.assertIsNotNone(pipeline.visual.source_video(self.bundle))
+
+    def test_ensure_video_reuses_existing_and_does_not_download(self) -> None:
+        self._job()
+        (self.bundle / "raw/source_video.mp4").write_bytes(b"already-here")
+        pipeline._download = self._fake_download()
+        found = pipeline.ensure_video(self.bundle)
+        self.assertIsNotNone(found)
+        self.assertEqual(self.calls, [], "이미 있는 영상을 다시 받았다")
+        self.assertEqual((self.bundle / "raw/source_video.mp4").read_bytes(), b"already-here")
+
+    def test_ensure_video_without_job_manifest_returns_none(self) -> None:
+        pipeline._download = self._fake_download()
+        self.assertIsNone(pipeline.ensure_video(self.bundle))
+        self.assertEqual(self.calls, [], "URL 도 모르면서 받으려 했다")
+
+    def test_ensure_video_survives_download_failure(self) -> None:
+        self._job()
+        pipeline._download = self._fake_download(ok=False)
+        self.assertIsNone(pipeline.ensure_video(self.bundle))
+
+    def test_visual_stage_acquires_video_then_extracts(self) -> None:
+        self._job()
+        (self.bundle / "derived").mkdir(parents=True, exist_ok=True)
+        (self.bundle / "derived/merged.json").write_text(json.dumps({
+            "schema_version": 1, "video_id": "vid",
+            "words": _words(["여기", "보시면", "그림이", "있습니다"], 10.0),
+        }, ensure_ascii=False), encoding="utf-8")
+        pipeline._download = self._fake_download()
+        result = pipeline.stage_visual(self.bundle)
+        self.assertEqual(self.calls, ["https://www.youtube.com/watch?v=vid"],
+                         "프레임 요청인데 영상을 받지 않았다")
+        self.assertTrue(result["candidates_considered"] >= 1)
+
+    def test_visual_stage_reports_when_video_cannot_be_had(self) -> None:
+        self._job()
+        (self.bundle / "derived").mkdir(parents=True, exist_ok=True)
+        (self.bundle / "derived/merged.json").write_text(json.dumps({
+            "schema_version": 1, "video_id": "vid",
+            "words": _words(["여기", "보시면", "그림이"], 10.0),
+        }, ensure_ascii=False), encoding="utf-8")
+        pipeline._download = self._fake_download(ok=False)
+        result = pipeline.stage_visual(self.bundle)
+        self.assertEqual(result["frames"], [])
+        self.assertTrue(result["note"], "조용히 빈 결과만 돌려줬다")
+
+
+class OptionalRenderTests(unittest.TestCase):
+    """SRT/TXT 는 요청할 때만 만든다 (작업 C). 기능은 그대로 둔다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "derived").mkdir(parents=True)
+        self.texts = ["첫", "번째", "문장", "그리고", "두", "번째", "문장"]
+        (self.bundle / "derived/merged.json").write_text(json.dumps({
+            "schema_version": 1, "video_id": "vid", "words": _words(self.texts, 0.0),
+        }, ensure_ascii=False), encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_render_is_optional_and_not_in_default_stages(self) -> None:
+        self.assertIn("render", pipeline.STAGES)
+        self.assertNotIn("render", pipeline.DEFAULT_STAGES)
+        self.assertIn("render", pipeline.OPTIONAL_STAGES)
+
+    def test_default_stages_keep_evidence_path_intact(self) -> None:
+        """요약과 원문 검색에 필요한 단계는 기본에 남아 있어야 한다."""
+        for stage in ("fetch", "plan", "transcribe", "assemble", "merge",
+                      "chapters", "index"):
+            self.assertIn(stage, pipeline.DEFAULT_STAGES, "%s 가 기본에서 빠졌다" % stage)
+
+    def test_render_still_runs_when_asked_and_preserves_words(self) -> None:
+        srt, txt = pipeline.stage_render(self.bundle, width=42)
+        self.assertTrue(srt.exists() and txt.exists())
+        rendered = txt.read_text(encoding="utf-8").split()
+        self.assertEqual(rendered, self.texts, "렌더에서 단어가 사라졌다")
+
+    def test_status_calls_srt_and_txt_optional(self) -> None:
+        info = pipeline.status(self.bundle)
+        self.assertIn("srt", info["optional_artifacts"])
+        self.assertIn("txt", info["optional_artifacts"])
+        self.assertNotIn("frames", info["optional_artifacts"],
+                         "프레임은 선택이 아니다")
+
+
+class TranslationGuardTests(unittest.TestCase):
+    """Gemini 가 받아적기 대신 번역문을 돌려주는 경우를 잡는다."""
+
+    def test_hangul_share_counts_only_letters(self) -> None:
+        self.assertGreater(pipeline._hangul_share("안녕하세요 여러분"), 0.9)
+        self.assertEqual(pipeline._hangul_share("Hello everyone, 2026"), 0.0)
+        self.assertEqual(pipeline._hangul_share("   "), 0.0)
+
+    def test_detects_translation_against_captions(self) -> None:
+        korean = "안녕하세요 오늘은 자기지도학습에 대해 말씀드리겠습니다"
+        english = "Hello, today I will talk about self supervised learning"
+        self.assertTrue(pipeline._looks_translated(
+            english, captions=korean, captions_language="ko-orig", langs="auto"))
+        self.assertFalse(pipeline._looks_translated(
+            korean, captions=korean, captions_language="ko-orig", langs="auto"))
+
+    def test_detects_translation_from_requested_language_alone(self) -> None:
+        """자막이 없어도 ko 를 요청했는데 한글이 없으면 번역이다."""
+        english = "Hello, today I will talk about self supervised learning"
+        self.assertTrue(pipeline._looks_translated(english, captions="", langs="ko-KR"))
+        self.assertFalse(pipeline._looks_translated(english, captions="", langs="en-US"))
+        self.assertFalse(pipeline._looks_translated(english, captions="", langs="auto"))
+
+    def test_english_video_with_english_captions_is_not_flagged(self) -> None:
+        english = "Large language models get the hype but the work is data"
+        self.assertFalse(pipeline._looks_translated(
+            english, captions=english, captions_language="en-orig", langs="en-US"))
+
+    def test_bilingual_korean_lecture_is_not_flagged(self) -> None:
+        """영어 용어가 섞인 한국어 강의를 오탐하면 안 된다."""
+        mixed = ("self supervised learning 이라는 방법을 오늘 설명드리겠습니다 "
+                 "transformer 구조와 attention 을 함께 봅니다")
+        self.assertFalse(pipeline._looks_translated(
+            mixed, captions=mixed, captions_language="ko-orig", langs="ko-KR"))
+
+    def test_short_captions_do_not_trigger_on_their_own(self) -> None:
+        """자막이 몇 글자뿐이면 근거로 쓰지 않는다."""
+        self.assertFalse(pipeline._looks_translated(
+            "Hello there friends", captions="안녕", captions_language="ko-orig",
+            langs="auto"))
+
+
+class TranslationGuardInPipelineTests(unittest.TestCase):
+    """번역문이 오면 첫 청크에서 멈춰 남은 호출을 아낀다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "raw/audio").mkdir(parents=True)
+        (self.bundle / "raw/transcripts").mkdir(parents=True)
+        (self.bundle / "raw/captions.json").write_text(json.dumps({
+            "source": "youtube-ko-orig", "video_id": "vid",
+            "cues": [{"start": 0.0, "end": 5.0,
+                      "text": "안녕하세요 오늘은 자기지도학습에 대해 말씀드리겠습니다"}],
+        }, ensure_ascii=False), encoding="utf-8")
+        self.job = {
+            "schema_version": 1, "video_id": "vid",
+            "input": {"source": "u", "fingerprint": "sha256:x"},
+            "config": {"chunk_max_secs": 600.0, "overlap_secs": 10.0,
+                       "language_codes": None, "diarization": True},
+            "status": "planned",
+            "chunks": [
+                {"index": i, "start": i * 100.0, "end": (i + 1) * 100.0,
+                 "path": "raw/audio/chunk-%03d.mp3" % i, "status": "pending",
+                 "attempts": 0,
+                 "transcript_path": "raw/transcripts/chunk-%03d.json" % i,
+                 "error": None}
+                for i in range(3)
+            ],
+        }
+        for chunk in self.job["chunks"]:
+            (self.bundle / chunk["path"]).write_bytes(b"x")
+        (self.bundle / "job.json").write_text(json.dumps(self.job, ensure_ascii=False),
+                                              encoding="utf-8")
+        self.ledger = Path(self.tmp.name) / "usage.json"
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _run(self, transcriber):
+        return pipeline.stage_transcribe(
+            self.bundle, self.job, ledger=self.ledger, api_key="k",
+            daily_limit=25, rpm_limit=None, request_interval=0.0,
+            transcriber=transcriber)
+
+    def test_translation_stops_after_first_chunk(self) -> None:
+        calls: list[str] = []
+
+        def transcriber(path, langs):
+            calls.append(path)
+            return {"words": [{"text": t, "start": i * 0.5, "end": i * 0.5 + 0.3,
+                               "speaker": "spk:0"}
+                              for i, t in enumerate(
+                                  "Hello today I will talk about self supervised "
+                                  "learning methods".split())]}
+
+        with self.assertRaises(pipeline.StageError) as caught:
+            self._run(transcriber)
+        self.assertEqual(len(calls), 1, "번역문을 받고도 나머지 청크를 계속 불렀다")
+        self.assertIn("번역", str(caught.exception))
+
+    def test_korean_transcription_passes(self) -> None:
+        def transcriber(path, langs):
+            return {"words": [{"text": t, "start": i * 0.5, "end": i * 0.5 + 0.3,
+                               "speaker": "spk:0"}
+                              for i, t in enumerate(
+                                  "안녕하세요 오늘은 자기지도학습에 대해 "
+                                  "말씀드리겠습니다".split())]}
+
+        job = self._run(transcriber)
+        self.assertEqual(job["status"], "complete")
+
+
+class TranslationGuardRerunTests(TranslationGuardInPipelineTests):
+    """번역문으로 멈춘 뒤 이어가는 경로."""
+
+    def test_same_settings_rerun_costs_no_call(self) -> None:
+        """저장된 응답을 다시 읽어 같은 판정을 낸다. 호출은 쓰지 않는다."""
+        calls: list[str] = []
+        english = ("Hello today I will talk about self supervised learning "
+                   "methods and their applications")
+
+        def transcriber(path, langs):
+            calls.append(path)
+            words = [{"text": t, "start": i * 0.5, "end": i * 0.5 + 0.3,
+                      "speaker": "spk:0"} for i, t in enumerate(english.split())]
+            # 실제 경로와 같게 응답 원문을 먼저 남긴다.
+            name = Path(path).name
+            chunk = next(c for c in self.job["chunks"]
+                         if Path(c["path"]).name == name)
+            raw = pipeline._raw_path(self.bundle, chunk)
+            raw.parent.mkdir(parents=True, exist_ok=True)
+            payload = dict(pipeline._raw_meta(self.job, chunk, langs))
+            payload["response"] = {"words": words}
+            raw.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            return {"words": words}
+
+        with self.assertRaises(pipeline.StageError):
+            self._run(transcriber)
+        self.assertEqual(len(calls), 1)
+
+        original = pipeline.transcribe_mod.from_raw
+        pipeline.transcribe_mod.from_raw = lambda path: {
+            "words": json.loads(Path(path).read_text(encoding="utf-8"))["response"]["words"]}
+        try:
+            with self.assertRaises(pipeline.StageError):
+                self._run(transcriber)
+        finally:
+            pipeline.transcribe_mod.from_raw = original
+        self.assertEqual(len(calls), 1, "재실행이 Gemini 를 다시 불렀다")
+
+    def test_error_message_explains_how_to_continue(self) -> None:
+        def transcriber(path, langs):
+            return {"words": [{"text": t, "start": i * 0.5, "end": i * 0.5 + 0.3,
+                               "speaker": "spk:0"}
+                              for i, t in enumerate(
+                                  "Hello today I will talk about self supervised "
+                                  "learning".split())]}
+
+        with self.assertRaises(pipeline.StageError) as caught:
+            self._run(transcriber)
+        message = str(caught.exception)
+        self.assertIn("--language", message)
+        self.assertIn("--from-raw", message)
+
+
+class CaptionTrustTests(unittest.TestCase):
+    """번역된 자막 트랙을 원어 근거로 쓰면 안 된다."""
+
+    def test_original_track_is_trusted(self) -> None:
+        self.assertTrue(pipeline._captions_are_original("ko-orig"))
+        self.assertTrue(pipeline._captions_are_original("en-orig"))
+
+    def test_translated_track_is_not_trusted(self) -> None:
+        self.assertFalse(pipeline._captions_are_original("ko"))
+        self.assertFalse(pipeline._captions_are_original("en"))
+        self.assertFalse(pipeline._captions_are_original(None))
+
+    def test_guard_ignores_translated_captions(self) -> None:
+        """영어 영상에 한국어 번역 자막이 붙어도 전사를 막지 않는다."""
+        english = "Large language models get the hype but the work is data"
+        korean_sub = "대규모 언어 모델이 주목받지만 실제 일은 데이터입니다"
+        self.assertFalse(
+            pipeline._looks_translated(english, captions=korean_sub,
+                                       captions_language="ko", langs="auto"),
+            "번역 자막을 원어 근거로 썼다")
+        self.assertTrue(
+            pipeline._looks_translated(english, captions=korean_sub,
+                                       captions_language="ko-orig", langs="auto"))
+
+    def test_fallback_captions_are_not_used_as_evidence(self) -> None:
+        """original=False 로 표시된 자막은 원어 근거에서 빠진다."""
+        import tempfile as _tempfile
+        with _tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "vid"
+            (bundle / "raw").mkdir(parents=True)
+            (bundle / "raw/captions.json").write_text(json.dumps({
+                "source": "youtube-ko", "language": "ko", "original": False,
+                "video_id": "vid",
+                "cues": [{"start": 0.0, "end": 3.0,
+                          "text": "대규모 언어 모델이 주목받지만 실제 일은 데이터입니다"}],
+            }, ensure_ascii=False), encoding="utf-8")
+            text, language = pipeline._captions_evidence(bundle)
+            self.assertTrue(text)
+            self.assertIsNone(language, "번역 자막을 원어 근거로 넘겼다")
+
+
+class ReviewFixTests(unittest.TestCase):
+    """코드 리뷰에서 나온 네 건 (2026-08-31)."""
+
+    VIDEO_ID = "abcdefghijk"
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / self.VIDEO_ID
+        (self.bundle / "derived").mkdir(parents=True)
+        (self.bundle / "raw").mkdir(parents=True)
+        (self.bundle / "job.json").write_text(json.dumps({
+            "input": {"source": "https://www.youtube.com/watch?v=abcdefghijk"},
+        }), encoding="utf-8")
+        self.calls: list[str] = []
+        self.original = pipeline._download
+
+        def download(url, fmt, raw, stem, names):
+            self.calls.append(url)
+            target = Path(raw) / (stem + ".mp4")
+            target.write_bytes(b"fake")
+            return target, ""
+
+        pipeline._download = download
+
+    def tearDown(self) -> None:
+        pipeline._download = self.original
+        self.tmp.cleanup()
+
+    def _merged(self) -> None:
+        (self.bundle / "derived/merged.json").write_text(json.dumps({
+            "video_id": self.VIDEO_ID,
+            "words": _words(["여기", "보시면", "그림이"], 10.0),
+        }, ensure_ascii=False), encoding="utf-8")
+
+    def test_skip_video_is_honoured_by_visual_stage(self) -> None:
+        """--skip-video 로 껐는데 visual 이 곧바로 받아오면 무의미하다."""
+        self._merged()
+        pipeline.run("https://www.youtube.com/watch?v=abcdefghijk",
+                     bundle_root=Path(self.tmp.name), stages=("visual",), video=False)
+        self.assertEqual(self.calls, [], "--skip-video 인데 영상을 받았다")
+
+    def test_visual_still_acquires_when_video_not_skipped(self) -> None:
+        self._merged()
+        pipeline.run("https://www.youtube.com/watch?v=abcdefghijk",
+                     bundle_root=Path(self.tmp.name), stages=("visual",), video=True)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_no_download_when_transcript_is_missing(self) -> None:
+        """전사가 없으면 어차피 실패한다. 영상부터 받고 버리지 않는다."""
+        with self.assertRaises(Exception):
+            pipeline.stage_visual(self.bundle)
+        self.assertEqual(self.calls, [], "쓰지도 못할 영상을 먼저 받았다")
+
+
+class ChunkRangeGuardTests(unittest.TestCase):
+    """번역문 판정은 그 청크의 시간대 자막과 대조한다."""
+
+    CUES = [
+        {"start": 0.0, "end": 100.0, "text": "안녕하세요 오늘은 자기지도학습을 다룹니다"},
+        {"start": 100.0, "end": 200.0, "text": "이어서 초청 연사의 발표가 있겠습니다"},
+        {"start": 200.0, "end": 300.0,
+         "text": "thanks everyone I will present our recent results today"},
+    ]
+
+    def test_range_text_picks_overlapping_cues(self) -> None:
+        text = pipeline._captions_in_range(self.CUES, 200.0, 300.0)
+        self.assertIn("thanks everyone", text)
+        self.assertNotIn("안녕하세요", text)
+
+    def test_english_guest_segment_is_not_flagged(self) -> None:
+        """한국어 강의 안의 영어 발표 구간을 막으면 안 된다."""
+        english = " ".join(c["text"] for c in self.CUES[2:])
+        self.assertFalse(pipeline._looks_translated(
+            english, captions=pipeline._captions_in_range(self.CUES, 200.0, 300.0),
+            captions_language="ko-orig", langs="auto"))
+
+    def test_korean_segment_translated_is_flagged(self) -> None:
+        english = "Hello everyone today we cover self supervised learning in depth"
+        self.assertTrue(pipeline._looks_translated(
+            english, captions=pipeline._captions_in_range(self.CUES, 0.0, 100.0),
+            captions_language="ko-orig", langs="auto"))

@@ -248,3 +248,65 @@ class NarrowConsoleEncodingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FramesOnDemandTests(unittest.TestCase):
+    """ytx_frames 는 영상이 없으면 그때 받아온다 (작업 A)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.bundle = self.root / "vid"
+        (self.bundle / "derived").mkdir(parents=True)
+        (self.bundle / "raw").mkdir(parents=True)
+        (self.bundle / "job.json").write_text(json.dumps({
+            "schema_version": 1, "video_id": "vid",
+            "input": {"source": "https://www.youtube.com/watch?v=vid",
+                      "fingerprint": "sha256:x"},
+            "config": {}, "status": "complete", "chunks": [],
+        }, ensure_ascii=False), encoding="utf-8")
+        (self.bundle / "derived/merged.json").write_text(json.dumps({
+            "schema_version": 1, "video_id": "vid",
+            "words": [{"text": t, "start": 10.0 + i, "end": 10.5 + i, "speaker": "spk:0"}
+                      for i, t in enumerate(["여기", "보시면", "그림이", "있습니다"])],
+        }, ensure_ascii=False), encoding="utf-8")
+        self.original = mcp_server.pipeline._download
+        self.calls: list[str] = []
+
+        def download(url, fmt, raw, stem, names):
+            self.calls.append(url)
+            target = Path(raw) / (stem + ".mp4")
+            target.write_bytes(b"fake-video")
+            return target, ""
+
+        mcp_server.pipeline._download = download
+
+    def tearDown(self) -> None:
+        mcp_server.pipeline._download = self.original
+        self.tmp.cleanup()
+
+    def test_frames_acquires_video_when_missing(self) -> None:
+        result = mcp_server.dispatch("ytx_frames", {"video_id": "vid"},
+                                     bundle_root=self.root)
+        self.assertEqual(self.calls, ["https://www.youtube.com/watch?v=vid"])
+        self.assertIn("candidates_considered", result)
+
+    def test_frames_honours_max_frames(self) -> None:
+        seen: dict[str, int] = {}
+        original_build = mcp_server.pipeline.visual.build
+
+        def build(bundle, *, at=None, max_frames=40):
+            seen["max_frames"] = max_frames
+            return original_build(bundle, at=at, max_frames=max_frames)
+
+        mcp_server.pipeline.visual.build = build
+        try:
+            mcp_server.dispatch("ytx_frames", {"video_id": "vid", "max_frames": 3},
+                                bundle_root=self.root)
+        finally:
+            mcp_server.pipeline.visual.build = original_build
+        self.assertEqual(seen.get("max_frames"), 3, "max_frames 가 전달되지 않았다")
+
+    def test_frames_schema_exposes_max_frames(self) -> None:
+        tool = [t for t in mcp_server.TOOLS if t["name"] == "ytx_frames"][0]
+        self.assertIn("max_frames", tool["inputSchema"]["properties"])

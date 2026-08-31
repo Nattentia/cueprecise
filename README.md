@@ -31,9 +31,25 @@ transcribe  chunk-NNN.mp3 -> raw/transcripts/chunk-NNN.json         청크당 1�
 assemble    chunk 전사    -> derived/transcript.json                쿼터 0
 merge       transcript+자막 -> derived/merged.json                  쿼터 0
 chapters    merged.json     -> derived/chapters.json                쿼터 0
-render      merged.json   -> derived/output.srt, output.txt         쿼터 0
+render      merged.json   -> derived/output.srt, output.txt         쿼터 0  선택
 visual      merged+영상   -> raw/frames/, derived/frames.json       쿼터 0
 index       bundle        -> index.sqlite3                          쿼터 0
+```
+
+기본 실행은 `render` 를 뺀 나머지다. 자막 파일(SRT/TXT)은 사람이 볼 때만
+필요하고 근거 검색은 `merged.json` 과 색인이 한다.
+
+`visual` 은 기본에 남는다. 오디오에 안 잡히는 화면 정보를 프레임으로 가져오는
+것이 이 도구의 목적 절반이다. 실측(58분)으로도 360p 영상 14.5MB 는 지금 받는
+소리 42.6MB 보다 작다.
+
+`--skip-video` 로 영상을 건너뛴 bundle 에서도 나중에 프레임을 요청하면
+`job.json` 의 원본 URL 로 그때 받아온다.
+
+```powershell
+python src/pipeline.py run <url> --stages all      # 선택 단계까지 전부
+python src/pipeline.py run <url> --stages render   # 나중에 SRT/TXT 만
+python src/pipeline.py run <url> --stages visual   # 나중에 프레임만
 ```
 
 단계는 JSON 파일로만 이어진다. 각각 독립적으로 재실행할 수 있고, 완료된
@@ -57,8 +73,9 @@ Gemini 는 긴 오디오에서 드물게 단어 하나의 timestamp 를 손상�
 20~25% 를 차지하므로 `purge --scope chunks` 로 지울 수 있다. 원본 오디오가
 남아 있으면 `plan` 단계가 필요할 때 다시 뽑는다.
 
-영상은 프레임 추출에만 쓴다. 360p 로 받으므로 23분 영상 기준 16MB 이고,
-필요 없으면 `--skip-video` 로 건너뛴다. bundle 용량 실측은 23분 55.8MB,
+영상은 프레임 추출에만 쓴다. 360p 로 받으므로 23분 영상 기준 16MB 다.
+`--skip-video` 로 건너뛰어도 `ytx_frames` 나 `--stages visual` 이 그때 받아온다.
+bundle 용량 실측은 23분 55.8MB,
 58분 110.3MB 였고 그중 오디오가 72~80%, 영상은 13~28% 다.
 
 진행 로그는 stderr 로 나간다. stdout 은 요약 JSON 과 MCP 의 JSON-RPC 전용이다.
@@ -81,7 +98,7 @@ stdio JSON-RPC. 외부 패키지 없이 stdlib 만 쓴다.
 | `ytx_set_chapter_titles` | 호스트가 직접 지은 챕터 제목을 검증·저장 |
 | `ytx_query` | 내용 질의. 근거 span/frame 과 timestamp 반환 |
 | `ytx_excerpt` | 특정 시각 구간의 자막과 프레임 |
-| `ytx_frames` | 화면 참조 시각의 프레임 추출 |
+| `ytx_frames` | 화면 참조 시각의 프레임 추출. 영상이 없으면 그때 받는다 |
 | `ytx_purge` | derived 재생성 및 명시적 삭제 |
 
 ## 왜 이 구조인가
@@ -98,6 +115,54 @@ stdio JSON-RPC. 외부 패키지 없이 stdlib 만 쓴다.
 Gemini 는 4회 실행 모두 실패. YouTube 자막은 무료로 갖고 있다.
 `merge.py` 가 시간 공백과 조사 잔존을 **함께** 근거로 삼아 그 구간에만 영어를
 복원한다. Gemini 원본 단어는 삭제·재작성하지 않는다.
+
+## 자막 언어
+
+자막은 원어 자동자막(`.*-orig`)을 받는다. 언어를 고정하지 않으므로 한국어
+영상은 `ko-orig`, 영어 영상은 `en-orig` 가 온다. 원어 자동자막이 없으면
+일반 자막(ko/en)으로 한 번 더 시도한다. 받은 언어는 `captions.json` 의
+`language` 에 적힌다.
+
+`merge.py` 의 영어 용어 복원은 한국어 조사 잔존을 게이트로 쓰므로 영어
+영상에서는 삽입이 0 이다. 그래도 자막은 받는다 — 번역문 가드가 원문 언어의
+근거로 쓴다.
+
+## 언어를 지정하는 편이 낫다
+
+`--language` 를 생략하면 Gemini 가 알아서 고른다. 같은 한국어 영상
+(`jcBDSLSeud4`)에서 한 번은 한국어 전사가, 한 번은 **영어 번역문**이 나왔다
+(2,902단어 한국어 vs 3,559단어 영어). 번역은 원문이 아니므로 근거로 쓸 수 없다.
+
+```powershell
+python src/pipeline.py run <url> --language ko-KR
+```
+
+전사가 번역문으로 보이면 **첫 청크에서 멈춘다.** 유튜브 원어 자막이
+한국어인데 전사에 한글이 없거나, `ko` 를 요청했는데 한글이 없으면 잡는다.
+남은 청크의 Gemini 호출을 쓰지 않고, 응답 원문은 그대로 남는다. 영어 용어가
+섞인 한국어 강의는 오탐하지 않는다 (한글 5% 미만일 때만 잡는다).
+
+멈춘 뒤 이어가는 법:
+
+```powershell
+python src/pipeline.py run <url> --language ko-KR   # 원어를 지정해 재실행
+```
+
+**언어를 바꾸면 그 영상의 청크를 전부 다시 부른다.** `job.json` 의 config 가
+달라져 계획이 새로 서고, 저장된 응답도 요청 언어가 다르면 재사용하지 않는다.
+언어가 뒤섞인 결과나 어긋난 타임스탬프가 조용히 만들어지는 것보다 호출을 더
+쓰는 편이 낫다는 판단이다.
+
+가드가 **첫 번째 나쁜 청크에서** 멈추므로 실제 손해는 작다. 3청크 영상의 첫
+청크가 번역문이면 1콜 쓰고 멈춘 뒤 3콜, 합쳐 4콜이다. 가드가 없었다면 3콜을
+다 쓰고 결과가 쓸모없어 다시 3콜, 합쳐 6콜이다.
+
+**설정을 바꾸지 않고 재실행하면** 저장된 응답을 그대로 다시 읽어 같은 판정이
+나온다 (호출 0). 그래서 언어를 반드시 바꿔줘야 한다.
+
+판정이 틀렸다고 판단하면(원래 영어 영상 등) 그 언어를 `--language` 로 주거나
+`python src/transcribe.py --from-raw <raw.json> <out.json>` 으로 호출 없이
+저장된 응답에서 직접 만들 수 있다.
 
 ## 요구 사항
 
