@@ -1,0 +1,7 @@
+# 없어도 파이프라인이 돈다. 있으면 기능이 늘어난다.
+#
+#   python -m pip install -r requirements-optional.txt
+
+pytesseract>=0.3.10        # 프레임 OCR. tesseract 바이너리도 함께 필요하다
+Pillow>=10.0.0             # pytesseract 가 이미지를 읽는 데 쓴다
+tzdata>=2024.1             # Pacific 시간대. 없으면 내장 폴백을 쓴다
