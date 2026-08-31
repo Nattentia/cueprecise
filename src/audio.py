@@ -12,6 +12,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import runtime
+
 DEFAULT_CHUNK_MAX_SECS = 1790.0
 DEFAULT_OVERLAP_SECS = 10.0
 
@@ -35,7 +37,7 @@ def source_audio(bundle: Path) -> Path | None:
 
 def probe_duration(path: Path) -> float:
     command = [
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+        runtime.tool("ffprobe"), "-v", "error", "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1", str(path),
     ]
     result = subprocess.run(command, check=True, capture_output=True, text=True)
@@ -103,7 +105,7 @@ def extract_chunks(input_path: Path, bundle_root: Path, chunks: list[dict[str, A
         output.parent.mkdir(parents=True, exist_ok=True)
         duration = float(chunk["end"]) - float(chunk["start"])
         command = [
-            "ffmpeg", "-v", "error", "-y", "-ss", str(chunk["start"]),
+            runtime.tool("ffmpeg"), "-v", "error", "-y", "-ss", str(chunk["start"]),
             "-i", str(input_path), "-t", str(duration), "-vn", "-ac", "1",
             "-ar", "16000", "-b:a", "64k", str(output),
         ]

@@ -46,6 +46,7 @@ import speakers
 import transcribe as transcribe_mod
 import usage
 import visual
+import runtime
 
 # transcribe 임포트는 SDK 를 요구하지 않는다. google-genai 는 실제 호출 경로
 # (transcribe.request_raw) 안에서만 불러오므로 fetch/merge/render/index/status
@@ -222,7 +223,7 @@ def _download(url: str, fmt: str, raw: Path, stem: str,
     staging.mkdir(parents=True, exist_ok=True)
     try:
         result = subprocess.run(
-            ["yt-dlp", "--no-playlist", "-f", fmt,
+            [runtime.tool("yt-dlp"), "--no-playlist", "-f", fmt,
              "-o", str(staging / stem) + ".%(ext)s", url],
             capture_output=True, text=True,
         )
@@ -245,7 +246,7 @@ def _has_video_stream(path: Path) -> bool:
     """영상 트랙이 있는 파일인가. 소리·영상을 한 번에 받은 뒤 가려낸다."""
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+            [runtime.tool("ffprobe"), "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)],
             capture_output=True, text=True,
         )
@@ -299,7 +300,7 @@ def _fetch_metadata(url: str, raw: Path) -> Path | None:
     """
     try:
         result = subprocess.run(
-            ["yt-dlp", "--no-playlist", "--skip-download", "--dump-json", url],
+            [runtime.tool("yt-dlp"), "--no-playlist", "--skip-download", "--dump-json", url],
             capture_output=True, text=True,
         )
     except FileNotFoundError:
@@ -333,7 +334,7 @@ def _fetch_sources(url: str, raw: Path, *, want_video: bool,
     found: dict[str, Path | None] = {"audio": None, "video": None, "captions": None}
     try:
         fmt = AUDIO_FORMAT + ("," + VIDEO_FORMAT if want_video else "")
-        command = ["yt-dlp", "--no-playlist", "-f", fmt]
+        command = [runtime.tool("yt-dlp"), "--no-playlist", "-f", fmt]
         if want_captions:
             command += ["--write-auto-sub", "--sub-langs",
                         ",".join(fetch_youtube.ORIGINAL_LANGS),

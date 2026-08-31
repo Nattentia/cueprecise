@@ -15,6 +15,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+import runtime
+
 TARGET_SECS = 300.0
 MIN_SECS = 120.0
 MAX_SECS = 480.0
@@ -79,7 +81,7 @@ def _youtube_metadata(bundle: Path, url: str | None) -> dict[str, Any]:
         return {}
     try:
         result = subprocess.run(
-            ["yt-dlp", "--dump-single-json", "--skip-download", url],
+            [runtime.tool("yt-dlp"), "--dump-single-json", "--skip-download", url],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
