@@ -535,9 +535,15 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
             raise StageError(
                 "청크 %d 는 받아적기가 아니라 번역문으로 보인다 (한글 %.0f%%). "
                 "원문이 아니므로 근거로 쓸 수 없어 여기서 멈춘다 — 남은 청크의 "
-                "호출을 아낀다. --language 로 원어를 지정하고 다시 실행해라. "
-                "응답 원문은 %s 에 남는다."
-                % (chunk["index"], 100 * _hangul_share(text), _raw_path(bundle, chunk))
+                "호출을 아낀다. "
+                "이어가려면 --language 로 원어를 지정하고 같은 명령을 다시 "
+                "실행해라 (예: --language ko-KR). 설정을 바꾸지 않고 다시 "
+                "실행하면 저장된 응답을 그대로 다시 읽어 같은 판정이 나온다 "
+                "(호출은 쓰지 않는다). 판정이 틀렸다면 그 언어를 --language 로 "
+                "지정하거나 `python src/transcribe.py --from-raw %s <out.json>` "
+                "로 호출 없이 수동 복구할 수 있다."
+                % (chunk["index"], 100 * _hangul_share(text),
+                   _raw_path(bundle, chunk))
             )
 
         offset = float(chunk["start"])

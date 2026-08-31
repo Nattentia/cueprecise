@@ -852,3 +852,56 @@ class TranslationGuardInPipelineTests(unittest.TestCase):
 
         job = self._run(transcriber)
         self.assertEqual(job["status"], "complete")
+
+
+class TranslationGuardRerunTests(TranslationGuardInPipelineTests):
+    """번역문으로 멈춘 뒤 이어가는 경로."""
+
+    def test_same_settings_rerun_costs_no_call(self) -> None:
+        """저장된 응답을 다시 읽어 같은 판정을 낸다. 호출은 쓰지 않는다."""
+        calls: list[str] = []
+        english = ("Hello today I will talk about self supervised learning "
+                   "methods and their applications")
+
+        def transcriber(path, langs):
+            calls.append(path)
+            words = [{"text": t, "start": i * 0.5, "end": i * 0.5 + 0.3,
+                      "speaker": "spk:0"} for i, t in enumerate(english.split())]
+            # 실제 경로와 같게 응답 원문을 먼저 남긴다.
+            name = Path(path).name
+            chunk = next(c for c in self.job["chunks"]
+                         if Path(c["path"]).name == name)
+            raw = pipeline._raw_path(self.bundle, chunk)
+            raw.parent.mkdir(parents=True, exist_ok=True)
+            payload = dict(pipeline._raw_meta(self.job, chunk, langs))
+            payload["response"] = {"words": words}
+            raw.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            return {"words": words}
+
+        with self.assertRaises(pipeline.StageError):
+            self._run(transcriber)
+        self.assertEqual(len(calls), 1)
+
+        original = pipeline.transcribe_mod.from_raw
+        pipeline.transcribe_mod.from_raw = lambda path: {
+            "words": json.loads(Path(path).read_text(encoding="utf-8"))["response"]["words"]}
+        try:
+            with self.assertRaises(pipeline.StageError):
+                self._run(transcriber)
+        finally:
+            pipeline.transcribe_mod.from_raw = original
+        self.assertEqual(len(calls), 1, "재실행이 Gemini 를 다시 불렀다")
+
+    def test_error_message_explains_how_to_continue(self) -> None:
+        def transcriber(path, langs):
+            return {"words": [{"text": t, "start": i * 0.5, "end": i * 0.5 + 0.3,
+                               "speaker": "spk:0"}
+                              for i, t in enumerate(
+                                  "Hello today I will talk about self supervised "
+                                  "learning".split())]}
+
+        with self.assertRaises(pipeline.StageError) as caught:
+            self._run(transcriber)
+        message = str(caught.exception)
+        self.assertIn("--language", message)
+        self.assertIn("--from-raw", message)
