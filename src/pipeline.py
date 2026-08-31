@@ -256,6 +256,67 @@ def _has_video_stream(path: Path) -> bool:
     return "video" in (result.stdout or "")
 
 
+METADATA_NAME = "metadata.json"
+"""yt-dlp 가 알려주는 영상 정보. 언어 근거로만 쓴다."""
+
+
+def _trim_metadata(info: dict[str, Any]) -> dict[str, Any]:
+    """info.json 에서 언어 판정에 쓸 것만 남긴다.
+
+    통째로 두면 수백 KB 에 썸네일 URL 과 포맷 목록이 딸려 온다. 우리가 보는
+    것은 넷뿐이다. 제목과 채널은 사람이 번들을 알아보라고 남긴다.
+    """
+    automatic = info.get("automatic_captions") or {}
+    subtitles = info.get("subtitles") or {}
+    return {
+        "video_id": info.get("id"),
+        "title": (info.get("title") or "")[:200],
+        "channel": info.get("channel") or info.get("uploader"),
+        "language": info.get("language"),
+        "auto_caption_langs": sorted(k for k in automatic if k.endswith("-orig")),
+        "subtitle_langs": sorted(subtitles)[:20],
+    }
+
+
+def _write_metadata_from_info(info_path: Path, raw: Path) -> Path | None:
+    """staging 의 info.json 을 추려 raw/metadata.json 으로 남긴다."""
+    try:
+        info = _read_json(info_path)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(info, dict):
+        return None
+    target = raw / METADATA_NAME
+    _write_json(target, _trim_metadata(info))
+    return target
+
+
+def _fetch_metadata(url: str, raw: Path) -> Path | None:
+    """메타데이터만 따로 받는다. 미디어를 다시 받지 않으므로 몇 초로 끝난다.
+
+    소리·영상이 이미 있어 통합 호출이 돌지 않은 번들에서만 쓴다. 실패해도
+    파이프라인은 진행한다 — 언어 근거가 하나 없을 뿐이다.
+    """
+    try:
+        result = subprocess.run(
+            ["yt-dlp", "--no-playlist", "--skip-download", "--dump-json", url],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0 or not (result.stdout or "").strip():
+        return None
+    try:
+        info = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(info, dict):
+        return None
+    target = raw / METADATA_NAME
+    _write_json(target, _trim_metadata(info))
+    return target
+
+
 def _fetch_sources(url: str, raw: Path, *, want_video: bool,
                    want_captions: bool) -> tuple[dict[str, Path | None], str]:
     """yt-dlp 한 번으로 소리·영상·자막을 받는다.
@@ -277,19 +338,30 @@ def _fetch_sources(url: str, raw: Path, *, want_video: bool,
             command += ["--write-auto-sub", "--sub-langs",
                         ",".join(fetch_youtube.ORIGINAL_LANGS),
                         "--convert-subs", "srt"]
+        # 메타데이터는 같은 호출에 얹는다. 왕복이 늘지 않는다.
+        command += ["--write-info-json"]
         command += ["-o", str(staging / "media") + ".%(format_id)s.%(ext)s", url]
         result = subprocess.run(command, capture_output=True, text=True)
 
         media: list[Path] = []
+        info: Path | None = None
         for path in sorted(staging.iterdir()):
             if not path.is_file():
                 continue
-            if path.suffix.lower() == ".srt":
+            name = path.name.lower()
+            if name.endswith(".info.json"):
+                # 포맷마다 한 벌씩 나올 수 있다. 내용이 같으므로 하나만 쓴다.
+                # media 로 새면 가장 큰 파일 규칙에 걸려 오디오로 오인된다.
+                if info is None:
+                    info = path
+            elif path.suffix.lower() == ".srt":
                 if found["captions"] is None:
                     # 포맷마다 한 벌씩 나온다. 내용이 같으므로 하나만 쓴다.
                     found["captions"] = path
             elif path.suffix.lower() != ".part":
                 media.append(path)
+        if info is not None:
+            _write_metadata_from_info(info, raw)
 
         for path in sorted(media, key=lambda item: item.stat().st_size, reverse=True):
             kind = "video" if want_video and _has_video_stream(path) else "audio"
@@ -318,10 +390,29 @@ def _fetch_sources(url: str, raw: Path, *, want_video: bool,
 
 
 def _stage_captions(srt: Path, raw: Path) -> Path:
+    """받아둔 srt 를 captions.json 으로 옮긴다.
+
+    `video_id` 는 **번들 이름**으로 덮어쓴다. `payload_from_srt` 는 파일 이름
+    (`<video_id>.<lang>.srt`)에서 뽑는데, 통합 취득은 포맷 id 로 이름을 짓기
+    때문에(`media.251-2.ko-orig.srt`) 그대로 두면 `media.251-2` 가 들어가고
+    `merge` 가 "video_id 가 다릅니다" 로 멈춘다.
+    """
     payload = fetch_youtube.payload_from_srt(srt)
+    payload["video_id"] = raw.parent.name
     target = raw / "captions.json"
     fetch_youtube.write_payload(payload, target)
     return target
+
+
+def _pin_captions_video_id(captions: Path, video_id: str) -> None:
+    """자막의 video_id 를 번들 이름에 맞춘다. 어긋나면 merge 가 멈춘다."""
+    try:
+        payload = _read_json(captions)
+    except (OSError, json.JSONDecodeError):
+        return
+    if payload.get("video_id") != video_id:
+        payload["video_id"] = video_id
+        _write_json(captions, payload)
 
 
 def stage_fetch(bundle: Path, url: str, *, force: bool = False,
@@ -371,9 +462,15 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False,
             _log("  영상 재사용 (%s)" % existing_video.name)
 
     if need_captions:
+        # 자막이 없는 경우가 번역문 검사의 사각지대다. 이 갈래는 어차피
+        # yt-dlp 를 부르므로, 메타데이터가 없으면 여기서 같이 받아 둔다.
+        # 소리·영상을 재사용한 갈래에서는 부르지 않는다 (호출 0 보장).
+        if not (raw / METADATA_NAME).exists():
+            _fetch_metadata(url, raw)
         # 원어 자동자막이 같이 안 왔을 때만 한 번 더 시도한다 (사람이 올린 자막).
         try:
             fetch_youtube.fetch(url, captions)
+            _pin_captions_video_id(captions, bundle.name)
         except Exception as error:  # 자막은 선택 자료다. 없어도 파이프라인은 진행한다.
             _log("  경고: 자막 취득 실패, 영어 용어 복원을 건너뛴다 (%s)" % error)
             # 자막이 원래 없는 영상과 취득이 고장난 것은 사람이 할 일이 다르다.
@@ -385,9 +482,12 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False,
     payload = _read_json(captions) if captions.exists() else {"cues": []}
     cue_count = len(payload.get("cues", []))
     _log("  자막 %d cues (%s)" % (cue_count, payload.get("language") or "없음"))
+    script = _metadata_script(bundle)
+    _log("  영상 원어(메타데이터) %s" % (script or "불명"))
     found = visual.source_video(bundle)
     return {"source_audio": str(source), "captions": str(captions), "cues": cue_count,
             "captions_language": payload.get("language"),
+            "metadata_script": script,
             "video": str(found) if found else None}
 
 
@@ -613,19 +713,62 @@ def _captions_are_original(language: str | None) -> bool:
     return bool(language) and str(language).endswith("-orig")
 
 
+def _metadata_script(bundle: Path) -> str | None:
+    """yt-dlp 가 말하는 이 영상의 원어. 모르면 None.
+
+    두 가지만 본다. 둘 다 **소리에 대한 정보**다.
+
+    1. `language` — 업로더가 붙였거나 YouTube 가 판정한 원어
+    2. `automatic_captions` 의 `*-orig` 트랙 — YouTube 자체 음성 인식이 어느
+       언어로 알아들었는가
+
+    제목과 설명글의 문자는 **일부러 쓰지 않는다.** 한국어 강의에 영어 제목을
+    다는 일이 흔하고(그 반대도 있다), 글자와 말이 어긋나면 멀쩡한 전사를
+    번역문으로 오판해 막게 된다. 없던 실패를 만드는 근거는 쓰지 않는다.
+    """
+    path = bundle / "raw" / METADATA_NAME
+    if not path.exists():
+        return None
+    try:
+        payload = _read_json(path)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    declared = payload.get("language")
+    if isinstance(declared, str) and declared.strip():
+        found = _requested_script(declared)
+        if found is not None:
+            return found
+    for code in payload.get("auto_caption_langs") or []:
+        if not isinstance(code, str):
+            continue
+        found = _requested_script(code[: -len("-orig")] if code.endswith("-orig") else code)
+        if found is not None:
+            return found
+    return None
+
+
 def _expected_script(*, captions: str, langs: str,
-                     captions_language: str | None) -> str | None:
-    """이 구간의 전사가 어느 문자 체계여야 하는가. 모르면 None."""
+                     captions_language: str | None,
+                     metadata_script: str | None = None) -> str | None:
+    """이 구간의 전사가 어느 문자 체계여야 하는가. 모르면 None.
+
+    근거를 센 것부터 본다. 원어 자막 > 사람이 지정한 언어 > 영상 메타데이터.
+    메타데이터를 맨 뒤에 두는 이유는 앞의 둘이 이 영상에 직접 딸린 자료이고,
+    메타데이터는 YouTube 의 판정이라 틀릴 여지가 조금 더 크기 때문이다.
+    """
     if (_captions_are_original(captions_language)
             and len(captions) >= _TRANSLATION_CAPTION_MIN_CHARS):
         found = _dominant_script(captions)
         if found is not None:
             return found
-    return _requested_script(langs)
+    return _requested_script(langs) or metadata_script
 
 
 def _looks_translated(transcript: str, *, captions: str, langs: str,
-                      captions_language: str | None = None) -> bool:
+                      captions_language: str | None = None,
+                      metadata_script: str | None = None) -> bool:
     """받아적기가 아니라 번역문으로 보이는가.
 
     기대하는 문자 체계를 정한 뒤, 전사에 그 문자가 사실상 없으면 번역문이다.
@@ -633,7 +776,8 @@ def _looks_translated(transcript: str, *, captions: str, langs: str,
     if len(transcript) < _TRANSLATION_MIN_CHARS:
         return False
     expected = _expected_script(captions=captions, langs=langs,
-                                captions_language=captions_language)
+                                captions_language=captions_language,
+                                metadata_script=metadata_script)
     if expected is None:
         return False
     return _script_share(transcript, expected) < _TRANSLATION_TRACE_SHARE
@@ -724,6 +868,18 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
     caption_cues, captions_language = _captions_evidence(bundle)
     codes = job["config"]["language_codes"]
     langs = ",".join(codes) if codes else "auto"
+    metadata_script = _metadata_script(bundle)
+
+    # 근거가 하나도 없으면 이 실행은 번역문을 잡지 못한다. 조용히 넘어가면
+    # 사람은 검사를 통과한 줄 안다. 상태에도 남겨 나중에 확인할 수 있게 한다.
+    all_captions = " ".join(str(cue.get("text", "")) for cue in caption_cues)
+    guard_basis = _expected_script(captions=all_captions, langs=langs,
+                                   captions_language=captions_language,
+                                   metadata_script=metadata_script)
+    job["translation_guard"] = "active" if guard_basis else "skipped"
+    if guard_basis is None:
+        _log("  경고: 원어 자막도, 지정 언어도, 영상 메타데이터도 없어 "
+             "번역문 검사를 하지 않는다. --language 로 원어를 지정하면 검사한다")
 
     # 저장된 응답으로 되살릴 수 있는 청크는 쿼터 추정에서 뺀다.
     reusable = {} if force else {
@@ -800,7 +956,8 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
         in_range = _captions_in_range(caption_cues, float(chunk["start"]),
                                       float(chunk["end"]))
         if _looks_translated(text, captions=in_range, langs=langs,
-                             captions_language=captions_language):
+                             captions_language=captions_language,
+                             metadata_script=metadata_script):
             chunk["status"] = "failed"
             chunk["error"] = "번역문으로 보임"
             job["status"] = "partial"
@@ -819,7 +976,8 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
                 "로 호출 없이 수동 복구할 수 있다."
                 % (chunk["index"], _dominant_script(text) or "불명",
                    _expected_script(captions=in_range, langs=langs,
-                                    captions_language=captions_language) or "불명",
+                                    captions_language=captions_language,
+                                    metadata_script=metadata_script) or "불명",
                    _raw_path(bundle, chunk))
             )
 
@@ -1097,6 +1255,8 @@ def status(bundle: Path, *, ledger: Path | None = None, api_key: str | None = No
     if job_path.exists():
         job = _read_json(job_path)
         info["status"] = job["status"]
+        # 번역문 검사를 실제로 했는지. 로그는 흘러가므로 여기에 남는다.
+        info["translation_guard"] = job.get("translation_guard")
         info["chunks"] = {
             "total": len(job["chunks"]),
             "complete": sum(1 for c in job["chunks"] if c["status"] == "complete"),
@@ -1132,6 +1292,9 @@ def status(bundle: Path, *, ledger: Path | None = None, api_key: str | None = No
                 "failed": bool(payload.get("error")) or payload.get("language") is None,
                 "error": payload.get("error"),
             }
+
+    # 자막이 없어도 메타데이터가 원어를 알려주면 번역문 검사가 산다.
+    info["metadata_script"] = _metadata_script(bundle)
 
     # 기본에서 빠진 단계의 산출물은 없는 것이 정상이다. 읽는 쪽이 그것을
     # 실패로 오인하지 않도록 이름을 함께 준다.

@@ -496,6 +496,11 @@ class DownloadSafetyTests(unittest.TestCase):
             stdout = ""
 
         def fake(command, **kwargs):
+            if "--dump-json" in command:
+                return pipeline.subprocess.CompletedProcess(
+                    command, 0,
+                    json.dumps({"id": "x", "title": "t", "language": "ko",
+                                "automatic_captions": {"ko-orig": []}}), "")
             if ok:
                 target = Path(command[command.index("-o") + 1].replace(".%(ext)s", "." + ext))
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -820,6 +825,73 @@ class TranslationGuardTests(unittest.TestCase):
             langs="auto"))
 
 
+class MetadataLanguageEvidenceTests(unittest.TestCase):
+    """자막이 없을 때 영상 메타데이터가 원어 근거를 대신한다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "raw").mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _write(self, payload: dict) -> None:
+        (self.bundle / "raw" / pipeline.METADATA_NAME).write_text(
+            json.dumps(payload), encoding="utf-8")
+
+    def test_declared_language_gives_the_script(self) -> None:
+        self._write({"language": "ko", "auto_caption_langs": []})
+        self.assertEqual(pipeline._metadata_script(self.bundle), "hangul")
+
+    def test_auto_caption_track_is_used_when_language_is_missing(self) -> None:
+        self._write({"language": None, "auto_caption_langs": ["ko-orig"]})
+        self.assertEqual(pipeline._metadata_script(self.bundle), "hangul")
+
+    def test_region_suffix_is_tolerated(self) -> None:
+        self._write({"language": "en-US", "auto_caption_langs": []})
+        self.assertEqual(pipeline._metadata_script(self.bundle), "latin")
+
+    def test_unknown_or_missing_metadata_is_silent(self) -> None:
+        self.assertIsNone(pipeline._metadata_script(self.bundle))
+        self._write({"language": "xx", "auto_caption_langs": []})
+        self.assertIsNone(pipeline._metadata_script(self.bundle))
+        (self.bundle / "raw" / pipeline.METADATA_NAME).write_text("{", encoding="utf-8")
+        self.assertIsNone(pipeline._metadata_script(self.bundle))
+
+    def test_title_script_is_never_used(self) -> None:
+        """영어 제목의 한국어 강의를 영어 영상으로 오판하면 안 된다."""
+        self._write({"title": "Self-Supervised Learning Lecture",
+                     "language": None, "auto_caption_langs": []})
+        self.assertIsNone(pipeline._metadata_script(self.bundle))
+
+    def test_metadata_closes_the_blind_spot(self) -> None:
+        """자막도 지정 언어도 없던 사각지대를 메타데이터가 메운다."""
+        english = "Hello, today I will talk about self supervised learning"
+        self.assertFalse(pipeline._looks_translated(english, captions="", langs="auto"))
+        self.assertTrue(pipeline._looks_translated(
+            english, captions="", langs="auto", metadata_script="hangul"))
+
+    def test_metadata_does_not_flag_a_matching_transcript(self) -> None:
+        korean = "안녕하세요 오늘은 자기지도학습에 대해 말씀드리겠습니다 여러분"
+        self.assertFalse(pipeline._looks_translated(
+            korean, captions="", langs="auto", metadata_script="hangul"))
+
+    def test_requested_language_outranks_metadata(self) -> None:
+        """사람이 지정한 언어가 YouTube 판정보다 앞선다."""
+        english = "Hello, today I will talk about self supervised learning"
+        self.assertFalse(pipeline._looks_translated(
+            english, captions="", langs="en-US", metadata_script="hangul"))
+
+    def test_original_captions_outrank_metadata(self) -> None:
+        korean_captions = "안녕하세요 오늘은 자기지도학습에 대해 말씀드리겠습니다"
+        self.assertEqual(
+            pipeline._expected_script(captions=korean_captions, langs="auto",
+                                      captions_language="ko-orig",
+                                      metadata_script="latin"),
+            "hangul")
+
+
 class TranslationGuardInPipelineTests(unittest.TestCase):
     """번역문이 오면 첫 청크에서 멈춰 남은 호출을 아낀다."""
 
@@ -889,6 +961,67 @@ class TranslationGuardInPipelineTests(unittest.TestCase):
 
         job = self._run(transcriber)
         self.assertEqual(job["status"], "complete")
+
+
+class TranslationGuardBasisTests(TranslationGuardInPipelineTests):
+    """검사 근거가 있었는지를 job 에 남긴다."""
+
+    def _korean(self, path, langs):
+        return {"words": [{"text": t, "start": i * 0.5, "end": i * 0.5 + 0.3,
+                           "speaker": "spk:0"}
+                          for i, t in enumerate(
+                              "안녕하세요 오늘은 자기지도학습에 대해 "
+                              "말씀드리겠습니다".split())]}
+
+    def _blind(self) -> None:
+        """자막도 지정 언어도 메타데이터도 없는 상태로 만든다."""
+        (self.bundle / "raw/captions.json").write_text(
+            json.dumps({"source": "youtube", "language": None, "original": False,
+                        "video_id": "vid", "cues": []}), encoding="utf-8")
+
+    def test_guard_records_active_when_captions_exist(self) -> None:
+        job = self._run(self._korean)
+        self.assertEqual(job["translation_guard"], "active")
+
+    def test_guard_records_skipped_without_any_evidence(self) -> None:
+        self._blind()
+        job = self._run(self._korean)
+        self.assertEqual(job["translation_guard"], "skipped")
+
+    def test_metadata_alone_keeps_the_guard_active(self) -> None:
+        self._blind()
+        (self.bundle / "raw" / pipeline.METADATA_NAME).write_text(
+            json.dumps({"language": "ko", "auto_caption_langs": ["ko-orig"]}),
+            encoding="utf-8")
+        job = self._run(self._korean)
+        self.assertEqual(job["translation_guard"], "active")
+
+    def test_metadata_alone_blocks_a_translation(self) -> None:
+        """자막이 없어도 메타데이터만으로 번역문을 잡는다."""
+        self._blind()
+        (self.bundle / "raw" / pipeline.METADATA_NAME).write_text(
+            json.dumps({"language": "ko", "auto_caption_langs": []}),
+            encoding="utf-8")
+        calls: list[str] = []
+
+        def transcriber(path, langs):
+            calls.append(path)
+            return {"words": [{"text": t, "start": i * 0.5, "end": i * 0.5 + 0.3,
+                               "speaker": "spk:0"}
+                              for i, t in enumerate(
+                                  "Hello today I will talk about self supervised "
+                                  "learning methods".split())]}
+
+        with self.assertRaises(pipeline.StageError):
+            self._run(transcriber)
+        self.assertEqual(len(calls), 1)
+
+    def test_status_reports_the_guard(self) -> None:
+        self._blind()
+        self._run(self._korean)
+        info = pipeline.status(self.bundle)
+        self.assertEqual(info["translation_guard"], "skipped")
+        self.assertIsNone(info["metadata_script"])
 
 
 class TranslationGuardRerunTests(TranslationGuardInPipelineTests):
@@ -1216,6 +1349,15 @@ class SingleFetchCallTests(unittest.TestCase):
                 (out / "media.f134.video.mp4").write_bytes(b"video-bytes")
             if self.produce["captions"] and "--sub-langs" in command:
                 (out / "media.ko-orig.srt").write_text(self.SRT, encoding="utf-8")
+            if "--write-info-json" in command:
+                # 실물 yt-dlp 처럼 미디어와 같은 디렉터리에 떨군다. 크기가 커서
+                # "가장 큰 파일" 규칙에 걸리면 오디오로 오인된다.
+                (out / "media.f251.info.json").write_text(
+                    json.dumps({"id": "abcdefghijk", "title": "제목",
+                                "channel": "채널", "language": "ko",
+                                "automatic_captions": {"ko-orig": [], "en": []},
+                                "subtitles": {}, "thumbnails": ["x"] * 400}),
+                    encoding="utf-8")
             return pipeline.subprocess.CompletedProcess(command, 0, "", "")
 
         pipeline.subprocess.run = run
@@ -1226,6 +1368,32 @@ class SingleFetchCallTests(unittest.TestCase):
 
     def _yt_dlp_calls(self) -> list[list[str]]:
         return [c for c in self.commands if c and c[0] == "yt-dlp"]
+
+    def test_metadata_rides_along_and_is_trimmed(self) -> None:
+        pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
+        self.assertEqual(len(self._yt_dlp_calls()), 1, "메타데이터 때문에 호출이 늘었다")
+        saved = json.loads(
+            (self.bundle / "raw" / pipeline.METADATA_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(saved["language"], "ko")
+        self.assertEqual(saved["auto_caption_langs"], ["ko-orig"])
+        self.assertNotIn("thumbnails", saved)
+        self.assertEqual(pipeline._metadata_script(self.bundle), "hangul")
+
+    def test_info_json_is_not_mistaken_for_media(self) -> None:
+        """info.json 이 media 목록에 새면 가장 큰 파일 규칙에 걸려 오디오가 된다."""
+        pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
+        audio_path = Path(pipeline.audio.source_audio(self.bundle))
+        self.assertEqual(audio_path.suffix, ".webm")
+        self.assertEqual(audio_path.read_bytes(), b"audio-bytes")
+
+    def test_captions_carry_the_bundle_video_id(self) -> None:
+        """통합 취득은 파일을 media.<format>.srt 로 받는다. 그 이름이 video_id 가
+        되면 merge 가 "video_id 가 다릅니다" 로 멈춘다."""
+        pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
+        payload = json.loads(
+            (self.bundle / "raw" / "captions.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["video_id"], "vid")
+        self.assertEqual(payload["language"], "ko-orig")
 
     def test_one_call_produces_all_three(self) -> None:
         result = pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")

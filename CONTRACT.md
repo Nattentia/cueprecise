@@ -64,6 +64,28 @@
 - 여러 트랙이 받아지면 원어 트랙, 그다음 요청한 언어 순서로 고른다.
   파일 이름 순서로 고르면 번역 트랙이 뽑혀 `merge`가 없는 근거를 만들어낸다.
 
+### metadata.json — yt-dlp 영상 정보 (추려서 저장)
+
+`fetch` 단계가 미디어와 **같은 yt-dlp 호출**에 얹어 받는다. 왕복이 늘지 않는다.
+소리·영상을 재사용해 그 호출이 돌지 않은 갈래에서는 받지 않는다(호출 0 보장).
+자막 폴백이 도는 갈래에서는 이미 yt-dlp를 부르므로 없으면 같이 받는다.
+
+원본 info.json은 580~730KB다. 언어 판정에 쓰는 것만 남겨 200바이트대로 줄인다.
+
+```json
+{
+  "video_id": "jcBDSLSeud4",
+  "title": "...",
+  "channel": "MahlerLab",
+  "language": "ko",
+  "auto_caption_langs": ["ko-orig"],
+  "subtitle_langs": []
+}
+```
+
+`language`와 `auto_caption_langs`만 번역문 판정의 근거로 쓴다. `title`과
+`channel`은 사람이 번들을 알아보기 위한 것이고 판정에 쓰지 않는다.
+
 ### transcript.json — `transcribe.py` 출력
 
 ```json
@@ -156,11 +178,21 @@ Gemini는 조건에 따라 받아적기 대신 번역문을 돌려준다. 번역
 
 판정은 이미 받아둔 자료로만 한다. 추가 호출을 쓰지 않는다.
 
-- 같은 시간대의 **원어 자막**(`original: true`)이 한글 30% 이상인데 전사가
-  한글 5% 미만이면 번역문으로 본다.
-- 자막이 없어도 `ko*`를 요청했는데 전사가 한글 5% 미만이면 번역문으로 본다.
+근거는 센 것부터 본다. 앞의 것이 있으면 뒤는 보지 않는다.
+
+1. 같은 시간대의 **원어 자막**(`original: true`)이 어느 문자 체계 30% 이상인데
+   전사가 그 문자 5% 미만이면 번역문으로 본다.
+2. 자막이 없어도 **요청한 언어**가 있으면 그 언어의 문자로 판정한다.
+3. 둘 다 없으면 **영상 메타데이터**(`raw/metadata.json`)를 본다. `language`
+   필드와 `automatic_captions`의 `*-orig` 트랙만 쓴다 — 둘 다 소리에 대한
+   정보다. **제목·설명글의 문자는 쓰지 않는다.** 한국어 강의에 영어 제목을
+   다는 일이 흔해, 글자와 말이 어긋나면 멀쩡한 전사를 막게 된다.
+
 - 대조는 **청크의 시간 범위와 겹치는 자막**으로 한다. 영상 전체 자막과
   대조하면 한국어 강의 중간의 영어 발표 구간이 통째로 걸린다.
+- 셋 다 없으면 판정하지 않는다. 이때는 **판정하지 않았다는 사실을 남긴다** —
+  `job.json`의 `translation_guard`가 `"skipped"`가 되고 `status`가 그대로
+  보고한다. 조용히 통과시키면 사람은 검사를 통과한 줄 안다.
 - 임계값은 영어 용어가 섞인 한국어 강의를 오탐하지 않게 잡는다. 정상 전사는
   한글 99%대, 번역문 사례는 0%였다.
 
@@ -297,6 +329,17 @@ gh pr list
 - `speaker_evidence`: `overlap | source-name | voice-embedding | manual | null`.
 - 청크 transcript 최상위에는 `chunk_index`, `chunk_start`, `chunk_end`를 optional로 둔다.
 - 저장되는 word timestamp는 언제나 절대 시각이다.
+- **단어가 시간순으로 온다고 가정하지 않는다.** 여러 사람이 겹쳐 말하면 맞장구가
+  앞 단어보다 이른 시각으로 온다(실측 54분 대담에서 4,156단어 중 393건). 유효성은
+  단어 하나하나를 놓고 본다: offset 존재, 음수 아님, `end >= start`, 오디오 길이
+  안. 순서는 저장 직전 start 로 정렬해 맞춘다.
+- **고친 값은 다음 단어의 기준으로 삼지 않는다.** 잘못된 값 하나가 뒤를 오염시키면
+  안 된다(실측: `start=22,979s` 한 단어 때문에 뒤 3,602단어가 전부 손상으로 걸렸다).
+- 같은 시각의 같은 글자는 한 번만 남긴다. 모델이 같은 구간을 두 번 뱉는 일이 있다
+  (실측 8,176단어 중 148단어). 지운 개수는 `duplicate_words_removed`로 남긴다.
+- `captions.json`의 `video_id`는 번들 이름으로 고정한다. 파일 이름에서 뽑으면
+  통합 취득의 `media.<format_id>.<lang>.srt` 때문에 `media.251-2`가 들어가 `merge`가
+  멈춘다.
 - overlap 병합은 원문과 raw speaker를 보존하고, 중복 제거 내역을 derived metadata에 남긴다.
 - 근거가 약하면 화자를 임의 확정하지 않고 `unresolved`로 둔다.
 
@@ -334,6 +377,7 @@ data/<video_id>/
   job.json
   raw/
     captions.json
+    metadata.json
     audio/
     transcripts/
     frames/
