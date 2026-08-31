@@ -71,7 +71,7 @@ class TranscribeResumeTests(unittest.TestCase):
             "schema_version": 1, "video_id": "vid",
             "input": {"source": "u", "fingerprint": "sha256:x"},
             "config": {"chunk_max_secs": 1790.0, "overlap_secs": 10.0,
-                       "language_codes": None, "diarization": True},
+                       "language_codes": None},
             "status": "planned",
             "chunks": [
                 {"index": 0, "start": 0.0, "end": 10.0,
@@ -400,8 +400,56 @@ class StatusAndPurgeTests(unittest.TestCase):
         self.assertIn("유일한 오디오", str(caught.exception))
         self.assertTrue(chunk.exists(), "되돌릴 수 없는데 지웠다")
 
+    def test_new_plan_config_has_no_diarization_key(self) -> None:
+        """새로 세운 계획에는 죽은 `diarization` 키가 없다."""
+        self._seed_chunks()
+        pipeline.audio.file_fingerprint = lambda path: "sha256:x"
+        original = pipeline.audio.extract_chunks
+        pipeline.audio.extract_chunks = lambda src, root, chunks: None
+        probe = pipeline.audio.probe_duration
+        pipeline.audio.probe_duration = lambda path: 10.0
+        try:
+            job = pipeline.stage_plan(self.bundle, "u", chunk_max_secs=1790.0,
+                                      overlap_secs=10.0, language_codes=None, force=True)
+        finally:
+            pipeline.audio.extract_chunks = original
+            pipeline.audio.probe_duration = probe
+        self.assertNotIn("diarization", job["config"])
+
+    def test_legacy_diarization_key_does_not_force_replan(self) -> None:
+        """옛 job.json 의 `diarization` 키는 계획 재사용을 막지 않는다.
+
+        막으면 이미 전사를 끝낸 청크를 Gemini 에 다시 부른다.
+        """
+        self._seed_chunks()
+        (self.bundle / "raw/transcripts").mkdir(parents=True, exist_ok=True)
+        job = {"input": {"source": "u", "fingerprint": "sha256:x"},
+               "config": {"chunk_max_secs": 1790.0, "overlap_secs": 10.0,
+                          "language_codes": None, "diarization": True},
+               "chunks": [{"index": 0, "start": 0.0, "end": 10.0,
+                           "path": "raw/audio/chunk-000.mp3", "status": "complete",
+                           "attempts": 1,
+                           "transcript_path": "raw/transcripts/chunk-000.json",
+                           "error": None}]}
+        (self.bundle / "job.json").write_text(json.dumps(job), encoding="utf-8")
+        pipeline.audio.file_fingerprint = lambda path: "sha256:x"
+        replanned = []
+        original = pipeline.audio.create_job
+        pipeline.audio.create_job = lambda *a, **k: replanned.append(1)
+        try:
+            reused = pipeline.stage_plan(self.bundle, "u", chunk_max_secs=1790.0,
+                                         overlap_secs=10.0, language_codes=None)
+        finally:
+            pipeline.audio.create_job = original
+        self.assertEqual(replanned, [], "옛 키 하나 때문에 계획을 다시 세웠다")
+        self.assertEqual(reused["chunks"][0]["status"], "complete")
+
     def test_plan_rebuilds_purged_chunks(self) -> None:
-        """청크를 지워도 source.mp3 가 있으면 계획 단계가 다시 뽑는다."""
+        """청크를 지워도 source.mp3 가 있으면 계획 단계가 다시 뽑는다.
+
+        job.json 은 `diarization` 키가 있던 시절의 것이다. 그 키 하나 때문에
+        계획을 통째로 다시 세우면 안 된다.
+        """
         self._seed_chunks()
         job = {"input": {"fingerprint": "sha256:x"},
                "config": {"chunk_max_secs": 1790.0, "overlap_secs": 10.0,
@@ -420,7 +468,7 @@ class StatusAndPurgeTests(unittest.TestCase):
         pipeline.audio.file_fingerprint = lambda path: "sha256:x"
         try:
             pipeline.stage_plan(self.bundle, "u", chunk_max_secs=1790.0, overlap_secs=10.0,
-                                language_codes=None, diarization=True)
+                                language_codes=None)
         finally:
             pipeline.audio.extract_chunks = original
         self.assertEqual(calls, [1], "없어진 청크를 다시 뽑지 않았다")
@@ -554,7 +602,7 @@ class ForceAndMissingJobTests(unittest.TestCase):
             "schema_version": 1, "video_id": "vid",
             "input": {"source": "u", "fingerprint": "sha256:x"},
             "config": {"chunk_max_secs": 1790.0, "overlap_secs": 10.0,
-                       "language_codes": None, "diarization": True},
+                       "language_codes": None},
             "status": "complete",
             "chunks": [{"index": 0, "start": 0.0, "end": 10.0,
                         "path": "raw/audio/chunk-000.mp3", "status": "complete",
@@ -909,7 +957,7 @@ class TranslationGuardInPipelineTests(unittest.TestCase):
             "schema_version": 1, "video_id": "vid",
             "input": {"source": "u", "fingerprint": "sha256:x"},
             "config": {"chunk_max_secs": 600.0, "overlap_secs": 10.0,
-                       "language_codes": None, "diarization": True},
+                       "language_codes": None},
             "status": "planned",
             "chunks": [
                 {"index": i, "start": i * 100.0, "end": (i + 1) * 100.0,
@@ -1266,7 +1314,7 @@ class CallPacingTests(unittest.TestCase):
             "schema_version": 1, "video_id": "vid",
             "input": {"source": "u", "fingerprint": "sha256:x"},
             "config": {"chunk_max_secs": 600.0, "overlap_secs": 10.0,
-                       "language_codes": None, "diarization": True},
+                       "language_codes": None},
             "status": "planned",
             "chunks": [
                 {"index": i, "start": i * 100.0, "end": (i + 1) * 100.0,

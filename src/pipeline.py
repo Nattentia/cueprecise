@@ -491,8 +491,20 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False,
             "video": str(found) if found else None}
 
 
+def _plan_config(job: dict[str, Any]) -> dict[str, Any]:
+    """저장된 config 에서 계획에 영향을 주는 항목만 남긴다.
+
+    `diarization` 은 Gemini 요청에 닿은 적이 없는 죽은 값이었고 지금은 계획에서
+    빠졌다. 옛 job.json 에는 아직 남아 있으므로 비교 전에 떼어낸다. 그러지
+    않으면 키 하나 때문에 계획을 다시 세워 완료된 청크를 전부 다시 부른다.
+    """
+    config = dict(job.get("config", {}))
+    config.pop("diarization", None)
+    return config
+
+
 def stage_plan(bundle: Path, url: str, *, chunk_max_secs: float, overlap_secs: float,
-               language_codes: list[str] | None, diarization: bool,
+               language_codes: list[str] | None,
                force: bool = False) -> dict[str, Any]:
     """청크 계획과 분할. Gemini 호출 없음."""
     job_path = bundle / "job.json"
@@ -501,12 +513,12 @@ def stage_plan(bundle: Path, url: str, *, chunk_max_secs: float, overlap_secs: f
         raise StageError("raw 에 원본 오디오가 없습니다. fetch 단계를 먼저 실행하세요.")
 
     config = {"chunk_max_secs": chunk_max_secs, "overlap_secs": overlap_secs,
-              "language_codes": language_codes, "diarization": diarization}
+              "language_codes": language_codes}
 
     if job_path.exists() and not force:
         job = _read_json(job_path)
         if (job.get("input", {}).get("fingerprint") == audio.file_fingerprint(source)
-                and job.get("config") == config):
+                and _plan_config(job) == config):
             missing = [c for c in job["chunks"] if not (bundle / c["path"]).exists()]
             if missing:
                 audio.extract_chunks(source, bundle, missing)
@@ -517,7 +529,7 @@ def stage_plan(bundle: Path, url: str, *, chunk_max_secs: float, overlap_secs: f
     job = audio.create_job(
         source, bundle, bundle.name, url,
         chunk_max_secs=chunk_max_secs, overlap_secs=overlap_secs,
-        language_codes=language_codes, diarization=diarization,
+        language_codes=language_codes,
     )
     _log("  청크 %d개" % len(job["chunks"]))
     return job
@@ -1181,7 +1193,7 @@ def run(url: str, *, bundle_root: Path = Path("data"),
         stages: tuple[str, ...] | None = None,
         chunk_max_secs: float = audio.DEFAULT_CHUNK_MAX_SECS,
         overlap_secs: float = audio.DEFAULT_OVERLAP_SECS,
-        language_codes: list[str] | None = None, diarization: bool = True,
+        language_codes: list[str] | None = None,
         width: int = DEFAULT_WIDTH, daily_limit: int = DEFAULT_DAILY_LIMIT,
         rpm_limit: int | None = DEFAULT_RPM_LIMIT,
         request_interval: float = DEFAULT_REQUEST_INTERVAL,
@@ -1204,7 +1216,7 @@ def run(url: str, *, bundle_root: Path = Path("data"),
         elif stage == "plan":
             job = stage_plan(bundle, url, chunk_max_secs=chunk_max_secs,
                              overlap_secs=overlap_secs, language_codes=language_codes,
-                             diarization=diarization, force=force)
+                             force=force)
             summary["stages"][stage] = {"chunks": len(job["chunks"])}
         elif stage == "transcribe":
             job = job if job is not None else _load_job(bundle)

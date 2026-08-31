@@ -265,6 +265,10 @@ def request_raw(audio: str, langs: str | None) -> tuple[dict[str, Any], list[str
     uploaded = client.files.upload(file=audio)
     codes = None
     try:
+        # 화자 구분은 항상 켠다. `diarization_mode` 는 값이 "speaker" 하나뿐인
+        # 선택 항목이라, 끄려면 이 줄을 빼는 것 말고는 방법이 없다. 켜는 비용은
+        # 응답에 붙는 화자 라벨뿐이고, 라벨의 신뢰도는 speakers.py 가 청크 겹침
+        # 대조로 따로 판정한다. 그래서 켜고 끄는 설정을 두지 않는다.
         cfg: dict = {"mode": {
             "type": "verbatim",
             "diarization_mode": "speaker",
