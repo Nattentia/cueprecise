@@ -23,6 +23,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import runtime
+
 DEFAULT_MAX_FRAMES = 40
 MIN_SEPARATION_SECS = 8.0
 """이보다 가까운 후보는 하나로 합친다. 같은 슬라이드를 여러 장 뽑지 않는다."""
@@ -201,7 +203,7 @@ def extract_frames(source_video: Path, bundle: Path,
         name = "%09d.jpg" % round(timestamp * 1000)
         target = out_dir / name
         if not target.exists():
-            command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            command = [runtime.tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
                        "-ss", "%.3f" % timestamp, "-i", str(source_video),
                        "-frames:v", "1", "-q:v", "3", str(target)]
             try:

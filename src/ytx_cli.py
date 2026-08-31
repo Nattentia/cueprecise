@@ -6,11 +6,11 @@ import json
 import os
 import shutil
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import pipeline
+import configuration
+import runtime
 
 
 def _force_utf8(*streams: Any) -> None:
@@ -24,66 +24,35 @@ def _force_utf8(*streams: Any) -> None:
 
 
 def default_claude_config() -> Path:
-    """현재 운영체제의 Claude Desktop MCP 설정 경로를 반환한다."""
-    if sys.platform == "win32":
-        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-        return base / "Claude" / "claude_desktop_config.json"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
-    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "Claude" / "claude_desktop_config.json"
+    return configuration.default_claude_config()
 
 
 def _read_config(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise SystemExit(f"설정 파일을 읽을 수 없다: {path}\n{error}") from error
-    if not isinstance(value, dict):
-        raise SystemExit(f"설정 파일 최상위 값은 JSON 객체여야 한다: {path}")
-    return value
+    return configuration.read_config(path)
 
 
 def _write_config(path: Path, value: dict[str, Any]) -> Path | None:
-    """기존 설정을 백업하고 같은 디렉터리에서 원자적으로 교체한다."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    backup = None
-    if path.exists():
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        backup = path.with_name(f"{path.name}.{stamp}.bak")
-        shutil.copy2(path, backup)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
-    return backup
+    return configuration.write_config(path, value)
 
 
-def setup_claude(config_path: Path, bundle_root: Path, *, api_key: str | None) -> dict[str, Any]:
+def setup_claude(config_path: Path, bundle_root: Path, *, api_key: str | None,
+                 server_command: str | None = None,
+                 server_args: list[str] | None = None,
+                 extra_env: dict[str, str] | None = None) -> dict[str, Any]:
     """Claude Desktop 설정에 ytx를 idempotent하게 등록한다."""
-    config = _read_config(config_path)
-    servers = config.setdefault("mcpServers", {})
-    if not isinstance(servers, dict):
-        raise SystemExit(f"mcpServers는 JSON 객체여야 한다: {config_path}")
-
-    server: dict[str, Any] = {
-        "command": sys.executable,
-        "args": ["-m", "mcp_server", "--bundle-root", str(bundle_root.resolve())],
-    }
-    if api_key:
-        server["env"] = {"GEMINI_API_KEY": api_key}
-    servers["ytx"] = server
-    bundle_root.mkdir(parents=True, exist_ok=True)
-    backup = _write_config(config_path, config)
-    return {"config": str(config_path), "bundle_root": str(bundle_root.resolve()),
-            "backup": str(backup) if backup else None, "api_key_configured": bool(api_key)}
+    if server_command is None:
+        server_command = sys.executable
+        server_args = ["-m", "mcp_server"]
+    return configuration.setup_claude(
+        config_path, bundle_root, api_key=api_key, server_command=server_command,
+        server_args=server_args or [], extra_env=extra_env)
 
 
 def doctor(config_path: Path) -> tuple[dict[str, Any], bool]:
     checks: dict[str, Any] = {
         "python": {"ok": sys.version_info >= (3, 11), "value": sys.version.split()[0]},
-        "ffmpeg": {"ok": shutil.which("ffmpeg") is not None},
-        "ffprobe": {"ok": shutil.which("ffprobe") is not None},
+        "ffmpeg": {"ok": shutil.which(runtime.tool("ffmpeg")) is not None},
+        "ffprobe": {"ok": shutil.which(runtime.tool("ffprobe")) is not None},
         "gemini_api_key": {"ok": bool(os.environ.get("GEMINI_API_KEY")), "required_for": "transcribe"},
         "claude_config": {"ok": False, "path": str(config_path)},
     }
@@ -145,6 +114,7 @@ def main() -> int:
     if argv[0] not in {"run", "status", "purge"}:
         print(f"알 수 없는 명령: {argv[0]}", file=sys.stderr)
         return 2
+    import pipeline
     return pipeline.main()
 
 

@@ -15,6 +15,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+import runtime
+
 TIMING_RE = re.compile(r"^(?P<start>\d{2}:\d{2}:\d{2},\d{3})\s+-->\s+(?P<end>\d{2}:\d{2}:\d{2},\d{3})")
 
 
@@ -83,7 +85,7 @@ FALLBACK_LANGS = ("ko", "en")
 def _download_subs(url: str, directory: Path, langs: tuple[str, ...], *,
                    auto: bool) -> list[Path]:
     target = directory / "%(id)s.%(ext)s"
-    command = ["yt-dlp"]
+    command = [runtime.tool("yt-dlp")]
     if auto:
         command.append("--write-auto-sub")
     command += ["--write-subs", "--sub-langs", ",".join(langs),

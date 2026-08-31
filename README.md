@@ -51,6 +51,22 @@ Gemini는 4회 실행에서 모두 그 용어를 놓쳤다. ytx는 시간 공백
 
 ## 빠른 시작
 
+### Windows — 설치 파일로 시작하기
+
+1. [Releases](https://github.com/Nattentia/ytx/releases)에서 `ytx-setup.exe`를 내려받아 실행한다.
+2. 설치가 끝나면 자동으로 열리는 화면에서 **API 키 만들기**를 누른다.
+3. Google AI Studio에서 만든 키를 복사해 붙여넣고 **연결하기**를 누른다.
+4. “연결 완료”가 보이면 Claude Desktop을 완전히 껐다가 다시 켠다.
+
+Python이나 Git을 설치하거나 명령어를 입력할 필요가 없다. 필요한 영상 처리 도구도
+연결 과정에서 자동으로 준비한다. API 키는 Claude Desktop의 내 컴퓨터 설정에만 저장되며,
+기존 Claude 설정은 백업한 뒤 ytx 항목만 추가한다.
+
+> 첫 공개 설치 파일은 준비 중이다. Releases에 `ytx-setup.exe`가 표시되기 전까지는
+> 아래의 명령어 설치 방식을 사용한다.
+
+### macOS·Linux 또는 명령어 설치
+
 [`uv`](https://docs.astral.sh/uv/getting-started/installation/)가 있으면 저장소를 직접
 받거나 Python 환경을 만들 필요가 없다.
 
