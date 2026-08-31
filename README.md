@@ -94,7 +94,40 @@ bundle 용량 실측은 23분 55.8MB,
 python src/mcp_server.py --bundle-root data
 ```
 
-stdio JSON-RPC. 외부 패키지 없이 stdlib 만 쓴다.
+stdio JSON-RPC. 서버 자체는 외부 패키지 없이 stdlib 만 쓴다 (취득·전사 단계는
+`yt-dlp`, `google-genai`, `ffmpeg` 를 쓴다).
+
+### MCP 호스트에 붙이기
+
+Claude Desktop 이라면 `claude_desktop_config.json` 에 넣는다. 경로는 이 저장소를
+받아둔 위치로 바꾼다.
+
+```json
+{
+  "mcpServers": {
+    "ytx": {
+      "command": "python",
+      "args": [
+        "C:/path/to/ytx/src/mcp_server.py",
+        "--bundle-root",
+        "C:/path/to/ytx/data"
+      ],
+      "env": {
+        "GEMINI_API_KEY": "..."
+      }
+    }
+  }
+}
+```
+
+경로는 절대 경로로 적는다. Windows 에서도 `/` 를 쓰면 JSON 에서 역슬래시를
+이스케이프할 일이 없다. macOS·Linux 는 `/home/you/ytx/src/mcp_server.py` 꼴이다.
+
+`--bundle-root` 는 영상 번들을 쌓아둘 디렉터리다. 호스트를 껐다 켜도 그 디렉터리
+안의 bundle 과 `index.sqlite3` 로 이전 대화의 근거를 다시 찾는다.
+
+`GEMINI_API_KEY` 가 없으면 서버는 뜨지만 전사가 필요한 도구에서 그 사실을
+알리며 멈춘다. 전사 없이 조회만 하는 도구는 키 없이도 동작한다.
 
 | 도구 | 하는 일 |
 |---|---|
@@ -186,11 +219,37 @@ python src/pipeline.py run <url> --language ko-KR   # 원어를 지정해 재실
 ## 요구 사항
 
 - Python 3.11+
-- `yt-dlp` — 오디오·자막 취득
-- `ffmpeg` / `ffprobe` — 청크 분할, 프레임 추출
-- `google-genai` — `transcribe` 단계에만 필요. 다른 단계는 SDK 없이 돌아간다
-- 선택 `pytesseract` + `Pillow` — 있으면 프레임 OCR, 없으면 `ocr_text: null`
-- 선택 `tzdata` — 없으면 내장 US/Pacific 폴백을 쓴다
+- `ffmpeg` / `ffprobe` — 청크 분할, 프레임 추출. 파이썬 패키지가 아니라 따로 설치한다
+- 선택 `tesseract` — 프레임 OCR 을 쓸 때만. 없으면 `ocr_text` 가 `null` 이다
+
+파이썬 패키지:
+
+```powershell
+python -m pip install -r requirements.txt              # yt-dlp, google-genai
+python -m pip install -r requirements-optional.txt     # OCR, 시간대 (선택)
+```
+
+`google-genai` 는 `transcribe` 단계에만 필요하다. 나머지 단계와 MCP 서버는 SDK
+없이 돌아간다.
+
+## 설치
+
+지금은 저장소를 받아 그 자리에서 실행한다.
+
+```powershell
+git clone https://github.com/Nattentia/ytx.git
+cd ytx
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests     # 네트워크·API 호출 없이 확인
+```
+
+`pip install ytx` 로 설치하는 배포판은 아직 없다. `src/` 모듈이 서로를 최상위
+이름으로 부르고 `CONTRACT.md` 6절이 단일 파일 실행 경로를 보장하기 때문에,
+패키지로 바꾸려면 그 계약부터 손대야 한다.
+
+## 라이선스
+
+MIT. `LICENSE` 참고.
 
 ## 테스트
 
