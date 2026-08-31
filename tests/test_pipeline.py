@@ -1086,3 +1086,69 @@ class ScriptGuardTests(unittest.TestCase):
         """문자 종류를 모르는 언어 코드는 근거로 쓰지 않는다."""
         self.assertFalse(pipeline._looks_translated(
             self.EN, captions="", captions_language=None, langs="sw-KE"))
+
+
+class CallPacingTests(unittest.TestCase):
+    """분당 한도에 여유가 있으면 기다리지 않고 바로 보낸다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "raw/audio").mkdir(parents=True)
+        (self.bundle / "raw/transcripts").mkdir(parents=True)
+        self.job = {
+            "schema_version": 1, "video_id": "vid",
+            "input": {"source": "u", "fingerprint": "sha256:x"},
+            "config": {"chunk_max_secs": 600.0, "overlap_secs": 10.0,
+                       "language_codes": None, "diarization": True},
+            "status": "planned",
+            "chunks": [
+                {"index": i, "start": i * 100.0, "end": (i + 1) * 100.0,
+                 "path": "raw/audio/chunk-%03d.mp3" % i, "status": "pending",
+                 "attempts": 0,
+                 "transcript_path": "raw/transcripts/chunk-%03d.json" % i,
+                 "error": None}
+                for i in range(3)
+            ],
+        }
+        for chunk in self.job["chunks"]:
+            (self.bundle / chunk["path"]).write_bytes(b"x")
+        self.ledger = Path(self.tmp.name) / "usage.json"
+        self.slept: list[float] = []
+        self.original_sleep = pipeline.time.sleep
+        pipeline.time.sleep = self.slept.append
+
+    def tearDown(self) -> None:
+        pipeline.time.sleep = self.original_sleep
+        self.tmp.cleanup()
+
+    def _transcriber(self, path, langs):
+        return {"words": [{"text": "안녕하세요", "start": 0.0, "end": 0.4,
+                           "speaker": "spk:0"}]}
+
+    def _run(self, *, rpm_limit, request_interval=30.0):
+        return pipeline.stage_transcribe(
+            self.bundle, self.job, ledger=self.ledger, api_key="k",
+            daily_limit=25, rpm_limit=rpm_limit, request_interval=request_interval,
+            transcriber=self._transcriber)
+
+    def test_only_waits_when_the_minute_window_is_full(self) -> None:
+        """분당 2회면 앞의 두 번은 즉시 나가고 세 번째만 기다린다.
+
+        옛 방식은 청크마다 무조건 30초를 쉬어 3청크에 두 번(60초) 쉬었다.
+        실제 호출은 한 번에 60~70초가 걸리므로 창이 저절로 비어, 실행 중에는
+        이 대기마저 거의 0 이 된다.
+        """
+        self._run(rpm_limit=2)
+        self.assertEqual(len(self.slept), 1,
+                         "대기 횟수가 1회가 아니다: %s" % self.slept)
+        self.assertLessEqual(self.slept[0], 61.0)
+
+    def test_no_wait_at_all_when_limit_is_generous(self) -> None:
+        self._run(rpm_limit=10)
+        self.assertEqual(self.slept, [], "여유가 있는데 기다렸다")
+
+    def test_fixed_interval_still_used_without_rpm_limit(self) -> None:
+        self._run(rpm_limit=None, request_interval=7.0)
+        self.assertEqual(self.slept, [7.0, 7.0],
+                         "RPM 한도가 없으면 고정 간격을 써야 한다")

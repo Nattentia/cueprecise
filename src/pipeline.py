@@ -625,7 +625,13 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
             if not chunk_mp3.exists():
                 raise StageError("청크 오디오가 없습니다: %s" % chunk_mp3)
             if calls_made:
-                time.sleep(request_interval)
+                # 고정 간격으로 무조건 쉬면 분당 한도가 비어 있어도 기다린다.
+                # 원장이 최근 1분 시도를 들고 있으므로 창이 찼을 때만 쉰다.
+                delay = (usage.seconds_until_slot(ledger, api_key, rpm_limit=rpm_limit)
+                         if rpm_limit else request_interval)
+                if delay > 0:
+                    _log("  분당 한도가 차 %.0f초 기다린다" % delay)
+                    time.sleep(delay)
             chunk["attempts"] += 1
             chunk["status"] = "running"
             _save_job(bundle, job)  # 요청 직전 checkpoint
