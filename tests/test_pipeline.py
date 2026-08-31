@@ -1386,6 +1386,15 @@ class SingleFetchCallTests(unittest.TestCase):
         self.assertEqual(audio_path.suffix, ".webm")
         self.assertEqual(audio_path.read_bytes(), b"audio-bytes")
 
+    def test_captions_carry_the_bundle_video_id(self) -> None:
+        """통합 취득은 파일을 media.<format>.srt 로 받는다. 그 이름이 video_id 가
+        되면 merge 가 "video_id 가 다릅니다" 로 멈춘다."""
+        pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
+        payload = json.loads(
+            (self.bundle / "raw" / "captions.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["video_id"], "vid")
+        self.assertEqual(payload["language"], "ko-orig")
+
     def test_one_call_produces_all_three(self) -> None:
         result = pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
         self.assertEqual(len(self._yt_dlp_calls()), 1,

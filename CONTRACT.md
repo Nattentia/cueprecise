@@ -329,6 +329,17 @@ gh pr list
 - `speaker_evidence`: `overlap | source-name | voice-embedding | manual | null`.
 - 청크 transcript 최상위에는 `chunk_index`, `chunk_start`, `chunk_end`를 optional로 둔다.
 - 저장되는 word timestamp는 언제나 절대 시각이다.
+- **단어가 시간순으로 온다고 가정하지 않는다.** 여러 사람이 겹쳐 말하면 맞장구가
+  앞 단어보다 이른 시각으로 온다(실측 54분 대담에서 4,156단어 중 393건). 유효성은
+  단어 하나하나를 놓고 본다: offset 존재, 음수 아님, `end >= start`, 오디오 길이
+  안. 순서는 저장 직전 start 로 정렬해 맞춘다.
+- **고친 값은 다음 단어의 기준으로 삼지 않는다.** 잘못된 값 하나가 뒤를 오염시키면
+  안 된다(실측: `start=22,979s` 한 단어 때문에 뒤 3,602단어가 전부 손상으로 걸렸다).
+- 같은 시각의 같은 글자는 한 번만 남긴다. 모델이 같은 구간을 두 번 뱉는 일이 있다
+  (실측 8,176단어 중 148단어). 지운 개수는 `duplicate_words_removed`로 남긴다.
+- `captions.json`의 `video_id`는 번들 이름으로 고정한다. 파일 이름에서 뽑으면
+  통합 취득의 `media.<format_id>.<lang>.srt` 때문에 `media.251-2`가 들어가 `merge`가
+  멈춘다.
 - overlap 병합은 원문과 raw speaker를 보존하고, 중복 제거 내역을 derived metadata에 남긴다.
 - 근거가 약하면 화자를 임의 확정하지 않고 `unresolved`로 둔다.
 

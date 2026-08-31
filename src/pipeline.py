@@ -390,10 +390,29 @@ def _fetch_sources(url: str, raw: Path, *, want_video: bool,
 
 
 def _stage_captions(srt: Path, raw: Path) -> Path:
+    """받아둔 srt 를 captions.json 으로 옮긴다.
+
+    `video_id` 는 **번들 이름**으로 덮어쓴다. `payload_from_srt` 는 파일 이름
+    (`<video_id>.<lang>.srt`)에서 뽑는데, 통합 취득은 포맷 id 로 이름을 짓기
+    때문에(`media.251-2.ko-orig.srt`) 그대로 두면 `media.251-2` 가 들어가고
+    `merge` 가 "video_id 가 다릅니다" 로 멈춘다.
+    """
     payload = fetch_youtube.payload_from_srt(srt)
+    payload["video_id"] = raw.parent.name
     target = raw / "captions.json"
     fetch_youtube.write_payload(payload, target)
     return target
+
+
+def _pin_captions_video_id(captions: Path, video_id: str) -> None:
+    """자막의 video_id 를 번들 이름에 맞춘다. 어긋나면 merge 가 멈춘다."""
+    try:
+        payload = _read_json(captions)
+    except (OSError, json.JSONDecodeError):
+        return
+    if payload.get("video_id") != video_id:
+        payload["video_id"] = video_id
+        _write_json(captions, payload)
 
 
 def stage_fetch(bundle: Path, url: str, *, force: bool = False,
@@ -451,6 +470,7 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False,
         # 원어 자동자막이 같이 안 왔을 때만 한 번 더 시도한다 (사람이 올린 자막).
         try:
             fetch_youtube.fetch(url, captions)
+            _pin_captions_video_id(captions, bundle.name)
         except Exception as error:  # 자막은 선택 자료다. 없어도 파이프라인은 진행한다.
             _log("  경고: 자막 취득 실패, 영어 용어 복원을 건너뛴다 (%s)" % error)
             # 자막이 원래 없는 영상과 취득이 고장난 것은 사람이 할 일이 다르다.

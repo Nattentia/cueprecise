@@ -130,14 +130,61 @@ class TimestampRepairTests(unittest.TestCase):
         self.assertGreaterEqual(last["end"], last["start"])
         self.assertLessEqual(last["end"] - last["start"], 1.0)
 
-    def test_reversed_start_is_pulled_back_to_previous_end(self) -> None:
+    def test_overlapping_speech_is_kept_and_sorted(self) -> None:
+        """앞 단어보다 이른 start 는 손상이 아니다. 겹쳐 말한 것이다."""
         payload = transcribe.parse_raw(response(
             annotation("가", "10.0s", "10.4s"),
-            annotation("나", "1.5s", "10.8s"),   # 앞 단어보다 이른 start
+            annotation("나", "1.5s", "1.8s"),    # 다른 화자의 맞장구
         ))
-        second = payload["words"][1]
-        self.assertAlmostEqual(second["start"], 10.4)
-        self.assertEqual(second["timestamp_repaired"], ["start"])
+        self.assertNotIn("timestamp_repairs", payload)
+        self.assertEqual([w["text"] for w in payload["words"]], ["나", "가"])
+        self.assertAlmostEqual(payload["words"][0]["start"], 1.5)
+
+    def test_one_out_of_range_word_does_not_poison_the_rest(self) -> None:
+        """이상치 하나가 뒤 단어를 전부 손상으로 만들면 안 된다.
+
+        실측(`AMvF8VrTXWg`)에서 start=22979.7s 짜리 단어 하나 때문에 뒤따르는
+        3,602단어가 전부 걸려 응답 전체가 거부됐다.
+        """
+        payload = transcribe.parse_raw(
+            response(annotation("가", "1.0s", "1.2s"),
+                     annotation("나", "999.0s", "999.2s"),   # 오디오 밖
+                     annotation("다", "2.0s", "2.2s"),
+                     annotation("라", "3.0s", "3.2s")),
+            audio_secs=10.0)
+        self.assertEqual(len(payload["timestamp_repairs"]), 2)   # 그 단어의 start/end
+        repaired = [w for w in payload["words"] if "timestamp_repaired" in w]
+        self.assertEqual([w["text"] for w in repaired], ["나"])
+        self.assertEqual([w["text"] for w in payload["words"]], ["가", "나", "다", "라"])
+
+    def test_range_check_is_skipped_without_a_duration(self) -> None:
+        """길이를 모르면 범위로 판정하지 않는다. 없는 근거로 고치지 않는다."""
+        payload = transcribe.parse_raw(response(
+            annotation("가", "1.0s", "1.2s"), annotation("나", "999.0s", "999.2s")))
+        self.assertNotIn("timestamp_repairs", payload)
+
+    def test_repeated_span_is_collapsed(self) -> None:
+        """모델이 같은 구간을 두 번 뱉으면 한 번만 남긴다.
+
+        실측(`AMvF8VrTXWg`)에서 8,176단어 중 148단어가 timestamp·글자는 같고
+        화자 라벨만 다른 채로 두 번 왔다.
+        """
+        payload = transcribe.parse_raw(response(
+            annotation("가", "1.0s", "1.2s"),
+            annotation("나", "1.2s", "1.5s"),
+            annotation("가", "1.0s", "1.2s", speaker="spk:1"),
+            annotation("나", "1.2s", "1.5s", speaker="spk:1"),
+        ))
+        self.assertEqual([w["text"] for w in payload["words"]], ["가", "나"])
+        self.assertEqual(payload["duplicate_words_removed"], 2)
+        self.assertEqual(payload["words"][0]["speaker"], "spk:0")
+
+    def test_same_word_at_a_different_time_is_kept(self) -> None:
+        """같은 말이라도 시각이 다르면 다른 발화다. 지우면 안 된다."""
+        payload = transcribe.parse_raw(response(
+            annotation("네", "1.0s", "1.2s"), annotation("네", "5.0s", "5.2s")))
+        self.assertEqual(len(payload["words"]), 2)
+        self.assertNotIn("duplicate_words_removed", payload)
 
     def test_missing_offsets_are_repaired_not_fatal(self) -> None:
         payload = transcribe.parse_raw(response(
