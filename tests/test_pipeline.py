@@ -780,6 +780,39 @@ class TranslationGuardTests(unittest.TestCase):
         self.assertFalse(pipeline._looks_translated(
             mixed, captions=mixed, captions_language="ko-orig", langs="ko-KR"))
 
+    def test_detects_translation_for_newly_covered_scripts(self) -> None:
+        """표에 새로 넣은 언어도 요청 언어만으로 번역문을 잡는다."""
+        english = "Hello, today I will talk about self supervised learning"
+        for langs in ("bn-BD", "ta-IN", "km-KH", "am-ET", "my-MM", "si-LK",
+                      "lo-LA", "te-IN", "ml-IN", "kn-IN", "pa-IN", "gu-IN"):
+            with self.subTest(langs=langs):
+                self.assertTrue(
+                    pipeline._looks_translated(english, captions="", langs=langs))
+
+    def test_new_scripts_are_recognised_in_their_own_text(self) -> None:
+        """새 문자 체계의 정상 전사를 번역문으로 오판하지 않는다."""
+        samples = {
+            "bn-BD": "আমি আজ স্বয়ংক্রিয় শিক্ষার বিষয়ে কথা বলব বন্ধুরা সবাই",
+            "ta-IN": "நான் இன்று இயந்திர கற்றல் பற்றி பேசுவேன் நண்பர்களே வணக்கம்",
+            "km-KH": "ថ្ងៃនេះខ្ញុំនឹងនិយាយអំពីការរៀនរបស់ម៉ាស៊ីនជាមួយអ្នកទាំងអស់គ្នា",
+            "am-ET": "ዛሬ ስለ ማሽን ትምህርት እናገራለሁ ጓደኞቼ ሁላችሁም እንኳን ደህና መጣችሁ",
+        }
+        for langs, text in samples.items():
+            with self.subTest(langs=langs):
+                self.assertFalse(
+                    pipeline._looks_translated(text, captions="", langs=langs))
+
+    def test_dominant_script_reads_new_blocks(self) -> None:
+        self.assertEqual(
+            pipeline._dominant_script("আমি বাংলা ভাষায় কথা বলি প্রতিদিন"), "bengali")
+        self.assertEqual(
+            pipeline._dominant_script("ជំរាបសួរ អ្នកទាំងអស់គ្នា"), "khmer")
+
+    def test_hangul_and_kana_blocks_do_not_collide(self) -> None:
+        """호환 자모(ㄱ~ㆎ)와 가나 블록이 서로를 삼키지 않는다."""
+        self.assertEqual(pipeline._script_counts("ㄱㄴㄷ")["hangul"], 3)
+        self.assertEqual(pipeline._script_counts("ひらがな")["japanese"], 4)
+
     def test_short_captions_do_not_trigger_on_their_own(self) -> None:
         """자막이 몇 글자뿐이면 근거로 쓰지 않는다."""
         self.assertFalse(pipeline._looks_translated(
