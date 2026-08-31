@@ -27,6 +27,11 @@
 | `src/context.py` | claude | 읽기만 |
 | `src/visual.py` | claude | 읽기만 |
 | `src/mcp_server.py` | claude | 읽기만 |
+| `src/runtime.py` | codex | 읽기만 |
+| `src/configuration.py` | codex | 읽기만 |
+| `src/installer_support.py` | codex | 읽기만 |
+| `installer/**` | codex | 읽기만 |
+| `tests/test_installer_support.py` | codex | 읽기만 |
 | `src/chapters.py` | claude | 읽기만 |
 | `src/summary.py` | claude | 읽기만 |
 | `tests/test_fetch_youtube.py`, `tests/test_render.py`, `tests/test_pipeline.py`, `tests/test_context.py`, `tests/test_visual.py` | claude | 읽기만 |
@@ -122,6 +127,20 @@
 
 - `origin`은 `"gemini"` 또는 `"youtube"`.
 - 기본 골격은 gemini. youtube는 빈 구간을 메우는 용도로만 들어간다.
+  gemini 단어는 고치지 않는다. 삽입만 한다.
+- 삽입은 두 조건을 **모두** 만족할 때만 한다.
+  1. 앞 단어 `end`와 다음 단어 `start` 간격 > 1.5초
+  2. 그 다음 단어가 한국어 조사로 시작 (`의` `와` `과` `을` `를` `라는`
+     `이라는` `라고` `이라고`)
+- 따라서 **한국어가 아닌 영상에서는 `youtube_words_inserted`가 항상 0이다.**
+  코드가 그렇게 정해져 있다. 이 단계는 Gemini가 영어 용어를 한글 음차로
+  뭉개는 현상을 되돌리는 장치이므로, 대상 언어가 아닌 영상에서 0이 나오는
+  것은 실패가 아니라 조건 미충족이다.
+- **다른 언어로 넓힐지는 결정하지 않았다.** 영어 영상 1편 실측에서는 자막이
+  보탤 것이 없었으나(`DECISIONS/claude.md` 2026-08-31) n=1이라 일반화하지
+  않는다. 넓히려면 표본을 더 모은 뒤 정한다.
+- 영어 영상에서도 자막은 계속 받는다. 4절 번역문 가드, 언어 판정, 보관에
+  쓴다. 다만 `merged.json` 본문에는 들어가지 않는다.
 
 ## 3. render.py 입력 규약
 
