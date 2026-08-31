@@ -416,10 +416,8 @@ data/<video_id>/
   코드는 없다. 근거 검색은 `merged.json`과 `index.sqlite3`가 한다.
 
 - `context.py`는 SQLite에 transcript span, chapter, entity/term, speaker, frame을 색인한다.
-- 요약은 파일로 만들지 않고 `index.sqlite3`의 `metadata` 테이블에 둔다. 번들에
-  파일을 하나 더 만들지 않기 위해서다. 색인은 통째로 다시 만들어 교체하므로,
-  `build_index`가 교체 전에 기존 요약을 읽어 새 색인으로 옮긴다. 요약은 전사에서
-  다시 만들어낼 수 없는 자료(호스트가 쓴 문장)이기 때문이다.
+- 요약은 파일로 만들지 않고 `index.sqlite3`의 `metadata` 테이블에 둔다.
+  형식과 보관 규칙은 14절이 정한다.
 - 각 검색 결과는 최소 `video_id`, `start`, `end`, `text`, `source_path`,
   `source_kind`, `confidence`를 반환한다.
 - 답변은 검색된 transcript/frame 근거와 timestamp를 포함한다.
@@ -486,3 +484,120 @@ data/<video_id>/
   지시가 있었으면 받지 않는다.
 - 네트워크를 쓰기 전에 그 결과를 쓸 수 있는지 먼저 확인한다. 전사가 없는
   bundle에서 프레임을 요청하면 영상을 받기 전에 실패해야 한다.
+
+## 13. chapters.json — 챕터 색인
+
+`chapters.py` 출력. `derived/chapters.json`.
+
+```json
+{
+  "schema_version": 1,
+  "video_id": "87DyyMV0kCY",
+  "transcript_fingerprint": "sha256:0929b5...",
+  "generation": {
+    "boundaries": "local",
+    "titles": "youtube+local-keywords",
+    "quality": "provisional"
+  },
+  "chapters": [
+    {
+      "id": "chapter-01",
+      "start": 10.8,
+      "end": 262.8,
+      "title": "지하 게시판이 생긴 경위",
+      "title_source": "local-keywords",
+      "keywords": ["ai", "task", "security"],
+      "excerpts": ["When we give AI agents these difficult tasks, ..."],
+      "needs_title": true
+    }
+  ]
+}
+```
+
+- `id`는 `chapter-01` 형식으로 1부터 센다. 요약이 이 값으로 챕터를 가리키므로
+  번호를 다시 매기면 요약의 참조가 끊긴다.
+- 챕터 사이에 겹침도 빈틈도 없다. 앞 챕터의 `end`가 다음 챕터의 `start`다.
+  첫 챕터는 첫 발화에서 시작하므로 영상 머리의 무음은 어느 챕터에도 안 든다.
+- 경계 길이는 목표 300초, 최소 120초, 최대 480초. 문장 끝을 찾아 자른다.
+- **`title`은 100자를 넘지 않는다.** 넘겨 받으면 거절한다. 상한이 없던 때
+  제목이 172자(4문장+이모지)까지 늘어난 적이 있다.
+- `title_source`는 제목의 출처다. `youtube`(영상이 단 챕터), `local-keywords`
+  (키워드 나열), `host-llm`(호스트가 지음).
+- `needs_title`이 참이면 제목이 키워드 나열이라는 뜻이다. 호스트가
+  `ytx_set_chapter_titles`로 제목을 넣는다. **그때 경계는 바뀌지 않는다** —
+  제목만 갈아끼운다. 경계가 함께 흔들리면 요약의 시각 인용이 어긋난다.
+- `transcript_fingerprint`는 이 챕터를 만든 전사의 지문이다. 전사가 바뀌면
+  챕터를 다시 만든다.
+- `generation.quality`는 `provisional`(제목이 아직 키워드) 또는
+  `enhanced`(호스트가 제목을 하나라도 지음). `generation.titles`는
+  `youtube+local-keywords` 또는 `host-llm+fallback`.
+
+## 14. 요약
+
+**요약은 파일이 아니다.** `index.sqlite3`의 `metadata` 테이블에 `summary`
+키로 둔다. 번들에 파일을 하나 더 만들지 않기 위해서다. 10절의 산출물 목록에
+요약이 없는 이유가 이것이다.
+
+### 보관의 절대 규칙
+
+색인은 재생성할 때 통째로 갈아엎는다. 그러므로 `build_index`는 **교체하기
+전에 기존 요약을 읽어 새 색인으로 옮긴다.** 이 이관을 빼면 색인을 다시 만들
+때마다 요약이 사라진다.
+
+**요약은 전사에서 다시 만들어낼 수 없는 유일한 자료다.** 전사·자막·챕터·
+프레임은 모두 raw에서 재생성되지만, 호스트가 쓴 요약 문장은 재생성되지
+않는다. 이 규칙을 지우는 변경은 데이터 손실이다.
+
+### 형식
+
+마크다운이고, **첫 줄이 지문 주석이다.**
+
+```text
+<!-- ytx-summary: {"chapters_fingerprint":"sha256:...","generation":"local-extractive","schema_version":1,"transcript_fingerprint":"sha256:...","video_id":"87DyyMV0kCY"} -->
+
+# 영상 제목
+
+## 한눈에 보기
+
+...
+
+## 핵심 내용
+
+- 요점 [00:03:27]
+
+## 챕터별 정리
+
+### 1. 챕터 제목 [00:00:11]
+
+- 항목
+
+## 주요 용어
+
+- **용어**: 뜻 [00:12:16]
+```
+
+- 주석은 `<!-- ytx-summary:` 로 시작하고 ` -->` 로 끝난다. JSON은 키 정렬,
+  공백 없음.
+- **지문 두 개가 요약의 신선도를 판정한다.** `transcript_fingerprint`가 현재
+  전사와 다르거나 `chapters_fingerprint`가 현재 챕터와 다르면 그 요약은 낡은
+  것이다. 이 줄을 없애면 전사를 새로 떠도 옛 요약이 새것인 척 나온다.
+- `generation`은 `local-extractive`(코드가 전사에서 뽑음) 또는
+  `host-llm`(호스트가 씀). `local-extractive`면 `needs_host_summary`가 참이고
+  호스트가 `ytx_set_summary`로 한 번 개선할 수 있다.
+- 모든 인용에 `[시:분:초]`를 붙인다. 근거 없는 문장을 쓰지 않는다.
+
+### 상한
+
+넘치면 자르는 것이 아니라 거절한다.
+
+| 항목 | 상한 |
+|---|---|
+| 한눈에 보기 | 1600자 |
+| 핵심 내용 | 12개, 각 600자 |
+| 챕터별 항목 | 챕터당 3개, 각 600자 |
+| 주요 용어 | 20개, 용어 100자 / 뜻 600자 |
+
+### 호환
+
+파일로 보관하던 시절의 `derived/summary.md`는 읽기만 지원한다. 새로 만들지
+않는다.
