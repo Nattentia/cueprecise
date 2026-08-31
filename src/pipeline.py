@@ -356,14 +356,15 @@ def _raw_meta(job: dict[str, Any], chunk: dict[str, Any], langs: str) -> dict[st
 
 # 번역문 가드 ------------------------------------------------------------------
 #
-# Gemini 는 소리가 흐릿하면 "받아적기" 대신 "알아듣고 영어로 다시 쓰기" 로
+# Gemini 는 소리가 흐릿하면 "받아적기" 대신 "알아듣고 다른 언어로 다시 쓰기" 로
 # 미끄러진다 (실측: DECISIONS/claude.md 2026-08-31). 번역문은 단어 수도 많고
 # 문장도 자연스러워 사람 눈에는 정상으로 보이지만 원문 근거로 쓸 수 없다.
 #
-# 판단 근거 둘. 이미 공짜로 가진 자료만 쓴다.
-#   1. 유튜브 원어 자막이 한글투성이인데 전사에 한글이 없다
-#   2. 자막이 없어도, ko 를 요청했는데 한글이 없다
-# 둘 다 임계값을 넉넉히 잡아 영어 용어가 섞인 한국어 강의를 오탐하지 않는다.
+# 판정은 **문자 종류**로 한다. 한국어를 특별 취급하지 않는다 — 일본어 영상이
+# 영어로 번역돼 와도 같은 규칙으로 잡힌다. 근거 둘 다 이미 공짜로 가진 자료다.
+#   1. 같은 시간대 원어 자막의 문자 종류와 전사의 문자 종류가 다르다
+#   2. 자막이 없어도, 요청한 언어의 문자 종류와 전사가 다르다
+# 임계값은 영어 용어가 섞인 한국어 강의를 오탐하지 않게 잡는다.
 
 _TRANSLATION_MIN_CHARS = 40
 """이보다 짧은 표본은 근거로 쓰지 않는다."""
@@ -371,23 +372,96 @@ _TRANSLATION_MIN_CHARS = 40
 _TRANSLATION_CAPTION_MIN_CHARS = 20
 """자막 표본의 최소 길이. 실제 자막 파일은 수천 자라 넉넉히 통과한다."""
 
-_TRANSLATION_CAPTION_SHARE = 0.3
-"""자막이 이만큼 한글이면 원문이 한국어라고 본다."""
+_TRANSLATION_DOMINANT_SHARE = 0.3
+"""이 비율을 넘는 문자 종류가 그 글의 문자 체계다."""
 
-_TRANSLATION_TRANSCRIPT_SHARE = 0.05
-"""전사가 이보다 한글이 적으면 한국어를 받아적은 것이 아니다."""
+_TRANSLATION_TRACE_SHARE = 0.05
+"""기대한 문자가 이보다 적으면 그 언어를 받아적은 것이 아니다."""
+
+# 언어 코드 앞자리 -> 그 언어가 쓰는 문자 종류. 여기 없는 언어는 요청 언어만
+# 으로는 판정하지 않는다 (자막 근거가 있으면 그것으로 판정한다).
+_LANGUAGE_SCRIPTS: dict[str, str] = {
+    "ko": "hangul", "ja": "japanese", "zh": "han", "yue": "han",
+    "ru": "cyrillic", "uk": "cyrillic", "bg": "cyrillic", "sr": "cyrillic",
+    "el": "greek", "he": "hebrew", "ar": "arabic", "fa": "arabic",
+    "hi": "devanagari", "mr": "devanagari", "ne": "devanagari",
+    "th": "thai", "ka": "georgian", "hy": "armenian",
+    "en": "latin", "de": "latin", "fr": "latin", "es": "latin",
+    "pt": "latin", "it": "latin", "nl": "latin", "pl": "latin",
+    "tr": "latin", "id": "latin", "vi": "latin", "sv": "latin",
+}
 
 
-def _hangul_share(text: str) -> float:
-    """글자 중 한글 비율. 숫자·기호·공백은 세지 않는다."""
-    hangul = latin = 0
+def _script_counts(text: str) -> dict[str, int]:
+    """글자를 문자 종류별로 센다. 숫자·기호·공백은 세지 않는다."""
+    counts: dict[str, int] = {}
+
+    def add(name: str) -> None:
+        counts[name] = counts.get(name, 0) + 1
+
     for char in text:
+        code = ord(char)
         if "가" <= char <= "힣" or "ㄱ" <= char <= "ㆎ":
-            hangul += 1
+            add("hangul")
+        elif 0x3040 <= code <= 0x30FF:            # 히라가나·가타카나
+            add("japanese")
+        elif 0x4E00 <= code <= 0x9FFF:            # 한자
+            add("han")
+        elif 0x0400 <= code <= 0x04FF:
+            add("cyrillic")
+        elif 0x0370 <= code <= 0x03FF:
+            add("greek")
+        elif 0x0590 <= code <= 0x05FF:
+            add("hebrew")
+        elif 0x0600 <= code <= 0x06FF:
+            add("arabic")
+        elif 0x0900 <= code <= 0x097F:
+            add("devanagari")
+        elif 0x0E00 <= code <= 0x0E7F:
+            add("thai")
+        elif 0x10A0 <= code <= 0x10FF:
+            add("georgian")
+        elif 0x0530 <= code <= 0x058F:
+            add("armenian")
         elif char.isascii() and char.isalpha():
-            latin += 1
-    total = hangul + latin
-    return (hangul / total) if total else 0.0
+            add("latin")
+    return counts
+
+
+def _dominant_script(text: str) -> str | None:
+    """그 글의 문자 체계. 어느 것도 뚜렷하지 않으면 None.
+
+    일본어는 한자를 섞어 쓰므로 가나가 조금이라도 뚜렷하면 japanese 로 본다.
+    그러지 않으면 한자 비중이 큰 일본어 문장이 중국어로 잡힌다.
+    """
+    counts = _script_counts(text)
+    total = sum(counts.values())
+    if not total:
+        return None
+    if counts.get("japanese", 0) / total >= _TRANSLATION_TRACE_SHARE:
+        return "japanese"
+    name, count = max(counts.items(), key=lambda item: item[1])
+    return name if count / total >= _TRANSLATION_DOMINANT_SHARE else None
+
+
+def _script_share(text: str, script: str) -> float:
+    counts = _script_counts(text)
+    total = sum(counts.values())
+    if not total:
+        return 0.0
+    share = counts.get(script, 0)
+    if script == "japanese":
+        # 가나 없이 한자만 나온 구간도 일본어일 수 있다.
+        share += counts.get("han", 0)
+    return share / total
+
+
+def _requested_script(langs: str) -> str | None:
+    """요청한 언어들이 한 문자 체계로 모이면 그 이름."""
+    scripts = {_LANGUAGE_SCRIPTS.get(code.strip().lower().split("-")[0])
+               for code in langs.split(",") if code.strip()}
+    scripts.discard(None)
+    return scripts.pop() if len(scripts) == 1 else None
 
 
 def _captions_are_original(language: str | None) -> bool:
@@ -395,26 +469,35 @@ def _captions_are_original(language: str | None) -> bool:
 
     `-orig` 만 원어다. `ko` / `en` 같은 트랙은 YouTube 가 기계 번역한 것일 수
     있고, 실제로 영어 영상에 `ko` 를 요청하면 한국어 번역 자막이 내려온다.
-    번역된 자막을 "원문이 한국어" 의 근거로 쓰면 멀쩡한 영어 전사를 번역문으로
-    오판해 막는다.
+    번역된 자막을 원어 근거로 쓰면 멀쩡한 전사를 번역문으로 오판해 막는다.
     """
     return bool(language) and str(language).endswith("-orig")
 
 
+def _expected_script(*, captions: str, langs: str,
+                     captions_language: str | None) -> str | None:
+    """이 구간의 전사가 어느 문자 체계여야 하는가. 모르면 None."""
+    if (_captions_are_original(captions_language)
+            and len(captions) >= _TRANSLATION_CAPTION_MIN_CHARS):
+        found = _dominant_script(captions)
+        if found is not None:
+            return found
+    return _requested_script(langs)
+
+
 def _looks_translated(transcript: str, *, captions: str, langs: str,
                       captions_language: str | None = None) -> bool:
-    """받아적기가 아니라 번역문으로 보이는가."""
+    """받아적기가 아니라 번역문으로 보이는가.
+
+    기대하는 문자 체계를 정한 뒤, 전사에 그 문자가 사실상 없으면 번역문이다.
+    """
     if len(transcript) < _TRANSLATION_MIN_CHARS:
         return False
-    if _hangul_share(transcript) >= _TRANSLATION_TRANSCRIPT_SHARE:
+    expected = _expected_script(captions=captions, langs=langs,
+                                captions_language=captions_language)
+    if expected is None:
         return False
-    korean_expected = (_captions_are_original(captions_language)
-                       and len(captions) >= _TRANSLATION_CAPTION_MIN_CHARS
-                       and _hangul_share(captions) >= _TRANSLATION_CAPTION_SHARE)
-    if not korean_expected:
-        korean_expected = any(code.strip().lower().startswith("ko")
-                              for code in langs.split(","))
-    return korean_expected
+    return _script_share(transcript, expected) < _TRANSLATION_TRACE_SHARE
 
 
 def _captions_evidence(bundle: Path) -> tuple[str, str | None]:
@@ -578,7 +661,8 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
             job["status"] = "partial"
             _save_job(bundle, job)
             raise StageError(
-                "청크 %d 는 받아적기가 아니라 번역문으로 보인다 (한글 %.0f%%). "
+                "청크 %d 는 받아적기가 아니라 번역문으로 보인다 "
+                "(전사 문자 체계 %s, 기대 %s). "
                 "원문이 아니므로 근거로 쓸 수 없어 여기서 멈춘다 — 남은 청크의 "
                 "호출을 아낀다. "
                 "이어가려면 --language 로 원어를 지정하고 같은 명령을 다시 "
@@ -588,7 +672,9 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
                 "(호출은 쓰지 않는다). 판정이 틀렸다면 그 언어를 --language 로 "
                 "지정하거나 `python src/transcribe.py --from-raw %s <out.json>` "
                 "로 호출 없이 수동 복구할 수 있다."
-                % (chunk["index"], 100 * _hangul_share(text),
+                % (chunk["index"], _dominant_script(text) or "불명",
+                   _expected_script(captions=in_range, langs=langs,
+                                    captions_language=captions_language) or "불명",
                    _raw_path(bundle, chunk))
             )
 

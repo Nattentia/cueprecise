@@ -748,10 +748,10 @@ class OptionalRenderTests(unittest.TestCase):
 class TranslationGuardTests(unittest.TestCase):
     """Gemini 가 받아적기 대신 번역문을 돌려주는 경우를 잡는다."""
 
-    def test_hangul_share_counts_only_letters(self) -> None:
-        self.assertGreater(pipeline._hangul_share("안녕하세요 여러분"), 0.9)
-        self.assertEqual(pipeline._hangul_share("Hello everyone, 2026"), 0.0)
-        self.assertEqual(pipeline._hangul_share("   "), 0.0)
+    def test_script_share_counts_only_letters(self) -> None:
+        self.assertGreater(pipeline._script_share("안녕하세요 여러분", "hangul"), 0.9)
+        self.assertEqual(pipeline._script_share("Hello everyone, 2026", "hangul"), 0.0)
+        self.assertEqual(pipeline._script_share("   ", "hangul"), 0.0)
 
     def test_detects_translation_against_captions(self) -> None:
         korean = "안녕하세요 오늘은 자기지도학습에 대해 말씀드리겠습니다"
@@ -1033,3 +1033,56 @@ class ChunkRangeGuardTests(unittest.TestCase):
         self.assertTrue(pipeline._looks_translated(
             english, captions=pipeline._captions_in_range(self.CUES, 0.0, 100.0),
             captions_language="ko-orig", langs="auto"))
+
+
+class ScriptGuardTests(unittest.TestCase):
+    """번역문 판정은 문자 종류로 한다. 한국어를 특별 취급하지 않는다."""
+
+    KO = "안녕하세요 오늘은 자기지도학습에 대해 말씀드리겠습니다 여러분"
+    EN = "Hello everyone today I will talk about self supervised learning"
+    JA = "こんにちは今日は自己教師あり学習についてお話しします皆さん"
+    ZH = "大家好今天我要讲的是自监督学习的最新进展和应用"
+
+    def test_script_profile_names_the_dominant_script(self) -> None:
+        self.assertEqual(pipeline._dominant_script(self.KO), "hangul")
+        self.assertEqual(pipeline._dominant_script(self.EN), "latin")
+        self.assertEqual(pipeline._dominant_script(self.JA), "japanese")
+        self.assertEqual(pipeline._dominant_script(self.ZH), "han")
+        self.assertIsNone(pipeline._dominant_script("2026 :: 12.5 %"))
+
+    def test_translation_detected_for_any_source_language(self) -> None:
+        for name, captions in (("한국어", self.KO), ("일본어", self.JA),
+                               ("중국어", self.ZH)):
+            with self.subTest(source=name):
+                self.assertTrue(pipeline._looks_translated(
+                    self.EN, captions=captions, captions_language="xx-orig",
+                    langs="auto"), "%s 영상의 영어 번역문을 놓쳤다" % name)
+
+    def test_matching_script_passes(self) -> None:
+        for name, text in (("한국어", self.KO), ("영어", self.EN),
+                           ("일본어", self.JA), ("중국어", self.ZH)):
+            with self.subTest(source=name):
+                self.assertFalse(pipeline._looks_translated(
+                    text, captions=text, captions_language="xx-orig", langs="auto"))
+
+    def test_english_terms_in_korean_lecture_still_pass(self) -> None:
+        mixed = ("self supervised learning 이라는 방법을 오늘 설명드리겠습니다 "
+                 "transformer 구조와 attention 을 함께 봅니다")
+        self.assertFalse(pipeline._looks_translated(
+            mixed, captions=mixed, captions_language="ko-orig", langs="ko-KR"))
+
+    def test_requested_language_rule_covers_more_than_korean(self) -> None:
+        """자막이 없어도 요청 언어의 문자 종류와 어긋나면 잡는다."""
+        self.assertTrue(pipeline._looks_translated(
+            self.EN, captions="", captions_language=None, langs="ja-JP"))
+        self.assertTrue(pipeline._looks_translated(
+            self.EN, captions="", captions_language=None, langs="ko-KR"))
+        self.assertFalse(pipeline._looks_translated(
+            self.EN, captions="", captions_language=None, langs="en-US"))
+        self.assertFalse(pipeline._looks_translated(
+            self.EN, captions="", captions_language=None, langs="auto"))
+
+    def test_unknown_requested_language_does_not_block(self) -> None:
+        """문자 종류를 모르는 언어 코드는 근거로 쓰지 않는다."""
+        self.assertFalse(pipeline._looks_translated(
+            self.EN, captions="", captions_language=None, langs="sw-KE"))
