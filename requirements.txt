@@ -7,4 +7,4 @@
 #   tesseract          프레임 OCR (선택)
 
 yt-dlp>=2025.1.15          # 오디오·영상·자막·메타데이터 취득
-google-genai>=1.0.0        # transcribe 단계에서만 쓴다
+google-genai>=2.20.0        # transcribe 단계에서만 쓴다
