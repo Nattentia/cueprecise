@@ -4,6 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
+[![CI](https://github.com/Nattentia/ytx/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/ytx/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/tests-319%20passing-brightgreen.svg)](#테스트)
 
 Gemini 전사와 YouTube 자막을 시각 기준으로 합쳐, 한국어 본문과 영어 용어를 모두
@@ -300,6 +301,8 @@ python -m unittest discover -s tests
   정의한다. 인터페이스에 대해서는 이 파일이 유일한 진실이다.
 - [`DECISIONS/`](DECISIONS/) — 설계 결정 기록. 무엇을 왜 그렇게 정했고 무엇을
   기각했는지 남아 있다.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — 개발 환경, 변경 원칙, PR 절차.
+- [`SECURITY.md`](SECURITY.md) — 비공개 취약점 신고 절차.
 
 ## 라이선스
 
