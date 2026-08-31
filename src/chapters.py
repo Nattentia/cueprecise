@@ -241,6 +241,27 @@ def _evidence(words: list[dict[str, Any]], start: float, end: float, *,
     return keywords, excerpts
 
 
+def _clamp_title(title: str) -> str:
+    """YouTube 원본 목차 제목을 한 줄 길이로 줄인다.
+
+    원본 목차 여러 개가 한 chapter 로 묶이면 제목이 통째로 이어 붙는다. 실측
+    사례에서 한 제목이 네 문장 + 이모지로 172자였다. 목차는 훑어보는 물건인데
+    그 길이면 훑을 수가 없다.
+
+    자를 때는 구분 기호를 먼저 찾는다. 글자 수로만 끊으면 단어 중간에서 잘려
+    무슨 말인지 알 수 없게 된다. 잘랐다는 사실은 말줄임표로 남긴다. 원본은
+    `source_title` 로 두지 않고 여기서만 줄이므로, 경계와 근거는 그대로다.
+    """
+    collapsed = " ".join(str(title).split())
+    if len(collapsed) <= MAX_TITLE_CHARS:
+        return collapsed
+    window = collapsed[:MAX_TITLE_CHARS]
+    cut = max(window.rfind(mark) for mark in (". ", "? ", "! ", " · ", ": ", " "))
+    if cut < MAX_TITLE_CHARS // 2:
+        cut = MAX_TITLE_CHARS
+    return window[:cut].rstrip(" ·:.,?!") + "…"
+
+
 def _fallback_title(keywords: list[str], excerpts: list[str], index: int) -> str:
     if keywords:
         return " · ".join(keywords[:4])[:MAX_TITLE_CHARS]
@@ -283,6 +304,8 @@ def build(bundle: Path, *, url: str | None = None) -> dict[str, Any]:
             document_frequency=document_frequency, document_count=len(spans),
         )
         source_title = span.get("source_title")
+        if source_title:
+            source_title = _clamp_title(source_title)
         chapters.append({
             "id": f"chapter-{index + 1:02d}",
             "start": round(span["start"], 3),

@@ -112,6 +112,46 @@ def _optional_records(bundle: Path, filename: str, key: str, kind: str) -> Itera
         }
 
 
+SUMMARY_KEY = "summary"
+
+
+def read_summary(bundle: Path) -> str | None:
+    """색인에 보관한 요약. 없으면 None."""
+    index_path = bundle / "index.sqlite3"
+    if not index_path.exists():
+        return None
+    try:
+        connection = sqlite3.connect(index_path)
+    except sqlite3.Error:
+        return None
+    try:
+        row = connection.execute(
+            "SELECT value FROM metadata WHERE key = ?", (SUMMARY_KEY,)
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        connection.close()
+    return row[0] if row else None
+
+
+def write_summary(bundle: Path, payload: str) -> None:
+    """요약을 색인 metadata 에 넣는다. 파일을 따로 만들지 않는다."""
+    index_path = bundle / "index.sqlite3"
+    if not index_path.exists():
+        raise FileNotFoundError("index.sqlite3 가 없습니다. index 단계를 먼저 실행하세요.")
+    connection = sqlite3.connect(index_path)
+    try:
+        connection.execute(
+            "INSERT INTO metadata VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (SUMMARY_KEY, payload),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def build_index(bundle: Path) -> Path:
     transcript_path = bundle / "derived" / "merged.json"
     if not transcript_path.exists():
@@ -126,6 +166,10 @@ def build_index(bundle: Path) -> Path:
     records.extend(_optional_records(bundle, "frames.json", "frames", "frame"))
 
     index_path = bundle / "index.sqlite3"
+    # 색인은 임시 파일에 새로 만들어 통째로 교체한다. 요약은 전사에서 다시
+    # 만들어낼 수 없는 자료(호스트가 쓴 문장)라, 교체 전에 읽어 두지 않으면
+    # 재색인 한 번에 조용히 사라진다.
+    carried_summary = read_summary(bundle)
     bundle.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=".index.", suffix=".sqlite3", dir=bundle)
     os.close(descriptor)
@@ -156,6 +200,9 @@ def build_index(bundle: Path) -> Path:
             )
             connection.execute("INSERT INTO metadata VALUES (?, ?)", ("schema_version", "2"))
             connection.execute("INSERT INTO metadata VALUES (?, ?)", ("video_id", video_id))
+            if carried_summary is not None:
+                connection.execute("INSERT INTO metadata VALUES (?, ?)",
+                                   (SUMMARY_KEY, carried_summary))
             connection.executemany(
                 """INSERT INTO evidence
                 (video_id, start, end, text, source_path, source_kind, speaker,

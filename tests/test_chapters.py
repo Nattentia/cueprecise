@@ -77,3 +77,23 @@ class ChapterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TitleClampTests(unittest.TestCase):
+    def test_long_youtube_title_is_shortened_at_a_boundary(self) -> None:
+        long_title = ("이물 반응으로 인한 흉터 조직 형성 및 신호 감도 감소 문제 해결책 "
+                      "🧪 데이트 중 진심을 읽는다? 뉴로마케팅과 일반인 타깃 비침습 뇌파 모자의 대중화 "
+                      "대한민국 반도체 인프라를 활용한 추격: BCI 사업단장 공모와 국가 과제의 시작 "
+                      "빌 게이츠, 제프 베이조스, 샘 올트먼의 BCI 투자 경쟁")
+        clamped = chapters._clamp_title(long_title)
+        self.assertLessEqual(len(clamped), chapters.MAX_TITLE_CHARS + 1)
+        self.assertTrue(clamped.startswith("이물 반응으로"))
+        self.assertTrue(clamped.endswith("…"))
+        self.assertNotIn("  ", clamped)
+
+    def test_short_title_is_left_alone(self) -> None:
+        self.assertEqual(chapters._clamp_title("생물학적 신경망과 컴퓨터의 결합"),
+                         "생물학적 신경망과 컴퓨터의 결합")
+
+    def test_newlines_are_collapsed(self) -> None:
+        self.assertEqual(chapters._clamp_title("앞줄\n\n뒷줄"), "앞줄 뒷줄")

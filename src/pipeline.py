@@ -525,14 +525,57 @@ def stage_plan(bundle: Path, url: str, *, chunk_max_secs: float, overlap_secs: f
             _log("  기존 계획 재사용: 청크 %d개" % len(job["chunks"]))
             return job
         _log("  fingerprint/config 변경 감지, 계획을 다시 세운다")
+        previous = job
+    else:
+        previous = None
 
     job = audio.create_job(
         source, bundle, bundle.name, url,
         chunk_max_secs=chunk_max_secs, overlap_secs=overlap_secs,
         language_codes=language_codes,
     )
-    _log("  청크 %d개" % len(job["chunks"]))
+    carried = _carry_chunk_progress(previous, job, bundle)
+    if carried:
+        _save_job(bundle, job)
+        _log("  청크 %d개 (완료 기록 %d개 보존)" % (len(job["chunks"]), carried))
+    else:
+        _log("  청크 %d개" % len(job["chunks"]))
     return job
+
+
+def _carry_chunk_progress(previous: dict[str, Any] | None, job: dict[str, Any],
+                          bundle: Path) -> int:
+    """경계가 그대로인 청크의 완료 기록을 새 계획으로 옮긴다.
+
+    재계획은 설정이 바뀌었을 때만 돈다. 그런데 바뀐 설정이 청크 경계와 무관한
+    것이면(예: 나중에 추가된 필드) 이미 끝낸 전사가 그대로 유효한데도 장부만
+    `planned` 로 초기화돼 왔다. 그러면 `status` 가 0/N 을 보고하고, 사람은
+    분석이 안 된 줄 알고 다시 돌린다.
+
+    경계(start/end)와 전사 파일이 모두 그대로일 때만 옮긴다. 경계가 옮겨갔으면
+    옛 전사는 시각이 어긋나므로 넘기지 않는다. 실제로 그 응답을 다시 써도
+    되는지는 transcribe 단계의 `_reusable_raw` 가 응답 원문의 꼬리표로 다시
+    판정하므로, 여기서 옮긴 기록이 잘못된 재사용을 만들지는 않는다.
+    """
+    if not previous:
+        return 0
+    by_bounds = {(float(c["start"]), float(c["end"])): c
+                 for c in previous.get("chunks") or []}
+    carried = 0
+    for chunk in job["chunks"]:
+        old = by_bounds.get((float(chunk["start"]), float(chunk["end"])))
+        if not old or old.get("status") != "complete":
+            continue
+        if not (bundle / chunk["transcript_path"]).exists():
+            continue
+        chunk["status"] = "complete"
+        chunk["attempts"] = old.get("attempts", chunk.get("attempts", 0))
+        carried += 1
+    if carried and carried == len(job["chunks"]):
+        job["status"] = "complete"
+    elif carried:
+        job["status"] = "partial"
+    return carried
 
 
 def _pending_chunks(job: dict[str, Any], bundle: Path) -> list[dict[str, Any]]:
@@ -1259,6 +1302,25 @@ def run(url: str, *, bundle_root: Path = Path("data"),
     return summary
 
 
+def _guard_state(job: dict[str, Any], complete: int) -> str:
+    """번역문 검사가 어느 상태인지. `null` 은 돌려주지 않는다.
+
+    CONTRACT 4절은 판정하지 않았다는 사실을 남기라고 한다. 그런데 값을 쓰는
+    곳이 transcribe 단계뿐이라, 그 단계를 아직 돌리지 않은 번들은 키가 없어서
+    `null` 이 나갔다. 읽는 쪽에서 "검사하고 통과" 와 "검사 자체를 안 함" 이
+    구분되지 않는다.
+
+      active   검사했고 통과
+      skipped  검사했으나 근거(원어 자막·요청 언어·메타데이터)가 없었다
+      not-run  전사 단계를 아직 돌리지 않았다
+      unknown  전사는 끝났는데 기록이 없다 (기록이 없던 시절의 번들)
+    """
+    recorded = job.get("translation_guard")
+    if recorded in ("active", "skipped"):
+        return recorded
+    return "unknown" if complete else "not-run"
+
+
 def status(bundle: Path, *, ledger: Path | None = None, api_key: str | None = None,
            daily_limit: int = DEFAULT_DAILY_LIMIT) -> dict[str, Any]:
     job_path = bundle / "job.json"
@@ -1267,13 +1329,27 @@ def status(bundle: Path, *, ledger: Path | None = None, api_key: str | None = No
     if job_path.exists():
         job = _read_json(job_path)
         info["status"] = job["status"]
-        # 번역문 검사를 실제로 했는지. 로그는 흘러가므로 여기에 남는다.
-        info["translation_guard"] = job.get("translation_guard")
+        complete = sum(1 for c in job["chunks"] if c["status"] == "complete")
+        # 장부와 별개로 전사 파일이 실제로 몇 개 있는지 센다. 존재 확인만 하므로
+        # 응답 원문을 파싱하지 않는다 (원문은 청크당 700KB 급이다).
+        on_disk = sum(1 for c in job["chunks"]
+                      if c.get("transcript_path")
+                      and (bundle / c["transcript_path"]).exists())
         info["chunks"] = {
             "total": len(job["chunks"]),
-            "complete": sum(1 for c in job["chunks"] if c["status"] == "complete"),
+            "complete": complete,
+            "transcripts_on_disk": on_disk,
             "failed": [c["index"] for c in job["chunks"] if c["status"] == "failed"],
         }
+        # 둘이 어긋나면 장부만 초기화된 옛 번들이다. 그대로 0/N 을 보여 주면
+        # 분석이 안 된 줄 알고 다시 돌린다. 무엇을 하면 되는지 함께 적는다.
+        if on_disk > complete:
+            info["chunks"]["note"] = (
+                "전사 파일 %d개가 장부보다 앞서 있다. transcribe 를 다시 돌리면 "
+                "저장된 응답으로 이어받는다(설정이 같으면 Gemini 호출 없음)." % on_disk
+            )
+        # 번역문 검사를 실제로 했는지. 로그는 흘러가므로 여기에 남는다.
+        info["translation_guard"] = _guard_state(job, complete)
     info["artifacts"] = {
         name: (bundle / rel).exists() for name, rel in (
             ("captions", "raw/captions.json"),

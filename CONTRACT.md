@@ -383,8 +383,7 @@ data/<video_id>/
     frames.json
     output.srt        선택 (render)
     output.txt        선택 (render)
-    summary.md        선택 (요청 시 생성)
-  index.sqlite3
+  index.sqlite3       transcript/chapter/frame 색인 + 요약
 ```
 
 - 위 구조는 **가능한 산출물의 전체 목록**이다. "선택"으로 표시한 것은 기본
@@ -395,6 +394,10 @@ data/<video_id>/
   코드는 없다. 근거 검색은 `merged.json`과 `index.sqlite3`가 한다.
 
 - `context.py`는 SQLite에 transcript span, chapter, entity/term, speaker, frame을 색인한다.
+- 요약은 파일로 만들지 않고 `index.sqlite3`의 `metadata` 테이블에 둔다. 번들에
+  파일을 하나 더 만들지 않기 위해서다. 색인은 통째로 다시 만들어 교체하므로,
+  `build_index`가 교체 전에 기존 요약을 읽어 새 색인으로 옮긴다. 요약은 전사에서
+  다시 만들어낼 수 없는 자료(호스트가 쓴 문장)이기 때문이다.
 - 각 검색 결과는 최소 `video_id`, `start`, `end`, `text`, `source_path`,
   `source_kind`, `confidence`를 반환한다.
 - 답변은 검색된 transcript/frame 근거와 timestamp를 포함한다.

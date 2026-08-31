@@ -9,13 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import chapters
+import context
 
 SCHEMA_VERSION = 1
 MAX_OVERVIEW_CHARS = 1600
@@ -75,34 +74,73 @@ def _metadata_line(metadata: dict[str, Any]) -> str:
     ) + " -->"
 
 
-def read_metadata(path: Path) -> dict[str, Any] | None:
-    if not path.exists():
+def metadata_of(text: str | None) -> dict[str, Any] | None:
+    """요약 본문 첫 줄의 주석에서 지문을 읽는다."""
+    if not text:
         return None
     try:
-        first = path.read_text(encoding="utf-8").splitlines()[0].strip()
+        first = text.splitlines()[0].strip()
         if not first.startswith(META_PREFIX) or not first.endswith("-->"):
             return None
         return json.loads(first[len(META_PREFIX):-3].strip())
-    except (OSError, IndexError, json.JSONDecodeError):
+    except (IndexError, json.JSONDecodeError):
         return None
 
 
-def _atomic_write(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=".summary.", suffix=".md",
-                                                   dir=path.parent)
+def read_metadata(path: Path) -> dict[str, Any] | None:
+    """호환용. 파일로 보관하던 시절의 요약을 읽는다."""
+    if not path.exists():
+        return None
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, path)
-    except BaseException:
-        try:
-            os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
-        raise
+        return metadata_of(path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+
+
+LEGACY_PATH = ("derived", "summary.md")
+
+
+def _stored_summary(bundle: Path) -> str | None:
+    """색인에 보관한 요약. 파일로 남아 있던 옛 요약은 옮겨 담고 파일을 지운다.
+
+    요약은 별도 파일을 만들지 않고 index.sqlite3 안에 둔다. 번들에 파일이
+    하나 줄고, 재색인 때는 context.build_index 가 값을 옮겨 준다.
+    """
+    stored = context.read_summary(bundle)
+    if stored is not None:
+        return stored
+    legacy = bundle.joinpath(*LEGACY_PATH)
+    if not legacy.exists():
+        return None
+    try:
+        text = legacy.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not _persist(bundle, text):
+        return text  # 색인이 아직 없으면 옮기지 못한다. 파일은 그대로 둔다.
+    legacy.unlink(missing_ok=True)
+    return text
+
+
+def _persist(bundle: Path, text: str) -> bool:
+    """요약을 색인에 넣는다.
+
+    색인이 아직 없으면 만든다. `_ensure_chapters` 가 chapter 를 필요할 때
+    만드는 것과 같은 규칙이다. 만들 재료(전사)조차 없으면 저장하지 않고
+    그 사실을 알린다 — 요약 본문은 그대로 돌려준다.
+    """
+    try:
+        context.write_summary(bundle, text)
+        return True
+    except FileNotFoundError:
+        pass
+    try:
+        context.build_index(bundle)
+        context.write_summary(bundle, text)
+    except (FileNotFoundError, ValueError, OSError):
+        return False
+    return True
+
 
 
 def _clean(value: Any, *, field: str, maximum: int) -> str:
@@ -247,14 +285,14 @@ def build(bundle: Path) -> dict[str, Any]:
         raise ValueError("요약할 chapter가 없습니다.")
     video_id = str(chapter_payload.get("video_id") or bundle.name)
     chapter_fingerprint = _chapter_fingerprint(chapter_payload)
-    path = bundle / "derived" / "summary.md"
-    stored = read_metadata(path)
+    text = _stored_summary(bundle)
+    stored = metadata_of(text)
     if (stored and stored.get("transcript_fingerprint") ==
             chapter_payload.get("transcript_fingerprint")
             and stored.get("chapters_fingerprint") == chapter_fingerprint):
         generation = stored.get("generation") or "local-extractive"
-        return {"video_id": video_id, "path": str(path), "generation": generation,
-                "fingerprint": chapter_fingerprint, "summary": path.read_text(encoding="utf-8"),
+        return {"video_id": video_id, "stored": True, "generation": generation,
+                "fingerprint": chapter_fingerprint, "summary": text,
                 "needs_host_summary": generation != "host-llm",
                 "packet": packet(chapter_payload) if generation != "host-llm" else None}
 
@@ -265,8 +303,8 @@ def build(bundle: Path) -> dict[str, Any]:
                 "generation": "local-extractive"}
     rendered = _render(title=_title(bundle, video_id), metadata=metadata, **content,
                        chapters_by_id={item["id"]: item for item in chapter_items})
-    _atomic_write(path, rendered)
-    return {"video_id": video_id, "path": str(path), "generation": "local-extractive",
+    return {"video_id": video_id, "stored": _persist(bundle, rendered),
+            "generation": "local-extractive",
             "fingerprint": chapter_fingerprint, "summary": rendered,
             "needs_host_summary": True, "packet": packet(chapter_payload)}
 
@@ -291,7 +329,6 @@ def set_host_summary(bundle: Path, *, fingerprint: str, content: dict[str, Any])
                 "chapters_fingerprint": current, "generation": "host-llm"}
     rendered = _render(title=_title(bundle, video_id), metadata=metadata, **clean,
                        chapters_by_id={item["id"]: item for item in chapter_items})
-    path = bundle / "derived" / "summary.md"
-    _atomic_write(path, rendered)
-    return {"video_id": video_id, "path": str(path), "generation": "host-llm",
+    return {"video_id": video_id, "stored": _persist(bundle, rendered),
+            "generation": "host-llm",
             "fingerprint": current, "summary": rendered, "needs_host_summary": False}

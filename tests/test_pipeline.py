@@ -444,6 +444,84 @@ class StatusAndPurgeTests(unittest.TestCase):
         self.assertEqual(replanned, [], "옛 키 하나 때문에 계획을 다시 세웠다")
         self.assertEqual(reused["chunks"][0]["status"], "complete")
 
+    def test_replan_keeps_finished_chunk_records(self) -> None:
+        """설정이 바뀌어 다시 계획해도 끝낸 전사의 기록은 살린다.
+
+        기록이 날아가면 status 가 0/N 을 보고하고 사람은 분석이 안 된 줄 안다.
+        """
+        self._seed_chunks()
+        (self.bundle / "raw/transcripts").mkdir(parents=True, exist_ok=True)
+        (self.bundle / "raw/transcripts/chunk-000.json").write_text("{}", encoding="utf-8")
+        job = {"input": {"source": "u", "fingerprint": "sha256:x"},
+               "config": {"chunk_max_secs": 1790.0, "overlap_secs": 10.0,
+                          "language_codes": None},
+               "status": "complete",
+               "chunks": [{"index": 0, "start": 0.0, "end": 10.0,
+                           "path": "raw/audio/chunk-000.mp3", "status": "complete",
+                           "attempts": 1,
+                           "transcript_path": "raw/transcripts/chunk-000.json",
+                           "error": None}]}
+        (self.bundle / "job.json").write_text(json.dumps(job), encoding="utf-8")
+        pipeline.audio.file_fingerprint = lambda path: "sha256:x"
+        extract = pipeline.audio.extract_chunks
+        probe = pipeline.audio.probe_duration
+        pipeline.audio.extract_chunks = lambda src, root, chunks: None
+        pipeline.audio.probe_duration = lambda path: 10.0
+        try:
+            # 언어를 바꾼다. 경계는 그대로다.
+            new_job = pipeline.stage_plan(self.bundle, "u", chunk_max_secs=1790.0,
+                                          overlap_secs=10.0, language_codes=["ko-KR"])
+        finally:
+            pipeline.audio.extract_chunks = extract
+            pipeline.audio.probe_duration = probe
+        self.assertEqual(new_job["chunks"][0]["status"], "complete")
+        self.assertEqual(new_job["chunks"][0]["attempts"], 1)
+        self.assertEqual(new_job["config"]["language_codes"], ["ko-KR"])
+        saved = json.loads((self.bundle / "job.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["chunks"][0]["status"], "complete")
+
+    def test_replan_drops_records_when_boundaries_move(self) -> None:
+        """경계가 옮겨가면 옛 전사는 시각이 어긋나므로 기록을 넘기지 않는다."""
+        self._seed_chunks()
+        (self.bundle / "raw/transcripts").mkdir(parents=True, exist_ok=True)
+        (self.bundle / "raw/transcripts/chunk-000.json").write_text("{}", encoding="utf-8")
+        old = {"index": 0, "start": 0.0, "end": 99.0,
+               "path": "raw/audio/chunk-000.mp3", "status": "complete", "attempts": 1,
+               "transcript_path": "raw/transcripts/chunk-000.json", "error": None}
+        new = {**old, "start": 0.0, "end": 10.0, "status": "planned", "attempts": 0}
+        self.assertEqual(pipeline._carry_chunk_progress({"chunks": [old]},
+                                                        {"chunks": [new]}, self.bundle), 0)
+        self.assertEqual(new["status"], "planned")
+
+    def test_status_reports_transcripts_ahead_of_the_ledger(self) -> None:
+        """장부가 초기화된 옛 번들에서도 전사가 있다는 사실이 보여야 한다."""
+        (self.bundle / "raw/transcripts").mkdir(parents=True, exist_ok=True)
+        (self.bundle / "raw/transcripts/chunk-000.json").write_text("{}", encoding="utf-8")
+        (self.bundle / "job.json").write_text(json.dumps({
+            "status": "planned",
+            "chunks": [{"index": 0, "status": "planned",
+                        "transcript_path": "raw/transcripts/chunk-000.json"}],
+        }), encoding="utf-8")
+        info = pipeline.status(self.bundle)
+        self.assertEqual(info["chunks"]["complete"], 0)
+        self.assertEqual(info["chunks"]["transcripts_on_disk"], 1)
+        self.assertIn("transcribe", info["chunks"]["note"])
+
+    def test_status_never_reports_null_translation_guard(self) -> None:
+        """검사하고 통과한 것과 검사 자체를 안 한 것은 구분돼야 한다."""
+        def guard_for(job: dict) -> str:
+            (self.bundle / "job.json").write_text(json.dumps(job), encoding="utf-8")
+            return pipeline.status(self.bundle)["translation_guard"]
+
+        chunk_done = {"index": 0, "status": "complete"}
+        chunk_todo = {"index": 0, "status": "planned"}
+        self.assertEqual(guard_for({"status": "planned", "chunks": [chunk_todo]}), "not-run")
+        self.assertEqual(guard_for({"status": "complete", "chunks": [chunk_done]}), "unknown")
+        self.assertEqual(guard_for({"status": "complete", "chunks": [chunk_done],
+                                    "translation_guard": "skipped"}), "skipped")
+        self.assertEqual(guard_for({"status": "complete", "chunks": [chunk_done],
+                                    "translation_guard": "active"}), "active")
+
     def test_plan_rebuilds_purged_chunks(self) -> None:
         """청크를 지워도 source.mp3 가 있으면 계획 단계가 다시 뽑는다.
 

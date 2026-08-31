@@ -305,7 +305,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "ytx_summary",
-        "description": "사용자가 전체 영상 요약을 요청할 때만 summary.md를 만들거나 "
+        "description": "사용자가 전체 영상 요약을 요청할 때만 요약을 만들거나 "
                        "현재 요약을 재사용한다. 로컬 요약은 즉시 사용 가능하며, packet이 "
                        "있으면 호스트가 ytx_set_summary로 한 번 개선할 수 있다.",
         "inputSchema": {
