@@ -259,6 +259,9 @@ gh pr list
 - 부분 실패를 성공으로 숨기지 않는다. 완료된 청크와 실패 원인을 manifest에 남긴다.
 - 새 writer가 만든 파일은 구 reader가 모르는 필드를 무시해도 기존 기능이 동작해야 한다.
 - 호환 불가능한 변경은 `schema_version`을 올리고 별도 migration을 제공하기 전에는 금지한다.
+- 설치형 진입점 `ytx run|status|purge`는 기존 `python src/pipeline.py`와 같은 CLI 계약을
+  제공한다. `ytx-mcp`는 기존 `python src/mcp_server.py`와 같은 stdio MCP 계약을 제공한다.
+- 기존 `python src/*.py` 단일 파일 실행 경로는 설치형 진입점과 함께 유지한다.
 
 ## 7. job.json — 장기 작업 manifest
 

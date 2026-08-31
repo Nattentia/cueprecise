@@ -51,29 +51,51 @@ Gemini는 4회 실행에서 모두 그 용어를 놓쳤다. ytx는 시간 공백
 
 ## 빠른 시작
 
+[`uv`](https://docs.astral.sh/uv/getting-started/installation/)가 있으면 저장소를 직접
+받거나 Python 환경을 만들 필요가 없다.
+
+```bash
+uv tool install git+https://github.com/Nattentia/ytx
+ytx setup
+```
+
+`setup`은 Claude Desktop 설정과 기본 데이터 디렉터리 `~/.ytx/data`를 만들고 기존
+설정은 timestamp가 붙은 `.bak` 파일로 보존한다. Claude Desktop을 다시 시작하면 된다.
+
+영상 분석에는 `ffmpeg`와 `ffprobe`가 PATH에 있어야 한다. 환경을 확인하려면:
+
+```bash
+ytx doctor
+```
+
+[API 키](https://aistudio.google.com/api-keys)를 먼저 환경변수로 넣으면 `setup`이 MCP
+설정에 함께 등록한다. 키 없이 설치해도 조회 도구는 동작하며 나중에 다시 실행할 수 있다.
+
+```bash
+export GEMINI_API_KEY="..."          # Windows PowerShell: $env:GEMINI_API_KEY="..."
+ytx setup
+ytx run "https://www.youtube.com/watch?v=VIDEO_ID" --language ko-KR
+ytx status VIDEO_ID
+```
+
+CLI에서 `--bundle-root`를 생략하면 현재 디렉터리의 `data/<video_id>/`에 쌓인다. MCP는
+`setup`이 만든 `~/.ytx/data`를 쓴다.
+
+소스에서 개발하거나 기존 실행 경로가 필요한 경우에만 clone 방식으로 설치한다.
+
 ```bash
 git clone https://github.com/Nattentia/ytx.git
 cd ytx
 python -m pip install -r requirements.txt
+python src/pipeline.py --help
 ```
-
-`ffmpeg`와 `ffprobe`가 PATH에 있어야 한다.
-[API 키](https://aistudio.google.com/api-keys)를 환경변수로 넣고 실행한다.
-
-```bash
-export GEMINI_API_KEY="..."          # Windows PowerShell: $env:GEMINI_API_KEY="..."
-python src/pipeline.py run "https://www.youtube.com/watch?v=VIDEO_ID" --language ko-KR
-python src/pipeline.py status VIDEO_ID
-```
-
-산출물은 `data/<video_id>/`에 쌓인다.
 
 ---
 
 ## MCP 호스트에 붙이기
 
-Claude Desktop이면 `claude_desktop_config.json`에 넣는다. 경로는 저장소를 받아둔
-위치로 바꾼다.
+권장 설치에서는 `ytx setup`이 Claude Desktop 설정을 자동으로 합친다. 다음 JSON은
+소스 clone을 사용하거나 다른 MCP 호스트에 수동으로 붙일 때만 필요하다.
 
 ```json
 {
@@ -260,10 +282,9 @@ python -m pip install -r requirements-optional.txt     # OCR, 시간대 (선택)
 `google-genai`는 `transcribe` 단계에만 필요하다. 나머지 단계와 MCP 서버는 SDK 없이
 돌아간다.
 
-> `pip install ytx`로 설치하는 배포판은 아직 없다. `src/` 모듈이 서로를 최상위
-> 이름으로 부르고 `CONTRACT.md` 6절이 단일 파일 실행 경로를 보장하기 때문에, 패키지로
-> 바꾸려면 그 계약부터 손대야 한다. MCP 호스트 연결은 절대 경로를 쓰므로 지금
-> 상태로도 정상 동작한다.
+설치형 배포 이름은 `ytx-mcp`이고 실행 명령은 `ytx`, `ytx-mcp`다. 아직 PyPI 릴리스
+전이므로 위의 GitHub URL로 설치한다. `uv tool`의 격리 환경 안에 기존 모듈을 설치해
+최상위 이름 충돌을 피하며, `python src/*.py` 실행 경로도 계속 지원한다.
 
 ## 테스트
 
