@@ -19,7 +19,7 @@ def word(text: str, start: float, end: float, speaker: str = "spk:0") -> dict:
 
 
 class LosslessTests(unittest.TestCase):
-    """gtw 0.0.13 이 lines[:2] 로 97% 를 버린 실패를 재발하지 않는지 본다."""
+    """초기 비교 도구가 lines[:2]로 초과분을 버린 실패를 재발하지 않는지 본다."""
 
     def test_long_run_without_pause_keeps_every_word(self) -> None:
         words = [word("단어%d" % i, i * 0.1, i * 0.1 + 0.09) for i in range(400)]
