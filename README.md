@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![CI](https://github.com/Nattentia/ytx/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/ytx/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-319%20passing-brightgreen.svg)](#테스트)
+[![Tests](https://img.shields.io/badge/tests-332%20passing-brightgreen.svg)](#테스트)
 
 Gemini 전사와 YouTube 자막을 시각 기준으로 합쳐, 한국어 본문과 영어 용어를 모두
 보존한 대본을 만든다. 결과는 번들과 SQLite 색인으로 남아, 대화가 끝나고 프로세스가
@@ -62,8 +62,9 @@ Python이나 Git을 설치하거나 명령어를 입력할 필요가 없다. 필
 연결 과정에서 자동으로 준비한다. API 키는 Claude Desktop의 내 컴퓨터 설정에만 저장되며,
 기존 Claude 설정은 백업한 뒤 ytx 항목만 추가한다.
 
-> 첫 공개 설치 파일은 준비 중이다. Releases에 `ytx-setup.exe`가 표시되기 전까지는
-> 아래의 명령어 설치 방식을 사용한다.
+> `v0.1.0`은 SignPath Foundation 코드 서명 심사를 위한 첫 시험판이다. 아직 디지털
+> 서명이 없어 Windows에서 "알 수 없는 게시자" 경고가 나타날 수 있다. 반드시 이
+> 저장소의 Releases에서 받은 파일만 사용한다.
 
 ### macOS·Linux 또는 명령어 설치
 
