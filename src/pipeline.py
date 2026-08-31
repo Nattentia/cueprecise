@@ -390,13 +390,26 @@ def _hangul_share(text: str) -> float:
     return (hangul / total) if total else 0.0
 
 
-def _looks_translated(transcript: str, *, captions: str, langs: str) -> bool:
+def _captions_are_original(language: str | None) -> bool:
+    """그 자막이 영상의 원어 트랙인가.
+
+    `-orig` 만 원어다. `ko` / `en` 같은 트랙은 YouTube 가 기계 번역한 것일 수
+    있고, 실제로 영어 영상에 `ko` 를 요청하면 한국어 번역 자막이 내려온다.
+    번역된 자막을 "원문이 한국어" 의 근거로 쓰면 멀쩡한 영어 전사를 번역문으로
+    오판해 막는다.
+    """
+    return bool(language) and str(language).endswith("-orig")
+
+
+def _looks_translated(transcript: str, *, captions: str, langs: str,
+                      captions_language: str | None = None) -> bool:
     """받아적기가 아니라 번역문으로 보이는가."""
     if len(transcript) < _TRANSLATION_MIN_CHARS:
         return False
     if _hangul_share(transcript) >= _TRANSLATION_TRANSCRIPT_SHARE:
         return False
-    korean_expected = (len(captions) >= _TRANSLATION_CAPTION_MIN_CHARS
+    korean_expected = (_captions_are_original(captions_language)
+                       and len(captions) >= _TRANSLATION_CAPTION_MIN_CHARS
                        and _hangul_share(captions) >= _TRANSLATION_CAPTION_SHARE)
     if not korean_expected:
         korean_expected = any(code.strip().lower().startswith("ko")
@@ -404,15 +417,25 @@ def _looks_translated(transcript: str, *, captions: str, langs: str) -> bool:
     return korean_expected
 
 
-def _captions_text(bundle: Path) -> str:
+def _captions_evidence(bundle: Path) -> tuple[str, str | None]:
+    """자막 본문과 그 언어. 언어를 모르면 근거로 쓰지 않는다."""
     path = bundle / "raw" / "captions.json"
     if not path.exists():
-        return ""
+        return "", None
     try:
-        cues = _read_json(path).get("cues", [])
+        payload = _read_json(path)
     except (OSError, json.JSONDecodeError):
-        return ""
-    return " ".join(str(cue.get("text", "")) for cue in cues)
+        return "", None
+    cues = payload.get("cues", [])
+    language = payload.get("language")
+    if language is None:
+        # `language` 가 없던 시절 파일. 그때는 ko-orig 만 받았다.
+        source = str(payload.get("source", ""))
+        language = source[len("youtube-"):] if source.startswith("youtube-") else None
+    if payload.get("original") is False:
+        # 폴백으로 받은 트랙. 번역일 수 있어 원어 근거로 쓰지 않는다.
+        language = None
+    return " ".join(str(cue.get("text", "")) for cue in cues), language
 
 
 def _reusable_raw(bundle: Path, job: dict[str, Any], chunk: dict[str, Any],
@@ -457,7 +480,7 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
         _save_job(bundle, job)
         return job
 
-    captions_text = _captions_text(bundle)
+    captions_text, captions_language = _captions_evidence(bundle)
     codes = job["config"]["language_codes"]
     langs = ",".join(codes) if codes else "auto"
 
@@ -527,7 +550,8 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
                 ) from error
 
         text = " ".join(str(word.get("text", "")) for word in result["words"])
-        if _looks_translated(text, captions=captions_text, langs=langs):
+        if _looks_translated(text, captions=captions_text, langs=langs,
+                             captions_language=captions_language):
             chunk["status"] = "failed"
             chunk["error"] = "번역문으로 보임"
             job["status"] = "partial"

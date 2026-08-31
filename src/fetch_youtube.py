@@ -71,14 +71,23 @@ ORIGINAL_LANGS = (".*-orig",)
 """영상이 실제로 촬영된 언어의 자동자막. 언어를 몰라도 이것만 받으면 된다."""
 
 FALLBACK_LANGS = ("ko", "en")
-"""원어 자동자막이 없는 영상용. 있는 것만 받아지고 없으면 그냥 안 받아진다."""
+"""원어 자동자막이 없는 영상용. 있는 것만 받아지고 없으면 그냥 안 받아진다.
+
+폴백은 **자동자막을 요청하지 않는다.** YouTube 는 자동자막을 아무 언어로나
+기계 번역해 주기 때문에, 영어 영상에 `ko` 를 요청하면 한국어 번역 자막이
+내려온다 (실측 확인). 그것을 원어 근거로 쓰면 멀쩡한 영어 전사를 번역문으로
+오판한다. 여기서는 사람이 올린 자막만 받는다.
+"""
 
 
-def _download_subs(url: str, directory: Path, langs: tuple[str, ...]) -> list[Path]:
+def _download_subs(url: str, directory: Path, langs: tuple[str, ...], *,
+                   auto: bool) -> list[Path]:
     target = directory / "%(id)s.%(ext)s"
-    command = ["yt-dlp", "--write-auto-sub", "--write-subs",
-               "--sub-langs", ",".join(langs),
-               "--skip-download", "--convert-subs", "srt", "-o", str(target), url]
+    command = ["yt-dlp"]
+    if auto:
+        command.append("--write-auto-sub")
+    command += ["--write-subs", "--sub-langs", ",".join(langs),
+                "--skip-download", "--convert-subs", "srt", "-o", str(target), url]
     # 출력을 삼킨다. MCP 서버는 stdout 을 JSON-RPC 통로로 쓰므로 자식
     # 프로세스가 거기에 쓰면 프로토콜이 깨진다.
     result = subprocess.run(command, capture_output=True, text=True)
@@ -104,22 +113,27 @@ def _split_name(path: Path) -> tuple[str, str]:
 
 
 def fetch(url: str, output: Path, *, langs: list[str] | None = None) -> dict[str, object]:
-    attempts = [tuple(langs)] if langs else [ORIGINAL_LANGS, FALLBACK_LANGS]
+    # (요청 언어, 자동자막까지 받을지)
+    attempts = ([(tuple(langs), True)] if langs
+                else [(ORIGINAL_LANGS, True), (FALLBACK_LANGS, False)])
     with tempfile.TemporaryDirectory(prefix="ytx-captions-") as directory:
         root = Path(directory)
         candidates: list[Path] = []
-        for attempt in attempts:
-            candidates = _download_subs(url, root, attempt)
+        for attempt, auto in attempts:
+            candidates = _download_subs(url, root, attempt, auto=auto)
             if candidates:
                 break
         if not candidates:
             raise FileNotFoundError(
                 "자막을 내려받지 못했습니다 (시도: %s)."
-                % "; ".join(",".join(a) for a in attempts))
+                % "; ".join(",".join(a) for a, _ in attempts))
         chosen = _pick(candidates)
         video_id, language = _split_name(chosen)
         cues = collapse_rolling_lines(parse_srt(chosen))
     payload: dict[str, object] = {"source": "youtube-" + language, "language": language,
+                                  # 원어 트랙만 "원문이 무슨 언어인가" 의 근거가
+                                  # 된다. 나머지는 번역일 수 있다.
+                                  "original": language.endswith("-orig"),
                                   "video_id": video_id, "cues": cues}
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + chr(10),

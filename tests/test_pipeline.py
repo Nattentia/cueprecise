@@ -756,8 +756,10 @@ class TranslationGuardTests(unittest.TestCase):
     def test_detects_translation_against_captions(self) -> None:
         korean = "안녕하세요 오늘은 자기지도학습에 대해 말씀드리겠습니다"
         english = "Hello, today I will talk about self supervised learning"
-        self.assertTrue(pipeline._looks_translated(english, captions=korean, langs="auto"))
-        self.assertFalse(pipeline._looks_translated(korean, captions=korean, langs="auto"))
+        self.assertTrue(pipeline._looks_translated(
+            english, captions=korean, captions_language="ko-orig", langs="auto"))
+        self.assertFalse(pipeline._looks_translated(
+            korean, captions=korean, captions_language="ko-orig", langs="auto"))
 
     def test_detects_translation_from_requested_language_alone(self) -> None:
         """자막이 없어도 ko 를 요청했는데 한글이 없으면 번역이다."""
@@ -768,19 +770,21 @@ class TranslationGuardTests(unittest.TestCase):
 
     def test_english_video_with_english_captions_is_not_flagged(self) -> None:
         english = "Large language models get the hype but the work is data"
-        self.assertFalse(
-            pipeline._looks_translated(english, captions=english, langs="en-US"))
+        self.assertFalse(pipeline._looks_translated(
+            english, captions=english, captions_language="en-orig", langs="en-US"))
 
     def test_bilingual_korean_lecture_is_not_flagged(self) -> None:
         """영어 용어가 섞인 한국어 강의를 오탐하면 안 된다."""
         mixed = ("self supervised learning 이라는 방법을 오늘 설명드리겠습니다 "
                  "transformer 구조와 attention 을 함께 봅니다")
-        self.assertFalse(pipeline._looks_translated(mixed, captions=mixed, langs="ko-KR"))
+        self.assertFalse(pipeline._looks_translated(
+            mixed, captions=mixed, captions_language="ko-orig", langs="ko-KR"))
 
     def test_short_captions_do_not_trigger_on_their_own(self) -> None:
         """자막이 몇 글자뿐이면 근거로 쓰지 않는다."""
-        self.assertFalse(
-            pipeline._looks_translated("Hello there friends", captions="안녕", langs="auto"))
+        self.assertFalse(pipeline._looks_translated(
+            "Hello there friends", captions="안녕", captions_language="ko-orig",
+            langs="auto"))
 
 
 class TranslationGuardInPipelineTests(unittest.TestCase):
@@ -905,3 +909,44 @@ class TranslationGuardRerunTests(TranslationGuardInPipelineTests):
         message = str(caught.exception)
         self.assertIn("--language", message)
         self.assertIn("--from-raw", message)
+
+
+class CaptionTrustTests(unittest.TestCase):
+    """번역된 자막 트랙을 원어 근거로 쓰면 안 된다."""
+
+    def test_original_track_is_trusted(self) -> None:
+        self.assertTrue(pipeline._captions_are_original("ko-orig"))
+        self.assertTrue(pipeline._captions_are_original("en-orig"))
+
+    def test_translated_track_is_not_trusted(self) -> None:
+        self.assertFalse(pipeline._captions_are_original("ko"))
+        self.assertFalse(pipeline._captions_are_original("en"))
+        self.assertFalse(pipeline._captions_are_original(None))
+
+    def test_guard_ignores_translated_captions(self) -> None:
+        """영어 영상에 한국어 번역 자막이 붙어도 전사를 막지 않는다."""
+        english = "Large language models get the hype but the work is data"
+        korean_sub = "대규모 언어 모델이 주목받지만 실제 일은 데이터입니다"
+        self.assertFalse(
+            pipeline._looks_translated(english, captions=korean_sub,
+                                       captions_language="ko", langs="auto"),
+            "번역 자막을 원어 근거로 썼다")
+        self.assertTrue(
+            pipeline._looks_translated(english, captions=korean_sub,
+                                       captions_language="ko-orig", langs="auto"))
+
+    def test_fallback_captions_are_not_used_as_evidence(self) -> None:
+        """original=False 로 표시된 자막은 원어 근거에서 빠진다."""
+        import tempfile as _tempfile
+        with _tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "vid"
+            (bundle / "raw").mkdir(parents=True)
+            (bundle / "raw/captions.json").write_text(json.dumps({
+                "source": "youtube-ko", "language": "ko", "original": False,
+                "video_id": "vid",
+                "cues": [{"start": 0.0, "end": 3.0,
+                          "text": "대규모 언어 모델이 주목받지만 실제 일은 데이터입니다"}],
+            }, ensure_ascii=False), encoding="utf-8")
+            text, language = pipeline._captions_evidence(bundle)
+            self.assertTrue(text)
+            self.assertIsNone(language, "번역 자막을 원어 근거로 넘겼다")

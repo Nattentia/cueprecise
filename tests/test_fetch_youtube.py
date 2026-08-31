@@ -189,3 +189,27 @@ class SubtitleLanguageTests(unittest.TestCase):
         self._fake_yt_dlp({fetch_youtube.ORIGINAL_LANGS[0]: "ko-orig", "en": "en"})
         result = fetch_youtube.fetch("u", self.out)
         self.assertEqual(result["language"], "ko-orig", "원어 자막을 두고 다른 것을 골랐다")
+
+
+class FallbackSafetyTests(SubtitleLanguageTests):
+    """폴백이 기계 번역 자막을 원어인 척 가져오면 안 된다."""
+
+    def test_fallback_does_not_request_auto_subs(self) -> None:
+        self._fake_yt_dlp({"en": "en"})
+        fetch_youtube.fetch("u", self.out)
+        first, second = self.commands
+        self.assertIn("--write-auto-sub", first, "원어 트랙은 자동자막이라 필요하다")
+        self.assertNotIn("--write-auto-sub", second,
+                         "폴백이 자동자막을 요청했다. 기계 번역 트랙이 딸려온다")
+        self.assertIn("--write-subs", second)
+
+    def test_fallback_language_is_marked_not_original(self) -> None:
+        self._fake_yt_dlp({"en": "en"})
+        result = fetch_youtube.fetch("u", self.out)
+        self.assertEqual(result["language"], "en")
+        self.assertFalse(result["original"], "번역일 수 있는 트랙을 원어로 표시했다")
+
+    def test_original_track_is_marked_original(self) -> None:
+        self._fake_yt_dlp({fetch_youtube.ORIGINAL_LANGS[0]: "ko-orig"})
+        result = fetch_youtube.fetch("u", self.out)
+        self.assertTrue(result["original"])
