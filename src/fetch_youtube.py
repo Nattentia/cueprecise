@@ -96,11 +96,20 @@ def _download_subs(url: str, directory: Path, langs: tuple[str, ...], *,
     return sorted(directory.glob("*.srt"))
 
 
-def _pick(candidates: list[Path]) -> Path:
-    """원어 자동자막을 먼저 고른다. 여러 언어가 받아졌을 때만 의미가 있다."""
+def _pick(candidates: list[Path], langs: tuple[str, ...]) -> Path:
+    """원어 트랙 우선, 그다음 요청한 순서대로 고른다.
+
+    파일 이름 순서로 고르면 `ko,en` 을 요청했을 때 알파벳이 앞선 `en` 이
+    뽑힌다. 한국어 영상에서 영어 번역 자막을 고르면 `merge` 가 거기서 라틴
+    토큰을 캐다가 한국어 조사 공백에 꽂는다 — 없는 근거를 만들어낸다.
+    """
     for path in candidates:
         if "-orig." in path.name:
             return path
+    for lang in langs:
+        for path in candidates:
+            if _split_name(path)[1] == lang:
+                return path
     return candidates[0]
 
 
@@ -119,15 +128,17 @@ def fetch(url: str, output: Path, *, langs: list[str] | None = None) -> dict[str
     with tempfile.TemporaryDirectory(prefix="ytx-captions-") as directory:
         root = Path(directory)
         candidates: list[Path] = []
+        chosen_langs: tuple[str, ...] = ()
         for attempt, auto in attempts:
             candidates = _download_subs(url, root, attempt, auto=auto)
+            chosen_langs = attempt
             if candidates:
                 break
         if not candidates:
             raise FileNotFoundError(
                 "자막을 내려받지 못했습니다 (시도: %s)."
                 % "; ".join(",".join(a) for a, _ in attempts))
-        chosen = _pick(candidates)
+        chosen = _pick(candidates, chosen_langs)
         video_id, language = _split_name(chosen)
         cues = collapse_rolling_lines(parse_srt(chosen))
     payload: dict[str, object] = {"source": "youtube-" + language, "language": language,

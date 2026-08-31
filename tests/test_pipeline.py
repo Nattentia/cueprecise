@@ -950,3 +950,86 @@ class CaptionTrustTests(unittest.TestCase):
             text, language = pipeline._captions_evidence(bundle)
             self.assertTrue(text)
             self.assertIsNone(language, "번역 자막을 원어 근거로 넘겼다")
+
+
+class ReviewFixTests(unittest.TestCase):
+    """코드 리뷰에서 나온 네 건 (2026-08-31)."""
+
+    VIDEO_ID = "abcdefghijk"
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / self.VIDEO_ID
+        (self.bundle / "derived").mkdir(parents=True)
+        (self.bundle / "raw").mkdir(parents=True)
+        (self.bundle / "job.json").write_text(json.dumps({
+            "input": {"source": "https://www.youtube.com/watch?v=abcdefghijk"},
+        }), encoding="utf-8")
+        self.calls: list[str] = []
+        self.original = pipeline._download
+
+        def download(url, fmt, raw, stem, names):
+            self.calls.append(url)
+            target = Path(raw) / (stem + ".mp4")
+            target.write_bytes(b"fake")
+            return target, ""
+
+        pipeline._download = download
+
+    def tearDown(self) -> None:
+        pipeline._download = self.original
+        self.tmp.cleanup()
+
+    def _merged(self) -> None:
+        (self.bundle / "derived/merged.json").write_text(json.dumps({
+            "video_id": self.VIDEO_ID,
+            "words": _words(["여기", "보시면", "그림이"], 10.0),
+        }, ensure_ascii=False), encoding="utf-8")
+
+    def test_skip_video_is_honoured_by_visual_stage(self) -> None:
+        """--skip-video 로 껐는데 visual 이 곧바로 받아오면 무의미하다."""
+        self._merged()
+        pipeline.run("https://www.youtube.com/watch?v=abcdefghijk",
+                     bundle_root=Path(self.tmp.name), stages=("visual",), video=False)
+        self.assertEqual(self.calls, [], "--skip-video 인데 영상을 받았다")
+
+    def test_visual_still_acquires_when_video_not_skipped(self) -> None:
+        self._merged()
+        pipeline.run("https://www.youtube.com/watch?v=abcdefghijk",
+                     bundle_root=Path(self.tmp.name), stages=("visual",), video=True)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_no_download_when_transcript_is_missing(self) -> None:
+        """전사가 없으면 어차피 실패한다. 영상부터 받고 버리지 않는다."""
+        with self.assertRaises(Exception):
+            pipeline.stage_visual(self.bundle)
+        self.assertEqual(self.calls, [], "쓰지도 못할 영상을 먼저 받았다")
+
+
+class ChunkRangeGuardTests(unittest.TestCase):
+    """번역문 판정은 그 청크의 시간대 자막과 대조한다."""
+
+    CUES = [
+        {"start": 0.0, "end": 100.0, "text": "안녕하세요 오늘은 자기지도학습을 다룹니다"},
+        {"start": 100.0, "end": 200.0, "text": "이어서 초청 연사의 발표가 있겠습니다"},
+        {"start": 200.0, "end": 300.0,
+         "text": "thanks everyone I will present our recent results today"},
+    ]
+
+    def test_range_text_picks_overlapping_cues(self) -> None:
+        text = pipeline._captions_in_range(self.CUES, 200.0, 300.0)
+        self.assertIn("thanks everyone", text)
+        self.assertNotIn("안녕하세요", text)
+
+    def test_english_guest_segment_is_not_flagged(self) -> None:
+        """한국어 강의 안의 영어 발표 구간을 막으면 안 된다."""
+        english = " ".join(c["text"] for c in self.CUES[2:])
+        self.assertFalse(pipeline._looks_translated(
+            english, captions=pipeline._captions_in_range(self.CUES, 200.0, 300.0),
+            captions_language="ko-orig", langs="auto"))
+
+    def test_korean_segment_translated_is_flagged(self) -> None:
+        english = "Hello everyone today we cover self supervised learning in depth"
+        self.assertTrue(pipeline._looks_translated(
+            english, captions=pipeline._captions_in_range(self.CUES, 0.0, 100.0),
+            captions_language="ko-orig", langs="auto"))

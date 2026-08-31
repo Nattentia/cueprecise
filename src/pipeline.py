@@ -426,7 +426,7 @@ def _captions_evidence(bundle: Path) -> tuple[str, str | None]:
         payload = _read_json(path)
     except (OSError, json.JSONDecodeError):
         return "", None
-    cues = payload.get("cues", [])
+    cues = payload.get("cues", []) or []
     language = payload.get("language")
     if language is None:
         # `language` 가 없던 시절 파일. 그때는 ko-orig 만 받았다.
@@ -435,7 +435,26 @@ def _captions_evidence(bundle: Path) -> tuple[str, str | None]:
     if payload.get("original") is False:
         # 폴백으로 받은 트랙. 번역일 수 있어 원어 근거로 쓰지 않는다.
         language = None
-    return " ".join(str(cue.get("text", "")) for cue in cues), language
+    return cues, language
+
+
+def _captions_in_range(cues: list[dict[str, Any]], start: float, end: float) -> str:
+    """그 구간과 겹치는 자막만 잇는다.
+
+    영상 전체 자막과 청크 하나를 대조하면, 한국어 강의 중간의 영어 발표
+    구간이나 음악 구간이 통째로 번역문으로 몰린다. 판단은 같은 시간대끼리
+    한다.
+    """
+    parts = []
+    for cue in cues:
+        try:
+            cue_start = float(cue.get("start", 0.0))
+            cue_end = float(cue.get("end", cue_start))
+        except (TypeError, ValueError):
+            continue
+        if cue_end >= start and cue_start <= end:
+            parts.append(str(cue.get("text", "")))
+    return " ".join(parts)
 
 
 def _reusable_raw(bundle: Path, job: dict[str, Any], chunk: dict[str, Any],
@@ -480,7 +499,7 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
         _save_job(bundle, job)
         return job
 
-    captions_text, captions_language = _captions_evidence(bundle)
+    caption_cues, captions_language = _captions_evidence(bundle)
     codes = job["config"]["language_codes"]
     langs = ",".join(codes) if codes else "auto"
 
@@ -550,7 +569,9 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
                 ) from error
 
         text = " ".join(str(word.get("text", "")) for word in result["words"])
-        if _looks_translated(text, captions=captions_text, langs=langs,
+        in_range = _captions_in_range(caption_cues, float(chunk["start"]),
+                                      float(chunk["end"]))
+        if _looks_translated(text, captions=in_range, langs=langs,
                              captions_language=captions_language):
             chunk["status"] = "failed"
             chunk["error"] = "번역문으로 보임"
@@ -561,7 +582,8 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
                 "원문이 아니므로 근거로 쓸 수 없어 여기서 멈춘다 — 남은 청크의 "
                 "호출을 아낀다. "
                 "이어가려면 --language 로 원어를 지정하고 같은 명령을 다시 "
-                "실행해라 (예: --language ko-KR). 설정을 바꾸지 않고 다시 "
+                "실행해라 (예: --language ko-KR). 언어를 바꾸면 config 가 달라져 "
+                "이 영상의 청크를 전부 다시 부른다. 설정을 바꾸지 않고 다시 "
                 "실행하면 저장된 응답을 그대로 다시 읽어 같은 판정이 나온다 "
                 "(호출은 쓰지 않는다). 판정이 틀렸다면 그 언어를 --language 로 "
                 "지정하거나 `python src/transcribe.py --from-raw %s <out.json>` "
@@ -698,7 +720,17 @@ def ensure_video(bundle: Path, *, url: str | None = None) -> Path | None:
 def stage_visual(bundle: Path, *, at: list[float] | None = None,
                  max_frames: int = visual.DEFAULT_MAX_FRAMES,
                  url: str | None = None, acquire: bool = True) -> dict[str, Any]:
-    """화면 참조·복원 용어 시각의 프레임을 뽑는다 (CONTRACT 11절). Gemini 호출 없음."""
+    """화면 참조·복원 용어 시각의 프레임을 뽑는다 (CONTRACT 11절). Gemini 호출 없음.
+
+    `acquire` 가 거짓이면 이미 받아둔 영상만 쓴다. `--skip-video` 로 껐는데
+    여기서 곧바로 받아오면 그 옵션이 무의미해진다.
+    """
+    # 전사가 없으면 visual.build 가 어차피 실패한다. 쓰지도 못할 영상을 먼저
+    # 받아 버리지 않는다.
+    if not any((bundle / "derived" / name).exists()
+               for name in ("merged.json", "transcript.json")):
+        raise StageError(
+            "derived 전사가 없습니다. assemble/merge 단계를 먼저 실행하세요.")
     video_path = ensure_video(bundle, url=url) if acquire else visual.source_video(bundle)
     result = visual.build(bundle, at=at, max_frames=max_frames)
     if video_path is None and not result["frames"]:
@@ -784,7 +816,8 @@ def run(url: str, *, bundle_root: Path = Path("data"),
             srt, txt = stage_render(bundle, width=width)
             summary["stages"][stage] = {"srt": str(srt), "txt": str(txt)}
         elif stage == "visual":
-            frames = stage_visual(bundle, at=at, max_frames=max_frames, url=url)
+            frames = stage_visual(bundle, at=at, max_frames=max_frames, url=url,
+                                  acquire=video)
             summary["stages"][stage] = {
                 "frames": len(frames["frames"]),
                 "candidates": frames["candidates_considered"],

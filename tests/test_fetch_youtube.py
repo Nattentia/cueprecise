@@ -213,3 +213,24 @@ class FallbackSafetyTests(SubtitleLanguageTests):
         self._fake_yt_dlp({fetch_youtube.ORIGINAL_LANGS[0]: "ko-orig"})
         result = fetch_youtube.fetch("u", self.out)
         self.assertTrue(result["original"])
+
+
+class PickOrderTests(SubtitleLanguageTests):
+    """여러 트랙이 받아졌을 때 무엇을 고르는가."""
+
+    def test_requested_order_wins_over_alphabet(self) -> None:
+        """ko 를 먼저 적었는데 파일 이름 순서 때문에 en 이 뽑히면 안 된다."""
+        self._fake_yt_dlp({"ko": "ko", "en": "en"})
+        result = fetch_youtube.fetch("u", self.out)
+        self.assertEqual(result["language"], "ko",
+                         "요청 순서를 무시하고 알파벳 순으로 골랐다")
+
+    def test_explicit_order_is_respected(self) -> None:
+        self._fake_yt_dlp({"ja": "ja", "en": "en"})
+        result = fetch_youtube.fetch("u", self.out, langs=["ja", "en"])
+        self.assertEqual(result["language"], "ja")
+
+    def test_original_still_beats_requested_order(self) -> None:
+        self._fake_yt_dlp({fetch_youtube.ORIGINAL_LANGS[0]: "en-orig", "ko": "ko"})
+        result = fetch_youtube.fetch("u", self.out)
+        self.assertEqual(result["language"], "en-orig")
