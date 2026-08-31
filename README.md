@@ -334,6 +334,10 @@ python -m unittest discover -s tests
 
 ## 문서
 
+- [Code signing policy](CODE_SIGNING_POLICY.md) — 공식 Windows 배포 파일의 빌드,
+  검토 및 서명 정책.
+- [`PRIVACY.md`](PRIVACY.md) — API 키와 로컬 데이터 보관, 외부 서비스 통신, 설치 및
+  제거 시 변경사항.
 - [`CONTRACT.md`](CONTRACT.md) — 데이터 계약. 단계 사이 JSON 구조와 검증 기준을
   정의한다. 인터페이스에 대해서는 이 파일이 유일한 진실이다.
 - [`DECISIONS/`](DECISIONS/) — 설계 결정 기록. 무엇을 왜 그렇게 정했고 무엇을
