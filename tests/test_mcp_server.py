@@ -171,7 +171,8 @@ class SummaryToolTests(BundleFixture):
         path = self.bundle / "derived" / "summary.md"
         self.assertFalse(path.exists())
         result = mcp_server.tool_summary(self.root, video_id="vid")
-        self.assertTrue(path.exists())
+        self.assertFalse(path.exists(), "요약은 별도 파일을 만들지 않는다")
+        self.assertTrue(result["stored"])
         self.assertEqual(result["generation"], "local-extractive")
         self.assertTrue(result["needs_host_summary"])
         self.assertTrue(result["packet"])

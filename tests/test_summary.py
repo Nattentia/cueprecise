@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 import chapters
+import context
 import summary
 
 
@@ -35,10 +36,35 @@ class SummaryTests(unittest.TestCase):
         path = self.bundle / "derived" / "summary.md"
         self.assertFalse(path.exists())
         result = summary.build(self.bundle)
-        self.assertTrue(path.exists())
+        self.assertFalse(path.exists(), "요약은 별도 파일을 만들지 않는다")
+        self.assertTrue(result["stored"], "요약이 색인에 저장되지 않았다")
         self.assertEqual(result["generation"], "local-extractive")
         self.assertIn("# Test video", result["summary"])
         self.assertTrue(result["packet"])
+
+    def test_summary_survives_reindex(self) -> None:
+        """재색인은 DB 를 통째로 갈아끼운다. 요약이 딸려 나가면 안 된다."""
+        local = summary.build(self.bundle)
+        context.build_index(self.bundle)
+        self.assertEqual(context.read_summary(self.bundle), local["summary"])
+        self.assertEqual(summary.build(self.bundle)["summary"], local["summary"])
+
+    def test_legacy_summary_file_is_absorbed_and_removed(self) -> None:
+        """파일로 보관하던 옛 요약은 색인으로 옮기고 파일을 지운다."""
+        local = summary.build(self.bundle)
+        legacy = self.bundle / "derived" / "summary.md"
+        legacy.write_text(local["summary"], encoding="utf-8")
+        context.write_summary(self.bundle, "옛 색인 값")
+        self.assertEqual(summary._stored_summary(self.bundle), "옛 색인 값")
+        self.assertTrue(legacy.exists(), "색인에 값이 있으면 파일을 건드리지 않는다")
+
+        legacy_only = self.bundle / "index.sqlite3"
+        legacy_only.unlink()
+        context.build_index(self.bundle)
+        self.assertIsNone(context.read_summary(self.bundle))
+        moved = summary._stored_summary(self.bundle)
+        self.assertEqual(moved, local["summary"])
+        self.assertFalse(legacy.exists(), "옮긴 뒤에도 파일이 남았다")
 
     def test_current_host_summary_is_reused(self) -> None:
         local = summary.build(self.bundle)
