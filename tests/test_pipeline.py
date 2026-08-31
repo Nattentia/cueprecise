@@ -1234,3 +1234,113 @@ class SingleFetchCallTests(unittest.TestCase):
             "video_id": "vid", "cues": []}), encoding="utf-8")
         pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
         self.assertEqual(self._yt_dlp_calls(), [], "받아둔 것이 있는데 다시 불렀다")
+
+
+class VideoReleaseTests(unittest.TestCase):
+    """프레임을 뽑고 나면 영상은 자리만 차지한다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "derived").mkdir(parents=True)
+        (self.bundle / "raw/frames").mkdir(parents=True)
+        (self.bundle / "raw/source_video.mp4").write_bytes(b"video-bytes")
+        (self.bundle / "raw/source.webm").write_bytes(b"audio-bytes")
+        (self.bundle / "job.json").write_text(json.dumps({
+            "input": {"source": "https://www.youtube.com/watch?v=abcdefghijk"},
+        }), encoding="utf-8")
+        (self.bundle / "derived/merged.json").write_text(json.dumps({
+            "video_id": "vid", "words": _words(["여기", "보시면", "그림이"], 10.0),
+        }, ensure_ascii=False), encoding="utf-8")
+        self.frames: list[dict] = [{"timestamp": 10.5, "path": "raw/frames/000010500.jpg",
+                                    "reason": "screen-reference", "ocr_text": None,
+                                    "confidence": 0.5}]
+        self.original_build = pipeline.visual.build
+
+        def build(bundle, *, at=None, max_frames=40):
+            payload = {"schema_version": 1, "video_id": "vid", "frames": list(self.frames),
+                       "candidates_considered": len(self.frames),
+                       "candidates_dropped": 0, "note": None}
+            pipeline._write_json(bundle / "derived" / "frames.json", payload)
+            return payload
+
+        pipeline.visual.build = build
+
+    def tearDown(self) -> None:
+        pipeline.visual.build = self.original_build
+        self.tmp.cleanup()
+
+    def test_video_is_released_after_frames_are_extracted(self) -> None:
+        pipeline.stage_visual(self.bundle)
+        self.assertIsNone(pipeline.visual.source_video(self.bundle),
+                          "프레임을 다 뽑고도 영상을 들고 있다")
+        self.assertTrue((self.bundle / "raw/frames").exists(), "프레임을 지웠다")
+        self.assertTrue((self.bundle / "raw/source.webm").exists(), "오디오를 지웠다")
+
+    def test_video_is_kept_when_no_frames_came_out(self) -> None:
+        """프레임이 0장이면 다시 시도할 수 있게 영상을 남긴다."""
+        self.frames = []
+        pipeline.stage_visual(self.bundle)
+        self.assertIsNotNone(pipeline.visual.source_video(self.bundle))
+
+    def test_video_is_kept_without_a_source_url(self) -> None:
+        """원본 주소를 모르면 다시 받을 수 없으므로 지우지 않는다."""
+        (self.bundle / "job.json").unlink()
+        pipeline.stage_visual(self.bundle)
+        self.assertIsNotNone(pipeline.visual.source_video(self.bundle))
+
+    def test_keep_video_option_wins(self) -> None:
+        pipeline.stage_visual(self.bundle, keep_video=True)
+        self.assertIsNotNone(pipeline.visual.source_video(self.bundle))
+
+    def test_purge_scope_video_removes_only_the_video(self) -> None:
+        removed = pipeline.purge(self.bundle, scope="video")
+        self.assertTrue(removed)
+        self.assertIsNone(pipeline.visual.source_video(self.bundle))
+        self.assertTrue((self.bundle / "raw/source.webm").exists())
+        self.assertTrue((self.bundle / "derived/merged.json").exists())
+
+
+class CaptionHealthTests(unittest.TestCase):
+    """자막이 0개일 때, 원래 없는 것과 취득이 고장난 것을 구분한다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "raw").mkdir(parents=True)
+        (self.bundle / "derived").mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _captions(self, payload: dict) -> None:
+        (self.bundle / "raw/captions.json").write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    def test_status_reports_caption_language_and_count(self) -> None:
+        self._captions({"source": "youtube-ko-orig", "language": "ko-orig",
+                        "original": True, "video_id": "vid",
+                        "cues": [{"start": 0.0, "end": 1.0, "text": "안녕"}]})
+        info = pipeline.status(self.bundle)
+        self.assertEqual(info["captions"]["language"], "ko-orig")
+        self.assertEqual(info["captions"]["cues"], 1)
+        self.assertTrue(info["captions"]["original"])
+
+    def test_status_flags_a_failed_fetch(self) -> None:
+        """취득 실패로 남은 빈 자막은 그렇다고 말해야 한다."""
+        self._captions({"source": "youtube", "language": None, "original": False,
+                        "video_id": "vid", "cues": [], "error": "yt-dlp 실패"})
+        info = pipeline.status(self.bundle)
+        self.assertEqual(info["captions"]["cues"], 0)
+        self.assertTrue(info["captions"]["failed"], "고장을 정상으로 보고했다")
+
+    def test_video_without_captions_is_not_a_failure(self) -> None:
+        """자막이 원래 없는 영상도 있다. 그건 고장이 아니다."""
+        self._captions({"source": "youtube-en-orig", "language": "en-orig",
+                        "original": True, "video_id": "vid", "cues": []})
+        info = pipeline.status(self.bundle)
+        self.assertFalse(info["captions"]["failed"])
+
+    def test_missing_captions_file_is_reported(self) -> None:
+        info = pipeline.status(self.bundle)
+        self.assertIsNone(info["captions"])

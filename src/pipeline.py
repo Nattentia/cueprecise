@@ -375,8 +375,10 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False,
             fetch_youtube.fetch(url, captions)
         except Exception as error:  # 자막은 선택 자료다. 없어도 파이프라인은 진행한다.
             _log("  경고: 자막 취득 실패, 영어 용어 복원을 건너뛴다 (%s)" % error)
+            # 자막이 원래 없는 영상과 취득이 고장난 것은 사람이 할 일이 다르다.
+            # 0 cue 만 남기면 구분할 수 없으므로 이유를 함께 적는다.
             _write_json(captions, {"source": "youtube", "language": None,
-                                   "original": False,
+                                   "original": False, "error": str(error)[:300],
                                    "video_id": bundle.name, "cues": []})
 
     payload = _read_json(captions) if captions.exists() else {"cues": []}
@@ -904,11 +906,16 @@ def ensure_video(bundle: Path, *, url: str | None = None) -> Path | None:
 
 def stage_visual(bundle: Path, *, at: list[float] | None = None,
                  max_frames: int = visual.DEFAULT_MAX_FRAMES,
-                 url: str | None = None, acquire: bool = True) -> dict[str, Any]:
+                 url: str | None = None, acquire: bool = True,
+                 keep_video: bool = False) -> dict[str, Any]:
     """화면 참조·복원 용어 시각의 프레임을 뽑는다 (CONTRACT 11절). Gemini 호출 없음.
 
     `acquire` 가 거짓이면 이미 받아둔 영상만 쓴다. `--skip-video` 로 껐는데
     여기서 곧바로 받아오면 그 옵션이 무의미해진다.
+
+    프레임을 뽑고 나면 영상은 쓸 데가 없으므로 놓아준다 (`keep_video` 로 끈다).
+    남는 것은 프레임 jpg 이고, 나중에 다른 시각이 필요하면 `ensure_video` 가
+    `job.json` 의 원본 URL 로 다시 받는다. 실측 14.5~16MB 를 회수한다.
     """
     # 전사가 없으면 visual.build 가 어차피 실패한다. 쓰지도 못할 영상을 먼저
     # 받아 버리지 않는다.
@@ -931,7 +938,32 @@ def stage_visual(bundle: Path, *, at: list[float] | None = None,
     else:
         _log("  프레임 0장 / 후보 %d — %s"
              % (result["candidates_considered"], result.get("note") or ""))
+    if frames and not keep_video:
+        released = _release_video(bundle)
+        if released:
+            _log("  영상 %s 를 지웠다 (%.1fMB 회수). 필요하면 원본 URL 로 다시 받는다"
+                 % released)
     return result
+
+
+def _release_video(bundle: Path) -> tuple[str, float] | None:
+    """프레임을 다 뽑은 영상을 지운다. 다시 받을 수 없으면 두고 본다."""
+    found = visual.source_video(bundle)
+    if found is None:
+        return None
+    job_path = bundle / "job.json"
+    source_url = None
+    if job_path.exists():
+        try:
+            source_url = (_read_json(job_path).get("input") or {}).get("source")
+        except (OSError, json.JSONDecodeError):
+            source_url = None
+    if not source_url:
+        # 다시 받을 주소를 모르면 지우지 않는다. 되돌릴 수 없는 삭제다.
+        return None
+    size_mb = found.stat().st_size / 1048576
+    found.unlink()
+    return found.name, size_mb
 
 
 def stage_index(bundle: Path) -> Path:
@@ -952,7 +984,8 @@ def run(url: str, *, bundle_root: Path = Path("data"),
         rpm_limit: int | None = DEFAULT_RPM_LIMIT,
         request_interval: float = DEFAULT_REQUEST_INTERVAL,
         ledger: Path | None = None, force: bool = False,
-        video: bool = True, at: list[float] | None = None,
+        video: bool = True, keep_video: bool = False,
+        at: list[float] | None = None,
         max_frames: int = visual.DEFAULT_MAX_FRAMES,
         transcriber=None) -> dict[str, Any]:
     video_id = video_id_from_url(url)
@@ -1002,7 +1035,7 @@ def run(url: str, *, bundle_root: Path = Path("data"),
             summary["stages"][stage] = {"srt": str(srt), "txt": str(txt)}
         elif stage == "visual":
             frames = stage_visual(bundle, at=at, max_frames=max_frames, url=url,
-                                  acquire=video)
+                                  acquire=video, keep_video=keep_video)
             summary["stages"][stage] = {
                 "frames": len(frames["frames"]),
                 "candidates": frames["candidates_considered"],
@@ -1037,6 +1070,25 @@ def status(bundle: Path, *, ledger: Path | None = None, api_key: str | None = No
             ("index", "index.sqlite3"),
         )
     }
+    # 자막은 선택 자료지만, 0 cue 가 "원래 없는 영상" 인지 "취득이 고장난 것"
+    # 인지는 구분돼야 한다. yt-dlp 나 YouTube 가 바뀌면 조용히 후자가 된다.
+    captions_path = bundle / "raw" / "captions.json"
+    info["captions"] = None
+    if captions_path.exists():
+        try:
+            payload = _read_json(captions_path)
+        except (OSError, json.JSONDecodeError) as error:
+            info["captions"] = {"cues": 0, "language": None, "original": False,
+                                "failed": True, "error": str(error)[:200]}
+        else:
+            info["captions"] = {
+                "cues": len(payload.get("cues", []) or []),
+                "language": payload.get("language"),
+                "original": bool(payload.get("original")),
+                "failed": bool(payload.get("error")) or payload.get("language") is None,
+                "error": payload.get("error"),
+            }
+
     # 기본에서 빠진 단계의 산출물은 없는 것이 정상이다. 읽는 쪽이 그것을
     # 실패로 오인하지 않도록 이름을 함께 준다.
     info["optional_artifacts"] = [name for stage in OPTIONAL_STAGES
@@ -1049,7 +1101,7 @@ def status(bundle: Path, *, ledger: Path | None = None, api_key: str | None = No
     return info
 
 
-PURGE_SCOPES = ("chunks", "derived", "raw", "all")
+PURGE_SCOPES = ("chunks", "video", "derived", "raw", "all")
 
 
 def purge(bundle: Path, *, scope: str = "derived") -> list[str]:
@@ -1058,6 +1110,10 @@ def purge(bundle: Path, *, scope: str = "derived") -> list[str]:
     `chunks` 는 전사용 청크 오디오만 지운다. 청크는 원본 오디오에서 언제든
     다시 뽑을 수 있고(`stage_plan` 이 없으면 자동으로 다시 뽑는다), 전사가
     끝난 뒤에는 재개에도 쓰이지 않는다. bundle 용량의 20~25% 를 차지한다.
+
+    `video` 는 프레임용 영상만 지운다. `visual` 이 끝나면 자동으로 지우지만,
+    옛 bundle 이나 `keep_video` 로 남긴 것을 정리할 때 쓴다. 필요해지면
+    `job.json` 의 원본 URL 로 다시 받는다.
     """
     if scope not in PURGE_SCOPES:
         raise ValueError("scope 는 %s 여야 합니다." % " | ".join(PURGE_SCOPES))
@@ -1071,6 +1127,10 @@ def purge(bundle: Path, *, scope: str = "derived") -> list[str]:
                 "raw 에 원본 오디오가 없어 청크를 다시 만들 수 없습니다. "
                 "청크가 이 bundle 의 유일한 오디오이므로 지우지 않습니다.")
         targets.append(bundle / "raw" / "audio")
+    if scope == "video":
+        found = visual.source_video(bundle)
+        if found is not None:
+            targets.append(found)
     if scope in {"derived", "all"}:
         targets += [bundle / "derived", bundle / "index.sqlite3"]
     if scope in {"raw", "all"}:
@@ -1110,6 +1170,8 @@ def main() -> int:
     run_cmd.add_argument("--force", action="store_true", help="캐시를 무시하고 다시 만든다")
     run_cmd.add_argument("--skip-video", action="store_true",
                          help="영상을 받지 않는다. 프레임이 필요해지면 그때 받는다")
+    run_cmd.add_argument("--keep-video", action="store_true",
+                         help="프레임을 뽑은 뒤에도 영상을 지우지 않는다")
     run_cmd.add_argument("--at", default=None, help="프레임을 뽑을 시각. 쉼표 구분 초")
     run_cmd.add_argument("--max-frames", type=int, default=visual.DEFAULT_MAX_FRAMES)
 
@@ -1136,7 +1198,8 @@ def main() -> int:
                       chunk_max_secs=args.chunk_max_secs, overlap_secs=args.overlap_secs,
                       language_codes=codes, width=args.width, daily_limit=args.daily_limit,
                       rpm_limit=args.rpm_limit, request_interval=args.request_interval,
-                      force=args.force, video=not args.skip_video, at=at,
+                      force=args.force, video=not args.skip_video,
+                      keep_video=args.keep_video, at=at,
                       max_frames=args.max_frames)
         print(json.dumps(summary, ensure_ascii=False, indent=1))
     elif args.command == "status":
