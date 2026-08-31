@@ -137,7 +137,6 @@ def create_job(
     chunk_max_secs: float = DEFAULT_CHUNK_MAX_SECS,
     overlap_secs: float = DEFAULT_OVERLAP_SECS,
     language_codes: list[str] | None = None,
-    diarization: bool = True,
 ) -> dict[str, Any]:
     duration = probe_duration(input_path)
     chunks = plan_chunks(duration, chunk_max_secs, overlap_secs)
@@ -150,7 +149,6 @@ def create_job(
             "chunk_max_secs": chunk_max_secs,
             "overlap_secs": overlap_secs,
             "language_codes": language_codes,
-            "diarization": diarization,
         },
         "status": "planned",
         "chunks": chunks,

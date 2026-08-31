@@ -27,7 +27,10 @@
 | `src/context.py` | claude | 읽기만 |
 | `src/visual.py` | claude | 읽기만 |
 | `src/mcp_server.py` | claude | 읽기만 |
+| `src/chapters.py` | claude | 읽기만 |
+| `src/summary.py` | claude | 읽기만 |
 | `tests/test_fetch_youtube.py`, `tests/test_render.py`, `tests/test_pipeline.py`, `tests/test_context.py`, `tests/test_visual.py` | claude | 읽기만 |
+| `tests/test_chapters.py`, `tests/test_summary.py`, `tests/test_mcp_server.py` | claude | 읽기만 |
 
 남의 파일은 고치지 않는다. 문제를 발견하면 자기 `DECISIONS` 파일에 적는다.
 
@@ -184,7 +187,8 @@ Gemini는 조건에 따라 받아적기 대신 번역문을 돌려준다. 번역
    전사가 그 문자 5% 미만이면 번역문으로 본다.
 2. 자막이 없어도 **요청한 언어**가 있으면 그 언어의 문자로 판정한다.
 3. 둘 다 없으면 **영상 메타데이터**(`raw/metadata.json`)를 본다. `language`
-   필드와 `automatic_captions`의 `*-orig` 트랙만 쓴다 — 둘 다 소리에 대한
+   필드와 `auto_caption_langs`(yt-dlp `automatic_captions` 에서 `*-orig` 트랙만
+   추린 것)만 쓴다 — 둘 다 소리에 대한
    정보다. **제목·설명글의 문자는 쓰지 않는다.** 한국어 강의에 영어 제목을
    다는 일이 흔해, 글자와 말이 어긋나면 멀쩡한 전사를 막게 된다.
 
@@ -203,23 +207,15 @@ config가 달라져 그 영상의 청크를 전부 다시 부른다.** 언어가
 
 ## 5. 협업 규약
 
-원격: `https://github.com/Nattentia/ytx` (private)
+원격: `https://github.com/Nattentia/ytx`
 
 ### 작업 공간 분리
 
 같은 클론에서 둘이 동시에 작업하면 브랜치를 나눠도 워킹 트리에서
-서로 덮어쓴다. 각자 자기 클론을 쓴다.
+서로 덮어쓴다. 각자 자기 클론이나 worktree 를 쓴다.
 
-| 에이전트 | 디렉터리 |
-|---|---|
-| claude | `C:\dev\ytx` |
-| codex | `C:\dev\ytx-codex` |
-
-codex 최초 설정:
-
-```
-git clone https://github.com/Nattentia/ytx.git C:\dev\ytx-codex
-```
+2026-08-31 현재 codex 는 복귀하지 않았고 그 클론은 지웠다. claude 단독으로
+작업한다. 다시 나눌 때는 소유자가 이 절과 1절 소유권 표를 고친다.
 
 ### 브랜치
 
@@ -279,8 +275,7 @@ gh pr list
   "config": {
     "chunk_max_secs": 1790.0,
     "overlap_secs": 10.0,
-    "language_codes": null,
-    "diarization": true
+    "language_codes": null
   },
   "status": "partial",
   "chunks": [
