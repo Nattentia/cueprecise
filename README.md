@@ -348,3 +348,7 @@ python -m unittest discover -s tests
 ## 라이선스
 
 MIT. [`LICENSE`](LICENSE) 참고.
+
+초기 전사 흐름을 설계할 때 MIT 라이선스의
+[`gemini-transcribe-wrapper`](https://pypi.org/project/gemini-transcribe-wrapper/0.0.13/)
+구현을 참고했다. ytx는 별도로 작성된 프로젝트다.
