@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import context
 import chapters
 import pipeline
+import summary as summary_mod
 import visual
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -149,6 +150,29 @@ def tool_set_chapter_titles(bundle_root: Path, *, video_id: str, fingerprint: st
                          "end": item["end"], "title": item["title"],
                          "title_source": item["title_source"]}
                         for item in result["chapters"]]}
+
+
+def tool_summary(bundle_root: Path, *, video_id: str) -> dict[str, Any]:
+    """요청 시에만 영속 요약을 만들고 선택적 host 개선 패킷을 반환한다."""
+    bundle = pipeline.bundle_path(bundle_root, video_id)
+    result = summary_mod.build(bundle)
+    if result["needs_host_summary"]:
+        result["summary_action"] = (
+            "현재 summary는 로컬 추출본이므로 그대로 답해도 된다. 문장 품질을 개선할 수 "
+            "있으면 packet의 근거만 사용해 overview, key_points, chapter_summaries, terms를 "
+            "작성하고 ytx_set_summary를 한 번 호출하라. timestamp는 작성하지 마라."
+        )
+    else:
+        result["summary_action"] = None
+    return result
+
+
+def tool_set_summary(bundle_root: Path, *, video_id: str, fingerprint: str,
+                     content: dict[str, Any]) -> dict[str, Any]:
+    """호스트의 구조화된 요약을 검증하고 timestamp를 서버에서 붙여 저장한다."""
+    bundle = pipeline.bundle_path(bundle_root, video_id)
+    return summary_mod.set_host_summary(
+        bundle, fingerprint=fingerprint, content=content)
 
 
 def tool_query(bundle_root: Path, *, video_id: str, query: str,
@@ -280,6 +304,41 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "ytx_summary",
+        "description": "사용자가 전체 영상 요약을 요청할 때만 summary.md를 만들거나 "
+                       "현재 요약을 재사용한다. 로컬 요약은 즉시 사용 가능하며, packet이 "
+                       "있으면 호스트가 ytx_set_summary로 한 번 개선할 수 있다.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"video_id": {"type": "string"}},
+            "required": ["video_id"],
+        },
+    },
+    {
+        "name": "ytx_set_summary",
+        "description": "ytx_summary packet만 근거로 작성한 구조화 요약을 검증·저장한다. "
+                       "chapter 경계와 timestamp는 서버가 결정한다.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "video_id": {"type": "string"},
+                "fingerprint": {"type": "string"},
+                "content": {
+                    "type": "object",
+                    "properties": {
+                        "overview": {"type": "string"},
+                        "key_points": {"type": "array", "items": {"type": "object"}},
+                        "chapter_summaries": {"type": "array", "items": {"type": "object"}},
+                        "terms": {"type": "array", "items": {"type": "object"},
+                                  "description": "선택. 없으면 빈 배열"},
+                    },
+                    "required": ["overview", "key_points", "chapter_summaries"],
+                },
+            },
+            "required": ["video_id", "fingerprint", "content"],
+        },
+    },
+    {
         "name": "ytx_set_chapter_titles",
         "description": "ytx_outline의 needs_titles에 대해 호스트가 직접 지은 제목을 "
                        "검증 후 저장한다. 경계와 원문은 바꿀 수 없다.",
@@ -359,6 +418,12 @@ def dispatch(name: str, arguments: dict[str, Any], *, bundle_root: Path,
     if name == "ytx_query":
         return tool_query(bundle_root, video_id=arguments["video_id"],
                           query=arguments["query"], limit=int(arguments.get("limit", 8)))
+    if name == "ytx_summary":
+        return tool_summary(bundle_root, video_id=arguments["video_id"])
+    if name == "ytx_set_summary":
+        return tool_set_summary(bundle_root, video_id=arguments["video_id"],
+                                fingerprint=arguments["fingerprint"],
+                                content=arguments["content"])
     if name == "ytx_set_chapter_titles":
         return tool_set_chapter_titles(
             bundle_root, video_id=arguments["video_id"],

@@ -54,7 +54,8 @@ class ToolSurfaceTests(unittest.TestCase):
         names = {t["name"] for t in mcp_server.TOOLS}
         self.assertEqual(names, {
             "ytx_register", "ytx_status", "ytx_outline", "ytx_query",
-            "ytx_excerpt", "ytx_frames", "ytx_purge", "ytx_set_chapter_titles"})
+            "ytx_excerpt", "ytx_frames", "ytx_purge", "ytx_set_chapter_titles",
+            "ytx_summary", "ytx_set_summary"})
 
     def test_every_tool_declares_an_input_schema(self) -> None:
         for tool in mcp_server.TOOLS:
@@ -97,7 +98,7 @@ class ProtocolTests(unittest.TestCase):
         mcp_server.serve(stream_in, stream_out, bundle_root=Path("data"))
         replies = [json.loads(line) for line in stream_out.getvalue().splitlines()]
         self.assertEqual([r["id"] for r in replies], [1, 2])
-        self.assertEqual(len(replies[0]["result"]["tools"]), 8)
+        self.assertEqual(len(replies[0]["result"]["tools"]), 10)
 
 
 class OutlineTests(BundleFixture):
@@ -163,6 +164,18 @@ class QueryTests(BundleFixture):
     def test_missing_index_is_reported(self) -> None:
         with self.assertRaises(mcp_server.ToolError):
             mcp_server.tool_query(self.root, video_id="없는영상", query="가")
+
+
+class SummaryToolTests(BundleFixture):
+    def test_summary_is_on_demand_and_has_local_fallback(self) -> None:
+        path = self.bundle / "derived" / "summary.md"
+        self.assertFalse(path.exists())
+        result = mcp_server.tool_summary(self.root, video_id="vid")
+        self.assertTrue(path.exists())
+        self.assertEqual(result["generation"], "local-extractive")
+        self.assertTrue(result["needs_host_summary"])
+        self.assertTrue(result["packet"])
+        self.assertIn("그대로 답해도", result["summary_action"])
 
 
 class ExcerptTests(BundleFixture):
