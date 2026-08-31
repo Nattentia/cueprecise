@@ -20,12 +20,14 @@ python src/pipeline.py status jcBDSLSeud4                 # 진행도 + 사용�
 python src/pipeline.py run <url> --stages merge,render    # 일부 단계만 재실행
 python src/pipeline.py purge jcBDSLSeud4 --scope derived  # derived 만 삭제
 python src/pipeline.py purge jcBDSLSeud4 --scope chunks   # 청크 오디오만 삭제
+python src/pipeline.py purge jcBDSLSeud4 --scope video    # 프레임용 영상만 삭제
 ```
 
 ## 파이프라인
 
 ```
 fetch       URL           -> raw/source.<ext>, source_video.<ext>, captions.json
+                            (yt-dlp 한 번에 셋 다. 실측 23분 영상 7.1초)
 plan        원본 오디오    -> job.json, raw/audio/chunk-NNN.mp3      쿼터 0
 transcribe  chunk-NNN.mp3 -> raw/transcripts/chunk-NNN.json         청크당 1콜
 assemble    chunk 전사    -> derived/transcript.json                쿼터 0
@@ -73,7 +75,11 @@ Gemini 는 긴 오디오에서 드물게 단어 하나의 timestamp 를 손상�
 20~25% 를 차지하므로 `purge --scope chunks` 로 지울 수 있다. 원본 오디오가
 남아 있으면 `plan` 단계가 필요할 때 다시 뽑는다.
 
-영상은 프레임 추출에만 쓴다. 360p 로 받으므로 23분 영상 기준 16MB 다.
+영상은 프레임 추출에만 쓴다. 360p 로 받으므로 23분 영상 기준 16MB 이고,
+**프레임을 뽑고 나면 지운다** (`--keep-video` 로 끈다). 남는 것은 프레임 jpg
+이고, 나중에 다른 시각이 필요하면 `job.json` 의 원본 URL 로 다시 받는다.
+실측으로 23분 bundle 이 34MB 에서 18MB 가 됐다. 원본 주소를 모르는 bundle
+에서는 되돌릴 수 없는 삭제이므로 지우지 않는다.
 `--skip-video` 로 건너뛰어도 `ytx_frames` 나 `--stages visual` 이 그때 받아온다.
 bundle 용량 실측은 23분 55.8MB,
 58분 110.3MB 였고 그중 오디오가 72~80%, 영상은 13~28% 다.
@@ -137,8 +143,9 @@ Gemini 는 4회 실행 모두 실패. YouTube 자막은 무료로 갖고 있다.
 python src/pipeline.py run <url> --language ko-KR
 ```
 
-전사가 번역문으로 보이면 **첫 청크에서 멈춘다.** 유튜브 원어 자막이
-한국어인데 전사에 한글이 없거나, `ko` 를 요청했는데 한글이 없으면 잡는다.
+전사가 번역문으로 보이면 **첫 청크에서 멈춘다.** 판정은 문자 체계로 한다 —
+같은 시간대 원어 자막이 쓰는 문자와 전사의 문자가 다르면 번역문이다. 한국어를
+특별 취급하지 않으므로 일본어·중국어·러시아어 영상에서도 그대로 돈다.
 남은 청크의 Gemini 호출을 쓰지 않고, 응답 원문은 그대로 남는다. 영어 용어가
 섞인 한국어 강의는 오탐하지 않는다 (한글 5% 미만일 때만 잡는다).
 

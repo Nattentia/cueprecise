@@ -240,58 +240,153 @@ def _download(url: str, fmt: str, raw: Path, stem: str,
         shutil.rmtree(staging, ignore_errors=True)
 
 
+def _has_video_stream(path: Path) -> bool:
+    """영상 트랙이 있는 파일인가. 소리·영상을 한 번에 받은 뒤 가려낸다."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        # ffprobe 가 없으면 확장자로 짐작한다. 정확도가 낮지만 여기서 멈추는
+        # 것보다 낫다 — ffprobe 는 어차피 청크 분할에 필요하다.
+        return path.suffix.lower() in (".mp4", ".mkv")
+    return "video" in (result.stdout or "")
+
+
+def _fetch_sources(url: str, raw: Path, *, want_video: bool,
+                   want_captions: bool) -> tuple[dict[str, Path | None], str]:
+    """yt-dlp 한 번으로 소리·영상·자막을 받는다.
+
+    셋을 따로 받으면 같은 페이지를 세 번 해석한다 (실측 12.3초, 회당 약 4초).
+    한 번에 요청하면 해석도 한 번이고 다운로드도 이어서 돈다 (실측 5.4초).
+
+    성공 여부는 종료 코드가 아니라 **실제로 받아진 파일**로 판단한다. 자막
+    하나가 실패해도 소리까지 실패로 처리하면 안 된다.
+    """
+    staging = raw / ".download"
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True, exist_ok=True)
+    found: dict[str, Path | None] = {"audio": None, "video": None, "captions": None}
+    try:
+        fmt = AUDIO_FORMAT + ("," + VIDEO_FORMAT if want_video else "")
+        command = ["yt-dlp", "--no-playlist", "-f", fmt]
+        if want_captions:
+            command += ["--write-auto-sub", "--sub-langs",
+                        ",".join(fetch_youtube.ORIGINAL_LANGS),
+                        "--convert-subs", "srt"]
+        command += ["-o", str(staging / "media") + ".%(format_id)s.%(ext)s", url]
+        result = subprocess.run(command, capture_output=True, text=True)
+
+        media: list[Path] = []
+        for path in sorted(staging.iterdir()):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() == ".srt":
+                if found["captions"] is None:
+                    # 포맷마다 한 벌씩 나온다. 내용이 같으므로 하나만 쓴다.
+                    found["captions"] = path
+            elif path.suffix.lower() != ".part":
+                media.append(path)
+
+        for path in sorted(media, key=lambda item: item.stat().st_size, reverse=True):
+            kind = "video" if want_video and _has_video_stream(path) else "audio"
+            if found[kind] is None:
+                found[kind] = path
+
+        moved: dict[str, Path | None] = {"audio": None, "video": None,
+                                         "captions": found["captions"]}
+        for kind, stem, names in (("audio", "source", audio.AUDIO_NAMES),
+                                  ("video", "source_video", visual.VIDEO_NAMES)):
+            source = found[kind]
+            if source is None:
+                continue
+            target = raw / (stem + source.suffix)
+            _remove_stale_sources(raw.parent, names, keep=target.name)
+            if target.exists():
+                target.unlink()
+            source.replace(target)
+            moved[kind] = target
+        if moved["captions"] is not None:
+            # staging 은 곧 지워지므로 자막은 여기서 읽어 둔다.
+            moved["captions"] = _stage_captions(moved["captions"], raw)
+        return moved, (result.stderr or "")
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def _stage_captions(srt: Path, raw: Path) -> Path:
+    payload = fetch_youtube.payload_from_srt(srt)
+    target = raw / "captions.json"
+    fetch_youtube.write_payload(payload, target)
+    return target
+
+
 def stage_fetch(bundle: Path, url: str, *, force: bool = False,
                 video: bool = True) -> dict[str, Any]:
-    """오디오·영상·자막을 받는다. Gemini 호출 없음.
+    """오디오·영상·자막을 **한 번의 yt-dlp 호출로** 받는다. Gemini 호출 없음.
 
-    영상 취득에 실패해도 치명이 아니다. 나중에 `ensure_video` 가 같은 URL 로
-    다시 시도한다.
+    영상과 자막은 실패해도 치명이 아니다. 영상은 나중에 `ensure_video` 가,
+    자막은 `fetch_youtube.fetch` 의 폴백이 다시 시도한다.
     """
     raw = bundle / "raw"
     captions = raw / "captions.json"
     raw.mkdir(parents=True, exist_ok=True)
 
     source = audio.source_audio(bundle)
-    if force or source is None:
-        downloaded, error = _download(url, AUDIO_FORMAT, raw, "source", audio.AUDIO_NAMES)
-        if downloaded is None or audio.source_audio(bundle) is None:
+    existing_video = visual.source_video(bundle)
+    need_audio = force or source is None
+    need_video = video and (force or existing_video is None)
+    need_captions = force or not captions.exists()
+
+    if need_audio or need_video:
+        got, error = _fetch_sources(url, raw, want_video=need_video,
+                                    want_captions=need_captions)
+        if need_audio and got["audio"] is None:
             # 기존 원본이 있었다면 그대로 살아 있다.
             raise StageError("오디오 다운로드 실패: " + error[-500:])
-        source = audio.source_audio(bundle)
-        _log("  오디오 %.1fMB (%s)" % (source.stat().st_size / 1048576, source.name))
-    else:
-        _log("  오디오 재사용 (%s)" % source.name)
-
-    # 영상은 프레임 추출에만 쓴다. 자막과 마찬가지로 실패해도 치명이 아니다.
-    if video:
-        existing = visual.source_video(bundle)
-        if existing is not None and not force:
-            _log("  영상 재사용 (%s)" % existing.name)
+        if got["audio"] is not None:
+            source = audio.source_audio(bundle)
+            _log("  오디오 %.1fMB (%s)" % (source.stat().st_size / 1048576, source.name))
         else:
-            downloaded, error = _download(url, VIDEO_FORMAT, raw, "source_video",
-                                          visual.VIDEO_NAMES)
-            if downloaded is None:
+            _log("  오디오 재사용 (%s)" % source.name)
+        if need_video:
+            if got["video"] is None:
                 tail = error.strip().splitlines()
                 _log("  경고: 영상 취득 실패, 프레임 추출을 건너뛴다 (%s)"
                      % (tail[-1][:200] if tail else "원인 불명"))
             else:
                 _log("  영상 %.1fMB (%s)"
-                     % (downloaded.stat().st_size / 1048576, downloaded.name))
+                     % (got["video"].stat().st_size / 1048576, got["video"].name))
                 if force:
                     # 옛 영상에서 뽑아둔 프레임은 새 영상과 무관하다.
-                    shutil.rmtree(bundle / "raw" / "frames", ignore_errors=True)
+                    shutil.rmtree(raw / "frames", ignore_errors=True)
+        if need_captions and got["captions"] is not None:
+            need_captions = False
+    else:
+        _log("  오디오 재사용 (%s)" % source.name)
+        if existing_video is not None:
+            _log("  영상 재사용 (%s)" % existing_video.name)
 
-    if force or not captions.exists():
+    if need_captions:
+        # 원어 자동자막이 같이 안 왔을 때만 한 번 더 시도한다 (사람이 올린 자막).
         try:
             fetch_youtube.fetch(url, captions)
         except Exception as error:  # 자막은 선택 자료다. 없어도 파이프라인은 진행한다.
             _log("  경고: 자막 취득 실패, 영어 용어 복원을 건너뛴다 (%s)" % error)
+            # 자막이 원래 없는 영상과 취득이 고장난 것은 사람이 할 일이 다르다.
+            # 0 cue 만 남기면 구분할 수 없으므로 이유를 함께 적는다.
             _write_json(captions, {"source": "youtube", "language": None,
+                                   "original": False, "error": str(error)[:300],
                                    "video_id": bundle.name, "cues": []})
-    cue_count = len(_read_json(captions).get("cues", []))
-    _log("  자막 %d cues" % cue_count)
+
+    payload = _read_json(captions) if captions.exists() else {"cues": []}
+    cue_count = len(payload.get("cues", []))
+    _log("  자막 %d cues (%s)" % (cue_count, payload.get("language") or "없음"))
     found = visual.source_video(bundle)
     return {"source_audio": str(source), "captions": str(captions), "cues": cue_count,
+            "captions_language": payload.get("language"),
             "video": str(found) if found else None}
 
 
@@ -356,14 +451,15 @@ def _raw_meta(job: dict[str, Any], chunk: dict[str, Any], langs: str) -> dict[st
 
 # 번역문 가드 ------------------------------------------------------------------
 #
-# Gemini 는 소리가 흐릿하면 "받아적기" 대신 "알아듣고 영어로 다시 쓰기" 로
+# Gemini 는 소리가 흐릿하면 "받아적기" 대신 "알아듣고 다른 언어로 다시 쓰기" 로
 # 미끄러진다 (실측: DECISIONS/claude.md 2026-08-31). 번역문은 단어 수도 많고
 # 문장도 자연스러워 사람 눈에는 정상으로 보이지만 원문 근거로 쓸 수 없다.
 #
-# 판단 근거 둘. 이미 공짜로 가진 자료만 쓴다.
-#   1. 유튜브 원어 자막이 한글투성이인데 전사에 한글이 없다
-#   2. 자막이 없어도, ko 를 요청했는데 한글이 없다
-# 둘 다 임계값을 넉넉히 잡아 영어 용어가 섞인 한국어 강의를 오탐하지 않는다.
+# 판정은 **문자 종류**로 한다. 한국어를 특별 취급하지 않는다 — 일본어 영상이
+# 영어로 번역돼 와도 같은 규칙으로 잡힌다. 근거 둘 다 이미 공짜로 가진 자료다.
+#   1. 같은 시간대 원어 자막의 문자 종류와 전사의 문자 종류가 다르다
+#   2. 자막이 없어도, 요청한 언어의 문자 종류와 전사가 다르다
+# 임계값은 영어 용어가 섞인 한국어 강의를 오탐하지 않게 잡는다.
 
 _TRANSLATION_MIN_CHARS = 40
 """이보다 짧은 표본은 근거로 쓰지 않는다."""
@@ -371,23 +467,96 @@ _TRANSLATION_MIN_CHARS = 40
 _TRANSLATION_CAPTION_MIN_CHARS = 20
 """자막 표본의 최소 길이. 실제 자막 파일은 수천 자라 넉넉히 통과한다."""
 
-_TRANSLATION_CAPTION_SHARE = 0.3
-"""자막이 이만큼 한글이면 원문이 한국어라고 본다."""
+_TRANSLATION_DOMINANT_SHARE = 0.3
+"""이 비율을 넘는 문자 종류가 그 글의 문자 체계다."""
 
-_TRANSLATION_TRANSCRIPT_SHARE = 0.05
-"""전사가 이보다 한글이 적으면 한국어를 받아적은 것이 아니다."""
+_TRANSLATION_TRACE_SHARE = 0.05
+"""기대한 문자가 이보다 적으면 그 언어를 받아적은 것이 아니다."""
+
+# 언어 코드 앞자리 -> 그 언어가 쓰는 문자 종류. 여기 없는 언어는 요청 언어만
+# 으로는 판정하지 않는다 (자막 근거가 있으면 그것으로 판정한다).
+_LANGUAGE_SCRIPTS: dict[str, str] = {
+    "ko": "hangul", "ja": "japanese", "zh": "han", "yue": "han",
+    "ru": "cyrillic", "uk": "cyrillic", "bg": "cyrillic", "sr": "cyrillic",
+    "el": "greek", "he": "hebrew", "ar": "arabic", "fa": "arabic",
+    "hi": "devanagari", "mr": "devanagari", "ne": "devanagari",
+    "th": "thai", "ka": "georgian", "hy": "armenian",
+    "en": "latin", "de": "latin", "fr": "latin", "es": "latin",
+    "pt": "latin", "it": "latin", "nl": "latin", "pl": "latin",
+    "tr": "latin", "id": "latin", "vi": "latin", "sv": "latin",
+}
 
 
-def _hangul_share(text: str) -> float:
-    """글자 중 한글 비율. 숫자·기호·공백은 세지 않는다."""
-    hangul = latin = 0
+def _script_counts(text: str) -> dict[str, int]:
+    """글자를 문자 종류별로 센다. 숫자·기호·공백은 세지 않는다."""
+    counts: dict[str, int] = {}
+
+    def add(name: str) -> None:
+        counts[name] = counts.get(name, 0) + 1
+
     for char in text:
+        code = ord(char)
         if "가" <= char <= "힣" or "ㄱ" <= char <= "ㆎ":
-            hangul += 1
+            add("hangul")
+        elif 0x3040 <= code <= 0x30FF:            # 히라가나·가타카나
+            add("japanese")
+        elif 0x4E00 <= code <= 0x9FFF:            # 한자
+            add("han")
+        elif 0x0400 <= code <= 0x04FF:
+            add("cyrillic")
+        elif 0x0370 <= code <= 0x03FF:
+            add("greek")
+        elif 0x0590 <= code <= 0x05FF:
+            add("hebrew")
+        elif 0x0600 <= code <= 0x06FF:
+            add("arabic")
+        elif 0x0900 <= code <= 0x097F:
+            add("devanagari")
+        elif 0x0E00 <= code <= 0x0E7F:
+            add("thai")
+        elif 0x10A0 <= code <= 0x10FF:
+            add("georgian")
+        elif 0x0530 <= code <= 0x058F:
+            add("armenian")
         elif char.isascii() and char.isalpha():
-            latin += 1
-    total = hangul + latin
-    return (hangul / total) if total else 0.0
+            add("latin")
+    return counts
+
+
+def _dominant_script(text: str) -> str | None:
+    """그 글의 문자 체계. 어느 것도 뚜렷하지 않으면 None.
+
+    일본어는 한자를 섞어 쓰므로 가나가 조금이라도 뚜렷하면 japanese 로 본다.
+    그러지 않으면 한자 비중이 큰 일본어 문장이 중국어로 잡힌다.
+    """
+    counts = _script_counts(text)
+    total = sum(counts.values())
+    if not total:
+        return None
+    if counts.get("japanese", 0) / total >= _TRANSLATION_TRACE_SHARE:
+        return "japanese"
+    name, count = max(counts.items(), key=lambda item: item[1])
+    return name if count / total >= _TRANSLATION_DOMINANT_SHARE else None
+
+
+def _script_share(text: str, script: str) -> float:
+    counts = _script_counts(text)
+    total = sum(counts.values())
+    if not total:
+        return 0.0
+    share = counts.get(script, 0)
+    if script == "japanese":
+        # 가나 없이 한자만 나온 구간도 일본어일 수 있다.
+        share += counts.get("han", 0)
+    return share / total
+
+
+def _requested_script(langs: str) -> str | None:
+    """요청한 언어들이 한 문자 체계로 모이면 그 이름."""
+    scripts = {_LANGUAGE_SCRIPTS.get(code.strip().lower().split("-")[0])
+               for code in langs.split(",") if code.strip()}
+    scripts.discard(None)
+    return scripts.pop() if len(scripts) == 1 else None
 
 
 def _captions_are_original(language: str | None) -> bool:
@@ -395,26 +564,35 @@ def _captions_are_original(language: str | None) -> bool:
 
     `-orig` 만 원어다. `ko` / `en` 같은 트랙은 YouTube 가 기계 번역한 것일 수
     있고, 실제로 영어 영상에 `ko` 를 요청하면 한국어 번역 자막이 내려온다.
-    번역된 자막을 "원문이 한국어" 의 근거로 쓰면 멀쩡한 영어 전사를 번역문으로
-    오판해 막는다.
+    번역된 자막을 원어 근거로 쓰면 멀쩡한 전사를 번역문으로 오판해 막는다.
     """
     return bool(language) and str(language).endswith("-orig")
 
 
+def _expected_script(*, captions: str, langs: str,
+                     captions_language: str | None) -> str | None:
+    """이 구간의 전사가 어느 문자 체계여야 하는가. 모르면 None."""
+    if (_captions_are_original(captions_language)
+            and len(captions) >= _TRANSLATION_CAPTION_MIN_CHARS):
+        found = _dominant_script(captions)
+        if found is not None:
+            return found
+    return _requested_script(langs)
+
+
 def _looks_translated(transcript: str, *, captions: str, langs: str,
                       captions_language: str | None = None) -> bool:
-    """받아적기가 아니라 번역문으로 보이는가."""
+    """받아적기가 아니라 번역문으로 보이는가.
+
+    기대하는 문자 체계를 정한 뒤, 전사에 그 문자가 사실상 없으면 번역문이다.
+    """
     if len(transcript) < _TRANSLATION_MIN_CHARS:
         return False
-    if _hangul_share(transcript) >= _TRANSLATION_TRANSCRIPT_SHARE:
+    expected = _expected_script(captions=captions, langs=langs,
+                                captions_language=captions_language)
+    if expected is None:
         return False
-    korean_expected = (_captions_are_original(captions_language)
-                       and len(captions) >= _TRANSLATION_CAPTION_MIN_CHARS
-                       and _hangul_share(captions) >= _TRANSLATION_CAPTION_SHARE)
-    if not korean_expected:
-        korean_expected = any(code.strip().lower().startswith("ko")
-                              for code in langs.split(","))
-    return korean_expected
+    return _script_share(transcript, expected) < _TRANSLATION_TRACE_SHARE
 
 
 def _captions_evidence(bundle: Path) -> tuple[str, str | None]:
@@ -542,7 +720,13 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
             if not chunk_mp3.exists():
                 raise StageError("청크 오디오가 없습니다: %s" % chunk_mp3)
             if calls_made:
-                time.sleep(request_interval)
+                # 고정 간격으로 무조건 쉬면 분당 한도가 비어 있어도 기다린다.
+                # 원장이 최근 1분 시도를 들고 있으므로 창이 찼을 때만 쉰다.
+                delay = (usage.seconds_until_slot(ledger, api_key, rpm_limit=rpm_limit)
+                         if rpm_limit else request_interval)
+                if delay > 0:
+                    _log("  분당 한도가 차 %.0f초 기다린다" % delay)
+                    time.sleep(delay)
             chunk["attempts"] += 1
             chunk["status"] = "running"
             _save_job(bundle, job)  # 요청 직전 checkpoint
@@ -578,7 +762,8 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
             job["status"] = "partial"
             _save_job(bundle, job)
             raise StageError(
-                "청크 %d 는 받아적기가 아니라 번역문으로 보인다 (한글 %.0f%%). "
+                "청크 %d 는 받아적기가 아니라 번역문으로 보인다 "
+                "(전사 문자 체계 %s, 기대 %s). "
                 "원문이 아니므로 근거로 쓸 수 없어 여기서 멈춘다 — 남은 청크의 "
                 "호출을 아낀다. "
                 "이어가려면 --language 로 원어를 지정하고 같은 명령을 다시 "
@@ -588,7 +773,9 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
                 "(호출은 쓰지 않는다). 판정이 틀렸다면 그 언어를 --language 로 "
                 "지정하거나 `python src/transcribe.py --from-raw %s <out.json>` "
                 "로 호출 없이 수동 복구할 수 있다."
-                % (chunk["index"], 100 * _hangul_share(text),
+                % (chunk["index"], _dominant_script(text) or "불명",
+                   _expected_script(captions=in_range, langs=langs,
+                                    captions_language=captions_language) or "불명",
                    _raw_path(bundle, chunk))
             )
 
@@ -719,11 +906,16 @@ def ensure_video(bundle: Path, *, url: str | None = None) -> Path | None:
 
 def stage_visual(bundle: Path, *, at: list[float] | None = None,
                  max_frames: int = visual.DEFAULT_MAX_FRAMES,
-                 url: str | None = None, acquire: bool = True) -> dict[str, Any]:
+                 url: str | None = None, acquire: bool = True,
+                 keep_video: bool = False) -> dict[str, Any]:
     """화면 참조·복원 용어 시각의 프레임을 뽑는다 (CONTRACT 11절). Gemini 호출 없음.
 
     `acquire` 가 거짓이면 이미 받아둔 영상만 쓴다. `--skip-video` 로 껐는데
     여기서 곧바로 받아오면 그 옵션이 무의미해진다.
+
+    프레임을 뽑고 나면 영상은 쓸 데가 없으므로 놓아준다 (`keep_video` 로 끈다).
+    남는 것은 프레임 jpg 이고, 나중에 다른 시각이 필요하면 `ensure_video` 가
+    `job.json` 의 원본 URL 로 다시 받는다. 실측 14.5~16MB 를 회수한다.
     """
     # 전사가 없으면 visual.build 가 어차피 실패한다. 쓰지도 못할 영상을 먼저
     # 받아 버리지 않는다.
@@ -746,7 +938,32 @@ def stage_visual(bundle: Path, *, at: list[float] | None = None,
     else:
         _log("  프레임 0장 / 후보 %d — %s"
              % (result["candidates_considered"], result.get("note") or ""))
+    if frames and not keep_video:
+        released = _release_video(bundle)
+        if released:
+            _log("  영상 %s 를 지웠다 (%.1fMB 회수). 필요하면 원본 URL 로 다시 받는다"
+                 % released)
     return result
+
+
+def _release_video(bundle: Path) -> tuple[str, float] | None:
+    """프레임을 다 뽑은 영상을 지운다. 다시 받을 수 없으면 두고 본다."""
+    found = visual.source_video(bundle)
+    if found is None:
+        return None
+    job_path = bundle / "job.json"
+    source_url = None
+    if job_path.exists():
+        try:
+            source_url = (_read_json(job_path).get("input") or {}).get("source")
+        except (OSError, json.JSONDecodeError):
+            source_url = None
+    if not source_url:
+        # 다시 받을 주소를 모르면 지우지 않는다. 되돌릴 수 없는 삭제다.
+        return None
+    size_mb = found.stat().st_size / 1048576
+    found.unlink()
+    return found.name, size_mb
 
 
 def stage_index(bundle: Path) -> Path:
@@ -767,7 +984,8 @@ def run(url: str, *, bundle_root: Path = Path("data"),
         rpm_limit: int | None = DEFAULT_RPM_LIMIT,
         request_interval: float = DEFAULT_REQUEST_INTERVAL,
         ledger: Path | None = None, force: bool = False,
-        video: bool = True, at: list[float] | None = None,
+        video: bool = True, keep_video: bool = False,
+        at: list[float] | None = None,
         max_frames: int = visual.DEFAULT_MAX_FRAMES,
         transcriber=None) -> dict[str, Any]:
     video_id = video_id_from_url(url)
@@ -817,7 +1035,7 @@ def run(url: str, *, bundle_root: Path = Path("data"),
             summary["stages"][stage] = {"srt": str(srt), "txt": str(txt)}
         elif stage == "visual":
             frames = stage_visual(bundle, at=at, max_frames=max_frames, url=url,
-                                  acquire=video)
+                                  acquire=video, keep_video=keep_video)
             summary["stages"][stage] = {
                 "frames": len(frames["frames"]),
                 "candidates": frames["candidates_considered"],
@@ -852,6 +1070,25 @@ def status(bundle: Path, *, ledger: Path | None = None, api_key: str | None = No
             ("index", "index.sqlite3"),
         )
     }
+    # 자막은 선택 자료지만, 0 cue 가 "원래 없는 영상" 인지 "취득이 고장난 것"
+    # 인지는 구분돼야 한다. yt-dlp 나 YouTube 가 바뀌면 조용히 후자가 된다.
+    captions_path = bundle / "raw" / "captions.json"
+    info["captions"] = None
+    if captions_path.exists():
+        try:
+            payload = _read_json(captions_path)
+        except (OSError, json.JSONDecodeError) as error:
+            info["captions"] = {"cues": 0, "language": None, "original": False,
+                                "failed": True, "error": str(error)[:200]}
+        else:
+            info["captions"] = {
+                "cues": len(payload.get("cues", []) or []),
+                "language": payload.get("language"),
+                "original": bool(payload.get("original")),
+                "failed": bool(payload.get("error")) or payload.get("language") is None,
+                "error": payload.get("error"),
+            }
+
     # 기본에서 빠진 단계의 산출물은 없는 것이 정상이다. 읽는 쪽이 그것을
     # 실패로 오인하지 않도록 이름을 함께 준다.
     info["optional_artifacts"] = [name for stage in OPTIONAL_STAGES
@@ -864,7 +1101,7 @@ def status(bundle: Path, *, ledger: Path | None = None, api_key: str | None = No
     return info
 
 
-PURGE_SCOPES = ("chunks", "derived", "raw", "all")
+PURGE_SCOPES = ("chunks", "video", "derived", "raw", "all")
 
 
 def purge(bundle: Path, *, scope: str = "derived") -> list[str]:
@@ -873,6 +1110,10 @@ def purge(bundle: Path, *, scope: str = "derived") -> list[str]:
     `chunks` 는 전사용 청크 오디오만 지운다. 청크는 원본 오디오에서 언제든
     다시 뽑을 수 있고(`stage_plan` 이 없으면 자동으로 다시 뽑는다), 전사가
     끝난 뒤에는 재개에도 쓰이지 않는다. bundle 용량의 20~25% 를 차지한다.
+
+    `video` 는 프레임용 영상만 지운다. `visual` 이 끝나면 자동으로 지우지만,
+    옛 bundle 이나 `keep_video` 로 남긴 것을 정리할 때 쓴다. 필요해지면
+    `job.json` 의 원본 URL 로 다시 받는다.
     """
     if scope not in PURGE_SCOPES:
         raise ValueError("scope 는 %s 여야 합니다." % " | ".join(PURGE_SCOPES))
@@ -886,6 +1127,10 @@ def purge(bundle: Path, *, scope: str = "derived") -> list[str]:
                 "raw 에 원본 오디오가 없어 청크를 다시 만들 수 없습니다. "
                 "청크가 이 bundle 의 유일한 오디오이므로 지우지 않습니다.")
         targets.append(bundle / "raw" / "audio")
+    if scope == "video":
+        found = visual.source_video(bundle)
+        if found is not None:
+            targets.append(found)
     if scope in {"derived", "all"}:
         targets += [bundle / "derived", bundle / "index.sqlite3"]
     if scope in {"raw", "all"}:
@@ -925,6 +1170,8 @@ def main() -> int:
     run_cmd.add_argument("--force", action="store_true", help="캐시를 무시하고 다시 만든다")
     run_cmd.add_argument("--skip-video", action="store_true",
                          help="영상을 받지 않는다. 프레임이 필요해지면 그때 받는다")
+    run_cmd.add_argument("--keep-video", action="store_true",
+                         help="프레임을 뽑은 뒤에도 영상을 지우지 않는다")
     run_cmd.add_argument("--at", default=None, help="프레임을 뽑을 시각. 쉼표 구분 초")
     run_cmd.add_argument("--max-frames", type=int, default=visual.DEFAULT_MAX_FRAMES)
 
@@ -951,7 +1198,8 @@ def main() -> int:
                       chunk_max_secs=args.chunk_max_secs, overlap_secs=args.overlap_secs,
                       language_codes=codes, width=args.width, daily_limit=args.daily_limit,
                       rpm_limit=args.rpm_limit, request_interval=args.request_interval,
-                      force=args.force, video=not args.skip_video, at=at,
+                      force=args.force, video=not args.skip_video,
+                      keep_video=args.keep_video, at=at,
                       max_frames=args.max_frames)
         print(json.dumps(summary, ensure_ascii=False, indent=1))
     elif args.command == "status":

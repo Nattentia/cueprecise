@@ -748,10 +748,10 @@ class OptionalRenderTests(unittest.TestCase):
 class TranslationGuardTests(unittest.TestCase):
     """Gemini 가 받아적기 대신 번역문을 돌려주는 경우를 잡는다."""
 
-    def test_hangul_share_counts_only_letters(self) -> None:
-        self.assertGreater(pipeline._hangul_share("안녕하세요 여러분"), 0.9)
-        self.assertEqual(pipeline._hangul_share("Hello everyone, 2026"), 0.0)
-        self.assertEqual(pipeline._hangul_share("   "), 0.0)
+    def test_script_share_counts_only_letters(self) -> None:
+        self.assertGreater(pipeline._script_share("안녕하세요 여러분", "hangul"), 0.9)
+        self.assertEqual(pipeline._script_share("Hello everyone, 2026", "hangul"), 0.0)
+        self.assertEqual(pipeline._script_share("   ", "hangul"), 0.0)
 
     def test_detects_translation_against_captions(self) -> None:
         korean = "안녕하세요 오늘은 자기지도학습에 대해 말씀드리겠습니다"
@@ -1033,3 +1033,314 @@ class ChunkRangeGuardTests(unittest.TestCase):
         self.assertTrue(pipeline._looks_translated(
             english, captions=pipeline._captions_in_range(self.CUES, 0.0, 100.0),
             captions_language="ko-orig", langs="auto"))
+
+
+class ScriptGuardTests(unittest.TestCase):
+    """번역문 판정은 문자 종류로 한다. 한국어를 특별 취급하지 않는다."""
+
+    KO = "안녕하세요 오늘은 자기지도학습에 대해 말씀드리겠습니다 여러분"
+    EN = "Hello everyone today I will talk about self supervised learning"
+    JA = "こんにちは今日は自己教師あり学習についてお話しします皆さん"
+    ZH = "大家好今天我要讲的是自监督学习的最新进展和应用"
+
+    def test_script_profile_names_the_dominant_script(self) -> None:
+        self.assertEqual(pipeline._dominant_script(self.KO), "hangul")
+        self.assertEqual(pipeline._dominant_script(self.EN), "latin")
+        self.assertEqual(pipeline._dominant_script(self.JA), "japanese")
+        self.assertEqual(pipeline._dominant_script(self.ZH), "han")
+        self.assertIsNone(pipeline._dominant_script("2026 :: 12.5 %"))
+
+    def test_translation_detected_for_any_source_language(self) -> None:
+        for name, captions in (("한국어", self.KO), ("일본어", self.JA),
+                               ("중국어", self.ZH)):
+            with self.subTest(source=name):
+                self.assertTrue(pipeline._looks_translated(
+                    self.EN, captions=captions, captions_language="xx-orig",
+                    langs="auto"), "%s 영상의 영어 번역문을 놓쳤다" % name)
+
+    def test_matching_script_passes(self) -> None:
+        for name, text in (("한국어", self.KO), ("영어", self.EN),
+                           ("일본어", self.JA), ("중국어", self.ZH)):
+            with self.subTest(source=name):
+                self.assertFalse(pipeline._looks_translated(
+                    text, captions=text, captions_language="xx-orig", langs="auto"))
+
+    def test_english_terms_in_korean_lecture_still_pass(self) -> None:
+        mixed = ("self supervised learning 이라는 방법을 오늘 설명드리겠습니다 "
+                 "transformer 구조와 attention 을 함께 봅니다")
+        self.assertFalse(pipeline._looks_translated(
+            mixed, captions=mixed, captions_language="ko-orig", langs="ko-KR"))
+
+    def test_requested_language_rule_covers_more_than_korean(self) -> None:
+        """자막이 없어도 요청 언어의 문자 종류와 어긋나면 잡는다."""
+        self.assertTrue(pipeline._looks_translated(
+            self.EN, captions="", captions_language=None, langs="ja-JP"))
+        self.assertTrue(pipeline._looks_translated(
+            self.EN, captions="", captions_language=None, langs="ko-KR"))
+        self.assertFalse(pipeline._looks_translated(
+            self.EN, captions="", captions_language=None, langs="en-US"))
+        self.assertFalse(pipeline._looks_translated(
+            self.EN, captions="", captions_language=None, langs="auto"))
+
+    def test_unknown_requested_language_does_not_block(self) -> None:
+        """문자 종류를 모르는 언어 코드는 근거로 쓰지 않는다."""
+        self.assertFalse(pipeline._looks_translated(
+            self.EN, captions="", captions_language=None, langs="sw-KE"))
+
+
+class CallPacingTests(unittest.TestCase):
+    """분당 한도에 여유가 있으면 기다리지 않고 바로 보낸다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "raw/audio").mkdir(parents=True)
+        (self.bundle / "raw/transcripts").mkdir(parents=True)
+        self.job = {
+            "schema_version": 1, "video_id": "vid",
+            "input": {"source": "u", "fingerprint": "sha256:x"},
+            "config": {"chunk_max_secs": 600.0, "overlap_secs": 10.0,
+                       "language_codes": None, "diarization": True},
+            "status": "planned",
+            "chunks": [
+                {"index": i, "start": i * 100.0, "end": (i + 1) * 100.0,
+                 "path": "raw/audio/chunk-%03d.mp3" % i, "status": "pending",
+                 "attempts": 0,
+                 "transcript_path": "raw/transcripts/chunk-%03d.json" % i,
+                 "error": None}
+                for i in range(3)
+            ],
+        }
+        for chunk in self.job["chunks"]:
+            (self.bundle / chunk["path"]).write_bytes(b"x")
+        self.ledger = Path(self.tmp.name) / "usage.json"
+        self.slept: list[float] = []
+        self.original_sleep = pipeline.time.sleep
+        pipeline.time.sleep = self.slept.append
+
+    def tearDown(self) -> None:
+        pipeline.time.sleep = self.original_sleep
+        self.tmp.cleanup()
+
+    def _transcriber(self, path, langs):
+        return {"words": [{"text": "안녕하세요", "start": 0.0, "end": 0.4,
+                           "speaker": "spk:0"}]}
+
+    def _run(self, *, rpm_limit, request_interval=30.0):
+        return pipeline.stage_transcribe(
+            self.bundle, self.job, ledger=self.ledger, api_key="k",
+            daily_limit=25, rpm_limit=rpm_limit, request_interval=request_interval,
+            transcriber=self._transcriber)
+
+    def test_only_waits_when_the_minute_window_is_full(self) -> None:
+        """분당 2회면 앞의 두 번은 즉시 나가고 세 번째만 기다린다.
+
+        옛 방식은 청크마다 무조건 30초를 쉬어 3청크에 두 번(60초) 쉬었다.
+        실제 호출은 한 번에 60~70초가 걸리므로 창이 저절로 비어, 실행 중에는
+        이 대기마저 거의 0 이 된다.
+        """
+        self._run(rpm_limit=2)
+        self.assertEqual(len(self.slept), 1,
+                         "대기 횟수가 1회가 아니다: %s" % self.slept)
+        self.assertLessEqual(self.slept[0], 61.0)
+
+    def test_no_wait_at_all_when_limit_is_generous(self) -> None:
+        self._run(rpm_limit=10)
+        self.assertEqual(self.slept, [], "여유가 있는데 기다렸다")
+
+    def test_fixed_interval_still_used_without_rpm_limit(self) -> None:
+        self._run(rpm_limit=None, request_interval=7.0)
+        self.assertEqual(self.slept, [7.0, 7.0],
+                         "RPM 한도가 없으면 고정 간격을 써야 한다")
+
+
+class SingleFetchCallTests(unittest.TestCase):
+    """소리·영상·자막을 yt-dlp 한 번으로 받는다."""
+
+    SRT = ("1\n00:00:01,000 --> 00:00:03,000\n안녕하세요 여러분\n\n"
+           "2\n00:00:03,000 --> 00:00:05,000\n오늘은 자기지도학습입니다\n")
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "raw").mkdir(parents=True)
+        self.commands: list[list[str]] = []
+        self.original_run = pipeline.subprocess.run
+        self.produce = {"audio": True, "video": True, "captions": True}
+
+        def run(command, capture_output=True, text=True, **kwargs):
+            self.commands.append(list(command))
+            if command[0] == "ffprobe":
+                target = Path(command[-1])
+                has_video = "video" in target.name
+                return pipeline.subprocess.CompletedProcess(
+                    command, 0, "video\n" if has_video else "", "")
+            out = Path(command[command.index("-o") + 1]).parent
+            out.mkdir(parents=True, exist_ok=True)
+            if self.produce["audio"]:
+                (out / "media.f251.audio.webm").write_bytes(b"audio-bytes")
+            if self.produce["video"] and "," in command[command.index("-f") + 1]:
+                (out / "media.f134.video.mp4").write_bytes(b"video-bytes")
+            if self.produce["captions"] and "--sub-langs" in command:
+                (out / "media.ko-orig.srt").write_text(self.SRT, encoding="utf-8")
+            return pipeline.subprocess.CompletedProcess(command, 0, "", "")
+
+        pipeline.subprocess.run = run
+
+    def tearDown(self) -> None:
+        pipeline.subprocess.run = self.original_run
+        self.tmp.cleanup()
+
+    def _yt_dlp_calls(self) -> list[list[str]]:
+        return [c for c in self.commands if c and c[0] == "yt-dlp"]
+
+    def test_one_call_produces_all_three(self) -> None:
+        result = pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
+        self.assertEqual(len(self._yt_dlp_calls()), 1,
+                         "yt-dlp 를 여러 번 불렀다: %d" % len(self._yt_dlp_calls()))
+        self.assertIsNotNone(pipeline.audio.source_audio(self.bundle))
+        self.assertIsNotNone(pipeline.visual.source_video(self.bundle))
+        self.assertEqual(result["cues"], 2)
+
+    def test_captions_keep_language_and_original_flag(self) -> None:
+        pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
+        payload = json.loads((self.bundle / "raw/captions.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["language"], "ko-orig")
+        self.assertTrue(payload["original"])
+
+    def test_skip_video_asks_for_audio_only(self) -> None:
+        pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk", video=False)
+        fmt = self._yt_dlp_calls()[0]
+        fmt_value = fmt[fmt.index("-f") + 1]
+        self.assertNotIn(",", fmt_value, "영상을 껐는데 영상 포맷을 함께 요청했다")
+        self.assertIsNone(pipeline.visual.source_video(self.bundle))
+
+    def test_missing_audio_is_fatal(self) -> None:
+        self.produce["audio"] = False
+        with self.assertRaises(pipeline.StageError):
+            pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
+
+    def test_missing_video_is_only_a_warning(self) -> None:
+        self.produce["video"] = False
+        result = pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
+        self.assertIsNotNone(pipeline.audio.source_audio(self.bundle))
+        self.assertIsNone(result["video"])
+
+    def test_existing_files_are_reused_without_any_call(self) -> None:
+        (self.bundle / "raw/source.webm").write_bytes(b"a")
+        (self.bundle / "raw/source_video.mp4").write_bytes(b"v")
+        (self.bundle / "raw/captions.json").write_text(json.dumps({
+            "source": "youtube-ko-orig", "language": "ko-orig", "original": True,
+            "video_id": "vid", "cues": []}), encoding="utf-8")
+        pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
+        self.assertEqual(self._yt_dlp_calls(), [], "받아둔 것이 있는데 다시 불렀다")
+
+
+class VideoReleaseTests(unittest.TestCase):
+    """프레임을 뽑고 나면 영상은 자리만 차지한다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "derived").mkdir(parents=True)
+        (self.bundle / "raw/frames").mkdir(parents=True)
+        (self.bundle / "raw/source_video.mp4").write_bytes(b"video-bytes")
+        (self.bundle / "raw/source.webm").write_bytes(b"audio-bytes")
+        (self.bundle / "job.json").write_text(json.dumps({
+            "input": {"source": "https://www.youtube.com/watch?v=abcdefghijk"},
+        }), encoding="utf-8")
+        (self.bundle / "derived/merged.json").write_text(json.dumps({
+            "video_id": "vid", "words": _words(["여기", "보시면", "그림이"], 10.0),
+        }, ensure_ascii=False), encoding="utf-8")
+        self.frames: list[dict] = [{"timestamp": 10.5, "path": "raw/frames/000010500.jpg",
+                                    "reason": "screen-reference", "ocr_text": None,
+                                    "confidence": 0.5}]
+        self.original_build = pipeline.visual.build
+
+        def build(bundle, *, at=None, max_frames=40):
+            payload = {"schema_version": 1, "video_id": "vid", "frames": list(self.frames),
+                       "candidates_considered": len(self.frames),
+                       "candidates_dropped": 0, "note": None}
+            pipeline._write_json(bundle / "derived" / "frames.json", payload)
+            return payload
+
+        pipeline.visual.build = build
+
+    def tearDown(self) -> None:
+        pipeline.visual.build = self.original_build
+        self.tmp.cleanup()
+
+    def test_video_is_released_after_frames_are_extracted(self) -> None:
+        pipeline.stage_visual(self.bundle)
+        self.assertIsNone(pipeline.visual.source_video(self.bundle),
+                          "프레임을 다 뽑고도 영상을 들고 있다")
+        self.assertTrue((self.bundle / "raw/frames").exists(), "프레임을 지웠다")
+        self.assertTrue((self.bundle / "raw/source.webm").exists(), "오디오를 지웠다")
+
+    def test_video_is_kept_when_no_frames_came_out(self) -> None:
+        """프레임이 0장이면 다시 시도할 수 있게 영상을 남긴다."""
+        self.frames = []
+        pipeline.stage_visual(self.bundle)
+        self.assertIsNotNone(pipeline.visual.source_video(self.bundle))
+
+    def test_video_is_kept_without_a_source_url(self) -> None:
+        """원본 주소를 모르면 다시 받을 수 없으므로 지우지 않는다."""
+        (self.bundle / "job.json").unlink()
+        pipeline.stage_visual(self.bundle)
+        self.assertIsNotNone(pipeline.visual.source_video(self.bundle))
+
+    def test_keep_video_option_wins(self) -> None:
+        pipeline.stage_visual(self.bundle, keep_video=True)
+        self.assertIsNotNone(pipeline.visual.source_video(self.bundle))
+
+    def test_purge_scope_video_removes_only_the_video(self) -> None:
+        removed = pipeline.purge(self.bundle, scope="video")
+        self.assertTrue(removed)
+        self.assertIsNone(pipeline.visual.source_video(self.bundle))
+        self.assertTrue((self.bundle / "raw/source.webm").exists())
+        self.assertTrue((self.bundle / "derived/merged.json").exists())
+
+
+class CaptionHealthTests(unittest.TestCase):
+    """자막이 0개일 때, 원래 없는 것과 취득이 고장난 것을 구분한다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "raw").mkdir(parents=True)
+        (self.bundle / "derived").mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _captions(self, payload: dict) -> None:
+        (self.bundle / "raw/captions.json").write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    def test_status_reports_caption_language_and_count(self) -> None:
+        self._captions({"source": "youtube-ko-orig", "language": "ko-orig",
+                        "original": True, "video_id": "vid",
+                        "cues": [{"start": 0.0, "end": 1.0, "text": "안녕"}]})
+        info = pipeline.status(self.bundle)
+        self.assertEqual(info["captions"]["language"], "ko-orig")
+        self.assertEqual(info["captions"]["cues"], 1)
+        self.assertTrue(info["captions"]["original"])
+
+    def test_status_flags_a_failed_fetch(self) -> None:
+        """취득 실패로 남은 빈 자막은 그렇다고 말해야 한다."""
+        self._captions({"source": "youtube", "language": None, "original": False,
+                        "video_id": "vid", "cues": [], "error": "yt-dlp 실패"})
+        info = pipeline.status(self.bundle)
+        self.assertEqual(info["captions"]["cues"], 0)
+        self.assertTrue(info["captions"]["failed"], "고장을 정상으로 보고했다")
+
+    def test_video_without_captions_is_not_a_failure(self) -> None:
+        """자막이 원래 없는 영상도 있다. 그건 고장이 아니다."""
+        self._captions({"source": "youtube-en-orig", "language": "en-orig",
+                        "original": True, "video_id": "vid", "cues": []})
+        info = pipeline.status(self.bundle)
+        self.assertFalse(info["captions"]["failed"])
+
+    def test_missing_captions_file_is_reported(self) -> None:
+        info = pipeline.status(self.bundle)
+        self.assertIsNone(info["captions"])

@@ -121,6 +121,25 @@ def _split_name(path: Path) -> tuple[str, str]:
     return parts[0], parts[1]
 
 
+def payload_from_srt(path: Path) -> dict[str, object]:
+    """받아둔 srt 하나를 captions.json 형태로 만든다.
+
+    `fetch` 와 pipeline 의 일괄 취득이 같은 형식을 쓰도록 여기 한 곳에 둔다.
+    """
+    video_id, language = _split_name(path)
+    return {"source": "youtube-" + language, "language": language,
+            "original": language.endswith("-orig"),
+            "video_id": video_id,
+            "cues": collapse_rolling_lines(parse_srt(path))}
+
+
+def write_payload(payload: dict[str, object], output: Path) -> dict[str, object]:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + chr(10),
+                      encoding="utf-8")
+    return payload
+
+
 def fetch(url: str, output: Path, *, langs: list[str] | None = None) -> dict[str, object]:
     # (요청 언어, 자동자막까지 받을지)
     attempts = ([(tuple(langs), True)] if langs
@@ -138,18 +157,8 @@ def fetch(url: str, output: Path, *, langs: list[str] | None = None) -> dict[str
             raise FileNotFoundError(
                 "자막을 내려받지 못했습니다 (시도: %s)."
                 % "; ".join(",".join(a) for a, _ in attempts))
-        chosen = _pick(candidates, chosen_langs)
-        video_id, language = _split_name(chosen)
-        cues = collapse_rolling_lines(parse_srt(chosen))
-    payload: dict[str, object] = {"source": "youtube-" + language, "language": language,
-                                  # 원어 트랙만 "원문이 무슨 언어인가" 의 근거가
-                                  # 된다. 나머지는 번역일 수 있다.
-                                  "original": language.endswith("-orig"),
-                                  "video_id": video_id, "cues": cues}
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + chr(10),
-                      encoding="utf-8")
-    return payload
+        payload = payload_from_srt(_pick(candidates, chosen_langs))
+    return write_payload(payload, output)
 
 
 def main() -> None:

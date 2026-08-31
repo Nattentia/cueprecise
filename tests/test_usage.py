@@ -5,7 +5,7 @@ import multiprocessing
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
@@ -93,3 +93,46 @@ class UsageLedgerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SlotWaitTests(unittest.TestCase):
+    """RPM 한도가 여유로우면 기다리지 않는다."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "usage.json"
+        self.key = "k"
+        self.now = datetime(2026, 8, 31, 12, 0, 0, tzinfo=timezone.utc)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_no_wait_when_budget_is_free(self) -> None:
+        self.assertEqual(
+            usage.seconds_until_slot(self.path, self.key, rpm_limit=2, now=self.now), 0.0)
+
+    def test_no_wait_below_limit(self) -> None:
+        usage.record_attempt(self.path, self.key, now=self.now)
+        self.assertEqual(
+            usage.seconds_until_slot(self.path, self.key, rpm_limit=2,
+                                     now=self.now + timedelta(seconds=1)), 0.0)
+
+    def test_waits_until_oldest_call_leaves_the_window(self) -> None:
+        usage.record_attempt(self.path, self.key, now=self.now)
+        usage.record_attempt(self.path, self.key, now=self.now + timedelta(seconds=5))
+        delay = usage.seconds_until_slot(self.path, self.key, rpm_limit=2,
+                                         now=self.now + timedelta(seconds=10))
+        self.assertAlmostEqual(delay, 50.0, delta=1.0)
+
+    def test_no_wait_after_window_passes(self) -> None:
+        usage.record_attempt(self.path, self.key, now=self.now)
+        usage.record_attempt(self.path, self.key, now=self.now + timedelta(seconds=5))
+        self.assertEqual(
+            usage.seconds_until_slot(self.path, self.key, rpm_limit=2,
+                                     now=self.now + timedelta(seconds=61)), 0.0)
+
+    def test_no_limit_means_no_wait(self) -> None:
+        usage.record_attempt(self.path, self.key, now=self.now)
+        self.assertEqual(
+            usage.seconds_until_slot(self.path, self.key, rpm_limit=None,
+                                     now=self.now), 0.0)

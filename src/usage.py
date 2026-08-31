@@ -167,6 +167,37 @@ def record_attempt(path: Path, api_key: str, now: datetime | None = None) -> dic
         return {"day": day, "attempts": entry["attempts"], "rpm_attempts": len(recent)}
 
 
+def seconds_until_slot(
+    path: Path,
+    api_key: str,
+    *,
+    rpm_limit: int | None,
+    now: datetime | None = None,
+) -> float:
+    """다음 호출까지 기다려야 하는 초. 여유가 있으면 0 이다.
+
+    고정 간격으로 무조건 쉬면 분당 한도가 비어 있어도 기다린다. 원장이 최근
+    1분의 시도 시각을 이미 들고 있으므로, 창이 차 있을 때만 가장 오래된 시도가
+    창을 빠져나갈 때까지 기다린다.
+    """
+    if rpm_limit is None or rpm_limit <= 0:
+        return 0.0
+    utc_now, day = _clock(now)
+    digest = key_hash(api_key)
+    with _file_lock(path.with_suffix(path.suffix + ".lock")):
+        payload = _read(path)
+        entry = payload.get("keys", {}).get(digest, {}).get("days", {}).get(day, {})
+    cutoff = utc_now - timedelta(minutes=1)
+    recent = sorted(
+        value for value in entry.get("recent_utc", [])
+        if datetime.fromisoformat(value) > cutoff
+    )
+    if len(recent) < rpm_limit:
+        return 0.0
+    oldest = datetime.fromisoformat(recent[len(recent) - rpm_limit])
+    return max(0.0, (oldest + timedelta(minutes=1) - utc_now).total_seconds())
+
+
 def preflight(
     path: Path,
     api_key: str,
