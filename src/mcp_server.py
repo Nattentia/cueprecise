@@ -525,11 +525,12 @@ def _force_utf8(*streams) -> None:
 def main() -> int:
     import os
 
+    # argparse의 --help도 비ASCII 문서를 출력하므로 파싱 전에 UTF-8로 고정한다.
+    _force_utf8(sys.stdin, sys.stdout)
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bundle-root", type=Path, default=Path("data"))
     args = parser.parse_args()
-    _force_utf8(sys.stdin, sys.stdout)
     serve(sys.stdin, sys.stdout, bundle_root=args.bundle_root,
           api_key=os.environ.get("GEMINI_API_KEY"))
     return 0

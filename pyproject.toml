@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ytx-mcp"
+version = "0.1.0"
+description = "Persistent, evidence-grounded YouTube transcription MCP server"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Nattentia" }]
+keywords = ["mcp", "youtube", "transcription", "gemini", "korean"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "yt-dlp>=2025.1.15",
+  "google-genai>=1.0.0",
+]
+
+[project.optional-dependencies]
+ocr = ["pytesseract>=0.3.10", "Pillow>=10.0.0"]
+timezone = ["tzdata>=2024.1"]
+
+[project.urls]
+Homepage = "https://github.com/Nattentia/ytx"
+Issues = "https://github.com/Nattentia/ytx/issues"
+
+[project.scripts]
+ytx = "ytx_cli:main"
+ytx-mcp = "mcp_server:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = [
+  "audio",
+  "chapters",
+  "context",
+  "fetch_youtube",
+  "mcp_server",
+  "merge",
+  "pipeline",
+  "render",
+  "speakers",
+  "summary",
+  "transcribe",
+  "usage",
+  "visual",
+  "ytx_cli",
+]
