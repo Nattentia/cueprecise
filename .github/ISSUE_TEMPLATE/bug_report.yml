@@ -1,0 +1,40 @@
+name: Bug report
+description: 재현 가능한 문제를 알려 주세요.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 문제 설명
+      description: 기대한 동작과 실제 동작을 함께 적어 주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 재현 방법
+      placeholder: 실행한 명령, 입력 URL의 공개 가능 여부, 오류 메시지
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python 버전
+      placeholder: "3.11.9"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: 운영체제
+      placeholder: Windows 11, macOS 15, Ubuntu 24.04
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 로그
+      description: API 키, 쿠키, 개인 정보는 반드시 제거해 주세요.
+      render: shell
+
