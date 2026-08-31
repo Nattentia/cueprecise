@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import time
+from bisect import bisect_right
 from pathlib import Path
 from typing import Any
 
@@ -558,48 +559,91 @@ _TRANSLATION_TRACE_SHARE = 0.05
 _LANGUAGE_SCRIPTS: dict[str, str] = {
     "ko": "hangul", "ja": "japanese", "zh": "han", "yue": "han",
     "ru": "cyrillic", "uk": "cyrillic", "bg": "cyrillic", "sr": "cyrillic",
-    "el": "greek", "he": "hebrew", "ar": "arabic", "fa": "arabic",
+    "be": "cyrillic", "mk": "cyrillic", "kk": "cyrillic", "ky": "cyrillic",
+    "tg": "cyrillic", "mn": "cyrillic",
+    "el": "greek", "he": "hebrew", "yi": "hebrew",
+    "ar": "arabic", "fa": "arabic", "ur": "arabic", "ps": "arabic",
+    "sd": "arabic", "ug": "arabic", "ku": "arabic",
     "hi": "devanagari", "mr": "devanagari", "ne": "devanagari",
-    "th": "thai", "ka": "georgian", "hy": "armenian",
+    "sa": "devanagari",
+    "bn": "bengali", "as": "bengali",
+    "pa": "gurmukhi", "gu": "gujarati", "or": "oriya",
+    "ta": "tamil", "te": "telugu", "kn": "kannada", "ml": "malayalam",
+    "si": "sinhala", "dv": "thaana",
+    "th": "thai", "lo": "lao", "bo": "tibetan", "my": "myanmar",
+    "km": "khmer", "am": "ethiopic", "ti": "ethiopic",
+    "ka": "georgian", "hy": "armenian",
     "en": "latin", "de": "latin", "fr": "latin", "es": "latin",
     "pt": "latin", "it": "latin", "nl": "latin", "pl": "latin",
     "tr": "latin", "id": "latin", "vi": "latin", "sv": "latin",
+    "cs": "latin", "sk": "latin", "sl": "latin", "hr": "latin",
+    "bs": "latin", "ro": "latin", "hu": "latin", "fi": "latin",
+    "et": "latin", "lv": "latin", "lt": "latin", "da": "latin",
+    "no": "latin", "nb": "latin", "nn": "latin", "is": "latin",
+    "ga": "latin", "cy": "latin", "ca": "latin", "eu": "latin",
+    "gl": "latin", "sq": "latin", "az": "latin", "uz": "latin",
+    "tk": "latin", "ms": "latin", "tl": "latin", "fil": "latin",
+    "jv": "latin", "su": "latin", "sw": "latin", "af": "latin",
+    "zu": "latin", "xh": "latin", "yo": "latin", "ig": "latin",
+    "ha": "latin", "so": "latin", "mt": "latin", "haw": "latin",
+    "mi": "latin", "la": "latin", "eo": "latin",
 }
+
+# 유니코드 블록 -> 문자 종류. 시작 코드 오름차순으로 두고 이분 탐색한다.
+# 언어를 늘려도 글자당 비교 횟수는 로그로만 는다 (긴 elif 사슬을 대신한다).
+_SCRIPT_RANGES: tuple[tuple[int, int, str], ...] = (
+    (0x0370, 0x03FF, "greek"),
+    (0x0400, 0x04FF, "cyrillic"),
+    (0x0530, 0x058F, "armenian"),
+    (0x0590, 0x05FF, "hebrew"),
+    (0x0600, 0x06FF, "arabic"),
+    (0x0700, 0x074F, "syriac"),
+    (0x0750, 0x077F, "arabic"),
+    (0x0780, 0x07BF, "thaana"),
+    (0x0900, 0x097F, "devanagari"),
+    (0x0980, 0x09FF, "bengali"),
+    (0x0A00, 0x0A7F, "gurmukhi"),
+    (0x0A80, 0x0AFF, "gujarati"),
+    (0x0B00, 0x0B7F, "oriya"),
+    (0x0B80, 0x0BFF, "tamil"),
+    (0x0C00, 0x0C7F, "telugu"),
+    (0x0C80, 0x0CFF, "kannada"),
+    (0x0D00, 0x0D7F, "malayalam"),
+    (0x0D80, 0x0DFF, "sinhala"),
+    (0x0E00, 0x0E7F, "thai"),
+    (0x0E80, 0x0EFF, "lao"),
+    (0x0F00, 0x0FFF, "tibetan"),
+    (0x1000, 0x109F, "myanmar"),
+    (0x10A0, 0x10FF, "georgian"),
+    (0x1200, 0x139F, "ethiopic"),
+    (0x1780, 0x17FF, "khmer"),
+    (0x3040, 0x30FF, "japanese"),      # 히라가나·가타카나
+    (0x3131, 0x318E, "hangul"),        # 호환 자모 (가나 범위와 겹치지 않는다)
+    (0x4E00, 0x9FFF, "han"),           # 한자
+    (0xAC00, 0xD7A3, "hangul"),        # 완성형 한글
+    (0xFB50, 0xFDFF, "arabic"),
+    (0xFE70, 0xFEFF, "arabic"),
+)
+
+_SCRIPT_STARTS: tuple[int, ...] = tuple(start for start, _, _ in _SCRIPT_RANGES)
 
 
 def _script_counts(text: str) -> dict[str, int]:
     """글자를 문자 종류별로 센다. 숫자·기호·공백은 세지 않는다."""
     counts: dict[str, int] = {}
-
-    def add(name: str) -> None:
-        counts[name] = counts.get(name, 0) + 1
-
     for char in text:
         code = ord(char)
-        if "가" <= char <= "힣" or "ㄱ" <= char <= "ㆎ":
-            add("hangul")
-        elif 0x3040 <= code <= 0x30FF:            # 히라가나·가타카나
-            add("japanese")
-        elif 0x4E00 <= code <= 0x9FFF:            # 한자
-            add("han")
-        elif 0x0400 <= code <= 0x04FF:
-            add("cyrillic")
-        elif 0x0370 <= code <= 0x03FF:
-            add("greek")
-        elif 0x0590 <= code <= 0x05FF:
-            add("hebrew")
-        elif 0x0600 <= code <= 0x06FF:
-            add("arabic")
-        elif 0x0900 <= code <= 0x097F:
-            add("devanagari")
-        elif 0x0E00 <= code <= 0x0E7F:
-            add("thai")
-        elif 0x10A0 <= code <= 0x10FF:
-            add("georgian")
-        elif 0x0530 <= code <= 0x058F:
-            add("armenian")
-        elif char.isascii() and char.isalpha():
-            add("latin")
+        if code < 0x80:                       # ASCII 는 표를 뒤질 것도 없다
+            name = "latin" if char.isalpha() else None
+        else:
+            index = bisect_right(_SCRIPT_STARTS, code) - 1
+            name = None
+            if index >= 0:
+                start, end, found = _SCRIPT_RANGES[index]
+                if code <= end:
+                    name = found
+        if name is not None:
+            counts[name] = counts.get(name, 0) + 1
     return counts
 
 
