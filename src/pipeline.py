@@ -240,58 +240,151 @@ def _download(url: str, fmt: str, raw: Path, stem: str,
         shutil.rmtree(staging, ignore_errors=True)
 
 
+def _has_video_stream(path: Path) -> bool:
+    """영상 트랙이 있는 파일인가. 소리·영상을 한 번에 받은 뒤 가려낸다."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        # ffprobe 가 없으면 확장자로 짐작한다. 정확도가 낮지만 여기서 멈추는
+        # 것보다 낫다 — ffprobe 는 어차피 청크 분할에 필요하다.
+        return path.suffix.lower() in (".mp4", ".mkv")
+    return "video" in (result.stdout or "")
+
+
+def _fetch_sources(url: str, raw: Path, *, want_video: bool,
+                   want_captions: bool) -> tuple[dict[str, Path | None], str]:
+    """yt-dlp 한 번으로 소리·영상·자막을 받는다.
+
+    셋을 따로 받으면 같은 페이지를 세 번 해석한다 (실측 12.3초, 회당 약 4초).
+    한 번에 요청하면 해석도 한 번이고 다운로드도 이어서 돈다 (실측 5.4초).
+
+    성공 여부는 종료 코드가 아니라 **실제로 받아진 파일**로 판단한다. 자막
+    하나가 실패해도 소리까지 실패로 처리하면 안 된다.
+    """
+    staging = raw / ".download"
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True, exist_ok=True)
+    found: dict[str, Path | None] = {"audio": None, "video": None, "captions": None}
+    try:
+        fmt = AUDIO_FORMAT + ("," + VIDEO_FORMAT if want_video else "")
+        command = ["yt-dlp", "--no-playlist", "-f", fmt]
+        if want_captions:
+            command += ["--write-auto-sub", "--sub-langs",
+                        ",".join(fetch_youtube.ORIGINAL_LANGS),
+                        "--convert-subs", "srt"]
+        command += ["-o", str(staging / "media") + ".%(format_id)s.%(ext)s", url]
+        result = subprocess.run(command, capture_output=True, text=True)
+
+        media: list[Path] = []
+        for path in sorted(staging.iterdir()):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() == ".srt":
+                if found["captions"] is None:
+                    # 포맷마다 한 벌씩 나온다. 내용이 같으므로 하나만 쓴다.
+                    found["captions"] = path
+            elif path.suffix.lower() != ".part":
+                media.append(path)
+
+        for path in sorted(media, key=lambda item: item.stat().st_size, reverse=True):
+            kind = "video" if want_video and _has_video_stream(path) else "audio"
+            if found[kind] is None:
+                found[kind] = path
+
+        moved: dict[str, Path | None] = {"audio": None, "video": None,
+                                         "captions": found["captions"]}
+        for kind, stem, names in (("audio", "source", audio.AUDIO_NAMES),
+                                  ("video", "source_video", visual.VIDEO_NAMES)):
+            source = found[kind]
+            if source is None:
+                continue
+            target = raw / (stem + source.suffix)
+            _remove_stale_sources(raw.parent, names, keep=target.name)
+            if target.exists():
+                target.unlink()
+            source.replace(target)
+            moved[kind] = target
+        if moved["captions"] is not None:
+            # staging 은 곧 지워지므로 자막은 여기서 읽어 둔다.
+            moved["captions"] = _stage_captions(moved["captions"], raw)
+        return moved, (result.stderr or "")
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def _stage_captions(srt: Path, raw: Path) -> Path:
+    payload = fetch_youtube.payload_from_srt(srt)
+    target = raw / "captions.json"
+    fetch_youtube.write_payload(payload, target)
+    return target
+
+
 def stage_fetch(bundle: Path, url: str, *, force: bool = False,
                 video: bool = True) -> dict[str, Any]:
-    """오디오·영상·자막을 받는다. Gemini 호출 없음.
+    """오디오·영상·자막을 **한 번의 yt-dlp 호출로** 받는다. Gemini 호출 없음.
 
-    영상 취득에 실패해도 치명이 아니다. 나중에 `ensure_video` 가 같은 URL 로
-    다시 시도한다.
+    영상과 자막은 실패해도 치명이 아니다. 영상은 나중에 `ensure_video` 가,
+    자막은 `fetch_youtube.fetch` 의 폴백이 다시 시도한다.
     """
     raw = bundle / "raw"
     captions = raw / "captions.json"
     raw.mkdir(parents=True, exist_ok=True)
 
     source = audio.source_audio(bundle)
-    if force or source is None:
-        downloaded, error = _download(url, AUDIO_FORMAT, raw, "source", audio.AUDIO_NAMES)
-        if downloaded is None or audio.source_audio(bundle) is None:
+    existing_video = visual.source_video(bundle)
+    need_audio = force or source is None
+    need_video = video and (force or existing_video is None)
+    need_captions = force or not captions.exists()
+
+    if need_audio or need_video:
+        got, error = _fetch_sources(url, raw, want_video=need_video,
+                                    want_captions=need_captions)
+        if need_audio and got["audio"] is None:
             # 기존 원본이 있었다면 그대로 살아 있다.
             raise StageError("오디오 다운로드 실패: " + error[-500:])
-        source = audio.source_audio(bundle)
-        _log("  오디오 %.1fMB (%s)" % (source.stat().st_size / 1048576, source.name))
-    else:
-        _log("  오디오 재사용 (%s)" % source.name)
-
-    # 영상은 프레임 추출에만 쓴다. 자막과 마찬가지로 실패해도 치명이 아니다.
-    if video:
-        existing = visual.source_video(bundle)
-        if existing is not None and not force:
-            _log("  영상 재사용 (%s)" % existing.name)
+        if got["audio"] is not None:
+            source = audio.source_audio(bundle)
+            _log("  오디오 %.1fMB (%s)" % (source.stat().st_size / 1048576, source.name))
         else:
-            downloaded, error = _download(url, VIDEO_FORMAT, raw, "source_video",
-                                          visual.VIDEO_NAMES)
-            if downloaded is None:
+            _log("  오디오 재사용 (%s)" % source.name)
+        if need_video:
+            if got["video"] is None:
                 tail = error.strip().splitlines()
                 _log("  경고: 영상 취득 실패, 프레임 추출을 건너뛴다 (%s)"
                      % (tail[-1][:200] if tail else "원인 불명"))
             else:
                 _log("  영상 %.1fMB (%s)"
-                     % (downloaded.stat().st_size / 1048576, downloaded.name))
+                     % (got["video"].stat().st_size / 1048576, got["video"].name))
                 if force:
                     # 옛 영상에서 뽑아둔 프레임은 새 영상과 무관하다.
-                    shutil.rmtree(bundle / "raw" / "frames", ignore_errors=True)
+                    shutil.rmtree(raw / "frames", ignore_errors=True)
+        if need_captions and got["captions"] is not None:
+            need_captions = False
+    else:
+        _log("  오디오 재사용 (%s)" % source.name)
+        if existing_video is not None:
+            _log("  영상 재사용 (%s)" % existing_video.name)
 
-    if force or not captions.exists():
+    if need_captions:
+        # 원어 자동자막이 같이 안 왔을 때만 한 번 더 시도한다 (사람이 올린 자막).
         try:
             fetch_youtube.fetch(url, captions)
         except Exception as error:  # 자막은 선택 자료다. 없어도 파이프라인은 진행한다.
             _log("  경고: 자막 취득 실패, 영어 용어 복원을 건너뛴다 (%s)" % error)
             _write_json(captions, {"source": "youtube", "language": None,
+                                   "original": False,
                                    "video_id": bundle.name, "cues": []})
-    cue_count = len(_read_json(captions).get("cues", []))
-    _log("  자막 %d cues" % cue_count)
+
+    payload = _read_json(captions) if captions.exists() else {"cues": []}
+    cue_count = len(payload.get("cues", []))
+    _log("  자막 %d cues (%s)" % (cue_count, payload.get("language") or "없음"))
     found = visual.source_video(bundle)
     return {"source_audio": str(source), "captions": str(captions), "cues": cue_count,
+            "captions_language": payload.get("language"),
             "video": str(found) if found else None}
 
 

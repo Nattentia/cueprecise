@@ -1152,3 +1152,85 @@ class CallPacingTests(unittest.TestCase):
         self._run(rpm_limit=None, request_interval=7.0)
         self.assertEqual(self.slept, [7.0, 7.0],
                          "RPM 한도가 없으면 고정 간격을 써야 한다")
+
+
+class SingleFetchCallTests(unittest.TestCase):
+    """소리·영상·자막을 yt-dlp 한 번으로 받는다."""
+
+    SRT = ("1\n00:00:01,000 --> 00:00:03,000\n안녕하세요 여러분\n\n"
+           "2\n00:00:03,000 --> 00:00:05,000\n오늘은 자기지도학습입니다\n")
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bundle = Path(self.tmp.name) / "vid"
+        (self.bundle / "raw").mkdir(parents=True)
+        self.commands: list[list[str]] = []
+        self.original_run = pipeline.subprocess.run
+        self.produce = {"audio": True, "video": True, "captions": True}
+
+        def run(command, capture_output=True, text=True, **kwargs):
+            self.commands.append(list(command))
+            if command[0] == "ffprobe":
+                target = Path(command[-1])
+                has_video = "video" in target.name
+                return pipeline.subprocess.CompletedProcess(
+                    command, 0, "video\n" if has_video else "", "")
+            out = Path(command[command.index("-o") + 1]).parent
+            out.mkdir(parents=True, exist_ok=True)
+            if self.produce["audio"]:
+                (out / "media.f251.audio.webm").write_bytes(b"audio-bytes")
+            if self.produce["video"] and "," in command[command.index("-f") + 1]:
+                (out / "media.f134.video.mp4").write_bytes(b"video-bytes")
+            if self.produce["captions"] and "--sub-langs" in command:
+                (out / "media.ko-orig.srt").write_text(self.SRT, encoding="utf-8")
+            return pipeline.subprocess.CompletedProcess(command, 0, "", "")
+
+        pipeline.subprocess.run = run
+
+    def tearDown(self) -> None:
+        pipeline.subprocess.run = self.original_run
+        self.tmp.cleanup()
+
+    def _yt_dlp_calls(self) -> list[list[str]]:
+        return [c for c in self.commands if c and c[0] == "yt-dlp"]
+
+    def test_one_call_produces_all_three(self) -> None:
+        result = pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
+        self.assertEqual(len(self._yt_dlp_calls()), 1,
+                         "yt-dlp 를 여러 번 불렀다: %d" % len(self._yt_dlp_calls()))
+        self.assertIsNotNone(pipeline.audio.source_audio(self.bundle))
+        self.assertIsNotNone(pipeline.visual.source_video(self.bundle))
+        self.assertEqual(result["cues"], 2)
+
+    def test_captions_keep_language_and_original_flag(self) -> None:
+        pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
+        payload = json.loads((self.bundle / "raw/captions.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["language"], "ko-orig")
+        self.assertTrue(payload["original"])
+
+    def test_skip_video_asks_for_audio_only(self) -> None:
+        pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk", video=False)
+        fmt = self._yt_dlp_calls()[0]
+        fmt_value = fmt[fmt.index("-f") + 1]
+        self.assertNotIn(",", fmt_value, "영상을 껐는데 영상 포맷을 함께 요청했다")
+        self.assertIsNone(pipeline.visual.source_video(self.bundle))
+
+    def test_missing_audio_is_fatal(self) -> None:
+        self.produce["audio"] = False
+        with self.assertRaises(pipeline.StageError):
+            pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
+
+    def test_missing_video_is_only_a_warning(self) -> None:
+        self.produce["video"] = False
+        result = pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
+        self.assertIsNotNone(pipeline.audio.source_audio(self.bundle))
+        self.assertIsNone(result["video"])
+
+    def test_existing_files_are_reused_without_any_call(self) -> None:
+        (self.bundle / "raw/source.webm").write_bytes(b"a")
+        (self.bundle / "raw/source_video.mp4").write_bytes(b"v")
+        (self.bundle / "raw/captions.json").write_text(json.dumps({
+            "source": "youtube-ko-orig", "language": "ko-orig", "original": True,
+            "video_id": "vid", "cues": []}), encoding="utf-8")
+        pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
+        self.assertEqual(self._yt_dlp_calls(), [], "받아둔 것이 있는데 다시 불렀다")
