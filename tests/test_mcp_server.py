@@ -191,6 +191,30 @@ class ExcerptTests(BundleFixture):
         with self.assertRaises(mcp_server.ToolError):
             mcp_server.tool_excerpt(self.root, video_id="vid", start=10.0, end=5.0)
 
+    def test_excerpt_does_not_echo_word_objects(self) -> None:
+        """text 가 이미 같은 내용을 담는다. words 를 실으면 응답이 폭주한다."""
+        result = mcp_server.tool_excerpt(self.root, video_id="vid",
+                                         start=0.0, end=10_000.0)
+        self.assertNotIn("words", result)
+        self.assertEqual(result["word_count"], 9)
+
+    def test_long_excerpt_is_truncated_and_says_so(self) -> None:
+        words = [word("word%d" % i, float(i)) for i in range(4000)]
+        (self.bundle / "derived" / "merged.json").write_text(json.dumps(
+            {"source": "merged", "video_id": "vid", "words": words},
+            ensure_ascii=False), encoding="utf-8")
+        result = mcp_server.tool_excerpt(self.root, video_id="vid",
+                                         start=0.0, end=5000.0)
+        self.assertTrue(result["truncated"])
+        self.assertLessEqual(len(result["text"]), mcp_server.MAX_EXCERPT_CHARS)
+        self.assertEqual(result["word_count"], 4000)
+        self.assertIn("start", result["note"])
+
+    def test_short_excerpt_has_no_truncation_flag(self) -> None:
+        result = mcp_server.tool_excerpt(self.root, video_id="vid",
+                                         start=207.0, end=211.0)
+        self.assertNotIn("truncated", result)
+
 
 class PurgeTests(BundleFixture):
     def test_purge_derived_reports_removed_paths(self) -> None:

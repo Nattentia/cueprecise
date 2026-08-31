@@ -33,6 +33,7 @@ import pipeline
 import summary as summary_mod
 import visual
 
+MAX_EXCERPT_CHARS = 12000
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "ytx", "version": "1.0.0"}
 
@@ -212,16 +213,27 @@ def tool_excerpt(bundle_root: Path, *, video_id: str, start: float,
     payload = _transcript(bundle)
     words = [w for w in payload["words"]
              if float(w["end"]) >= start and float(w["start"]) <= end]
-    return {
+    text = " ".join(str(w["text"]) for w in words)
+    result = {
         "video_id": video_id,
         "start": start,
         "end": end,
         "timecode": "%s - %s" % (_fmt(start), _fmt(end)),
-        "text": " ".join(str(w["text"]) for w in words),
-        "words": words,
+        "text": text,
+        "word_count": len(words),
         "frames": [f for f in _frames(bundle)
                    if start <= float(f["timestamp"]) <= end],
     }
+    if len(text) > MAX_EXCERPT_CHARS:
+        cut = text.rfind(" ", 0, MAX_EXCERPT_CHARS)
+        if cut <= 0:
+            cut = MAX_EXCERPT_CHARS
+        result["text"] = text[:cut]
+        result["truncated"] = True
+        result["note"] = ("구간이 길어 앞부분만 돌려준다. 나머지는 start 를 "
+                          "옮겨 다시 부른다. 자른 지점의 원문 길이는 %d 자다."
+                          % len(text))
+    return result
 
 
 def tool_purge(bundle_root: Path, *, video_id: str,
@@ -357,7 +369,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "ytx_excerpt",
-        "description": "지정한 시각 구간의 자막 원문과 그 구간의 프레임을 조회한다.",
+        "description": "지정한 시각 구간의 자막 원문과 그 구간의 프레임을 조회한다. 긴 구간은 앞부분만 돌아오고 truncated 가 참이 된다 — 그때는 start 를 옮겨 이어 부른다.",
         "inputSchema": {
             "type": "object",
             "properties": {
