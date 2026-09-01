@@ -29,6 +29,68 @@ jobs:
         run: |
           ./dist/windows/cueprecise-mcp.exe --help
           ./dist/windows/yt-dlp.exe --version
+      # 설치 프로그램이 실제로 하는 일을 격리된 임시 위치에서 확인한다.
+      # APPDATA 를 이 단계에서만 바꿔 진짜 Claude 설정과 시작 메뉴는 건드리지 않는다.
+      - name: Silent install, migrate and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $key = "AIzaTESTTESTTESTTESTTESTTESTTESTTEST"
+          $sandbox = Join-Path $env:RUNNER_TEMP "installcheck"
+          $appdata = Join-Path $sandbox "Roaming"
+          $claude = Join-Path $appdata "Claude"
+          $config = Join-Path $claude "claude_desktop_config.json"
+          $installDir = Join-Path $sandbox "Programs\CuePrecise"
+          New-Item -ItemType Directory -Force -Path $claude | Out-Null
+
+          # 0.1.0 을 쓰던 사용자의 설정을 흉내낸다.
+          $legacy = @{
+            theme = "dark"
+            mcpServers = @{
+              ytx = @{
+                command = "C:/Legacy/ytx/ytx-mcp.exe"
+                args = @("--bundle-root", (Join-Path $sandbox "legacydata"))
+                env = @{ GEMINI_API_KEY = $key; PATH = "C:/ffmpeg/bin" }
+              }
+              other = @{ command = "keep-me"; args = @("--serve") }
+            }
+          }
+          $legacy | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $config -Encoding utf8
+
+          $env:APPDATA = $appdata
+          $setup = (Resolve-Path "dist/windows/cueprecise-setup.exe").Path
+          Start-Process -FilePath $setup -Wait -ArgumentList @(
+            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+            "/DIR=`"$installDir`"", "/LOG=`"$sandbox\install.log`"")
+
+          foreach ($name in @("cueprecise-mcp.exe", "cueprecise-onboarding.exe", "yt-dlp.exe")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $installDir $name))) {
+              throw "설치되지 않은 파일: $name"
+            }
+          }
+          & (Join-Path $installDir "cueprecise-mcp.exe") --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "설치된 cueprecise-mcp.exe 가 실행되지 않았다" }
+
+          $saved = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
+          $names = $saved.mcpServers.PSObject.Properties.Name
+          if ($names -notcontains "cueprecise") { throw "cueprecise 항목이 만들어지지 않았다" }
+          if ($names -contains "ytx") { throw "옛 ytx 항목이 남았다" }
+          if ($saved.mcpServers.cueprecise.env.GEMINI_API_KEY -ne $key) { throw "API 키가 보존되지 않았다" }
+          if ($saved.mcpServers.other.command -ne "keep-me") { throw "다른 MCP 설정이 훼손됐다" }
+          if ($saved.theme -ne "dark") { throw "다른 설정이 훼손됐다" }
+          if (@(Get-ChildItem -LiteralPath $claude -Filter "*.bak").Count -lt 1) { throw "백업이 만들어지지 않았다" }
+
+          $uninstaller = Get-ChildItem -LiteralPath $installDir -Filter "unins*.exe" | Select-Object -First 1
+          if (-not $uninstaller) { throw "제거 프로그램을 찾지 못했다" }
+          Start-Process -FilePath $uninstaller.FullName -Wait -ArgumentList @(
+            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
+
+          $removed = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
+          $left = $removed.mcpServers.PSObject.Properties.Name
+          if ($left -contains "cueprecise") { throw "제거 후에도 cueprecise 항목이 남았다" }
+          if ($removed.mcpServers.other.command -ne "keep-me") { throw "제거가 다른 MCP 설정을 지웠다" }
+          Write-Output "조용한 설치, 설정 이관, 제거 확인 완료"
+
       - uses: actions/upload-artifact@v6
         with:
           name: cueprecise-windows-installer
