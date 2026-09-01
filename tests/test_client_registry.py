@@ -89,6 +89,22 @@ class ServersKeyTest(unittest.TestCase):
             self.assertEqual(entry["env"]["GEMINI_API_KEY"], "secret")
             self.assertIsNotNone(result["backup"])
 
+    def test_setup_refuses_to_overwrite_someone_elses_entry(self) -> None:
+        """덮어쓰면 남의 서버 설정이 사라지고 그 환경변수가 우리 항목에 옮겨 붙는다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "claude.json"
+            original = json.dumps({"mcpServers": {
+                "cueprecise": {"command": "not-ours.exe", "env": {"THEIR_KEY": "secret"}}}})
+            config.write_text(original, encoding="utf-8")
+
+            with self.assertRaisesRegex(SystemExit, "남의 항목"):
+                configuration.setup_file_client(
+                    config, root / "data", api_key=None,
+                    server_command="cueprecise-mcp.exe", server_args=[])
+
+            self.assertEqual(config.read_text(encoding="utf-8"), original)
+
     def test_remove_honours_the_targets_key_and_spares_others(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "mcp.json"
@@ -305,6 +321,48 @@ class CliTargetTest(unittest.TestCase):
                     target.install(root / "data", api_key=None,
                                    server_command="cueprecise-mcp.exe", server_args=[])
 
+    def test_a_stale_entry_is_not_mistaken_for_success(self) -> None:
+        """지우기가 실패하고 넣기가 거절당하면 옛 항목이 그대로 남는다.
+
+        항목이 있는지만 보면 그것을 성공으로 읽는다. `claude` 는 거절하면서도
+        종료 코드 0 을 주므로 실제로 일어날 수 있다.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stale = {"cueprecise": {"command": "cueprecise-mcp.exe",
+                                    "args": ["--bundle-root", "C:/old/data"]}}
+            target, cli, _ = self._target(root, configuration.CLAUDE_CODE, stale, obey=False)
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                with self.assertRaisesRegex(SystemExit, "등록하지 못했다"):
+                    target.install(root / "data", api_key=None,
+                                   server_command="cueprecise-mcp.exe", server_args=[])
+
+    def test_an_explicit_config_path_is_used_not_the_default_one(self) -> None:
+        """부르는 쪽이 경로를 주면 그곳을 봐야 한다. 기본 위치를 보면 안 된다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chosen = root / "chosen.toml"
+            cli = FakeCli(chosen, {}, toml=True, servers_key="mcp_servers")
+            missing = root / "never" / "config.toml"
+            target = dataclasses.replace(configuration.CODEX, locate_config=lambda: missing)
+
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                result = target.install(root / "data", api_key=None,
+                                        server_command="python.exe",
+                                        server_args=["-m", "mcp_server"],
+                                        config_path=chosen)
+
+            self.assertEqual(result["config"], str(chosen))
+            self.assertIn("cueprecise", cli.servers)
+            self.assertFalse(missing.exists())
+            # 환경변수로 정해지는 홈도 넘겨받은 경로를 따라야 한다.
+            self.assertEqual(cli.environments[-1]["CODEX_HOME"], str(chosen.parent))
+
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                removed = target.remove(config_path=chosen)
+            self.assertTrue(removed["changed"])
+            self.assertEqual(removed["config"], str(chosen))
+
     def test_remove_skips_entries_that_are_not_ours(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -470,6 +528,22 @@ class VsCodeTargetTest(unittest.TestCase):
             self.assertEqual(saved["servers"]["other"]["command"], "keep")
             self.assertEqual(saved["inputs"], [])
             self.assertEqual(cli.calls, [])
+
+    def test_an_explicit_config_path_is_used_not_the_default_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chosen = root / "chosen.json"
+            cli = FakeVsCode(chosen, {})
+            missing = root / "never" / "mcp.json"
+            target = dataclasses.replace(
+                configuration.VS_CODE, locate_config=lambda: missing)
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                result = target.install(root / "data", api_key=None,
+                                        server_command="cueprecise-mcp.exe",
+                                        server_args=[], config_path=chosen)
+            self.assertEqual(result["config"], str(chosen))
+            self.assertIn("cueprecise", _read(chosen)["servers"])
+            self.assertFalse(missing.exists())
 
     def test_removal_spares_someone_elses_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

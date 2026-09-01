@@ -194,6 +194,11 @@ def setup_file_client(config_path: Path, bundle_root: Path, *, api_key: str | No
         raise SystemExit(f"{servers_key}는 JSON 객체여야 한다: {config_path}")
 
     existing = servers.get(SERVER_KEY)
+    # 이름은 같은데 우리 것이 아니면 멈춘다. 덮어쓰면 남의 서버 설정이 사라지고,
+    # 그 항목의 환경변수까지 우리 항목으로 옮겨 붙는다. 붙지 않는 편이 낫다.
+    if existing is not None and not is_managed_server(existing):
+        raise SystemExit(
+            f"이미 `{SERVER_KEY}` 라는 남의 항목이 있다. 건드리지 않는다: {config_path}")
     legacy, legacy_key = _take_legacy_entry(servers)
 
     server: dict[str, Any] = {
@@ -311,18 +316,17 @@ class CliClientTarget(ClientTarget):
     # 물려받은 값에 따라 엉뚱한 홈에 쓰게 된다. 읽는 파일과 쓰는 곳을 맞춘다.
     home_var: str = ""
 
-    def load_config(self) -> dict[str, Any]:
-        path = self.locate_config()
+    def load_config(self, path: Path) -> dict[str, Any]:
         return read_toml_config(path) if self.reads_toml else read_config(path)
 
-    def _current_entry(self) -> Any:
-        servers = self.load_config().get(self.servers_key)
+    def _current_entry(self, path: Path) -> Any:
+        servers = self.load_config(path).get(self.servers_key)
         return servers.get(SERVER_KEY) if isinstance(servers, dict) else None
 
-    def _run(self, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    def _run(self, arguments: list[str], path: Path) -> subprocess.CompletedProcess[str]:
         environment = dict(os.environ)
         if self.home_var:
-            environment[self.home_var] = str(self.locate_config().parent)
+            environment[self.home_var] = str(path.parent)
         try:
             # 인자는 반드시 리스트로 넘긴다. 쉘을 거치면 `/c` 같은 인자가
             # 경로로 오인돼 조용히 바뀐다.
@@ -335,36 +339,25 @@ class CliClientTarget(ClientTarget):
                 server_command: str, server_args: list[str],
                 extra_env: dict[str, str] | None = None,
                 config_path: Path | None = None) -> dict[str, Any]:
-        existing = self._current_entry()
-        if existing is not None and not is_managed_server(existing):
-            raise SystemExit(
-                f"{self.label} 에 이미 `{SERVER_KEY}` 라는 남의 항목이 있다. 건드리지 않는다.")
+        path = config_path or self.locate_config()
+        existing = self._guard(path)
+        environment = self._environment(existing, extra_env, api_key)
 
-        environment = _inherited_environment(existing)
-        environment.update(extra_env or {})
-        if api_key:
-            environment["GEMINI_API_KEY"] = api_key
-
-        path = self.locate_config()
         backup = backup_file(path)
         bundle_root.mkdir(parents=True, exist_ok=True)
         # `codex mcp add` 는 같은 이름을 덮어쓰지만 `claude mcp add` 는 거절한다.
         # 게다가 거절하면서도 종료 코드는 0 이다. 먼저 지우고 다시 넣는다.
         if existing is not None:
-            self._run(["mcp", "remove", SERVER_KEY, *self.scope_args])
+            self._run(["mcp", "remove", SERVER_KEY, *self.scope_args], path)
 
         arguments = ["mcp", "add", SERVER_KEY, *self.scope_args]
         for name, value in environment.items():
             arguments += [self.env_flag, f"{name}={value}"]
         arguments += ["--", server_command, *server_args,
                       "--bundle-root", str(bundle_root.resolve())]
-        result = self._run(arguments)
+        result = self._run(arguments, path)
 
-        # 종료 코드를 믿지 않는다. 설정을 다시 읽어 실제로 들어갔는지 본다.
-        if self._current_entry() is None:
-            detail = (result.stderr or result.stdout or "").strip()[-300:]
-            raise SystemExit(f"{self.label} 에 등록하지 못했다.\n{detail}")
-
+        self._confirm(path, server_command, bundle_root, result)
         return {"config": str(path), "bundle_root": str(bundle_root.resolve()),
                 "backup": str(backup) if backup else None,
                 "api_key_configured": bool(environment.get("GEMINI_API_KEY")),
@@ -373,17 +366,51 @@ class CliClientTarget(ClientTarget):
                 "migrated_from": None}
 
     def remove(self, config_path: Path | None = None) -> dict[str, Any]:
-        path = self.locate_config()
-        empty = {"changed": False, "config": str(path), "backup": None, "removed": []}
-        if not is_managed_server(self._current_entry()):
-            return empty
+        path = config_path or self.locate_config()
+        if not is_managed_server(self._current_entry(path)):
+            return {"changed": False, "config": str(path), "backup": None, "removed": []}
         backup = backup_file(path)
-        result = self._run(["mcp", "remove", SERVER_KEY, *self.scope_args])
-        if self._current_entry() is not None:
+        result = self._run(["mcp", "remove", SERVER_KEY, *self.scope_args], path)
+        if self._current_entry(path) is not None:
             detail = (result.stderr or result.stdout or "").strip()[-300:]
             raise SystemExit(f"{self.label} 에서 제거하지 못했다.\n{detail}")
         return {"changed": True, "config": str(path),
                 "backup": str(backup) if backup else None, "removed": [SERVER_KEY]}
+
+    def _guard(self, path: Path) -> Any:
+        """이미 있는 항목이 우리 것인지 본다. 남의 것이면 아무것도 하지 않는다."""
+        existing = self._current_entry(path)
+        if existing is not None and not is_managed_server(existing):
+            raise SystemExit(
+                f"{self.label} 에 이미 `{SERVER_KEY}` 라는 남의 항목이 있다. 건드리지 않는다.")
+        return existing
+
+    @staticmethod
+    def _environment(existing: Any, extra_env: dict[str, str] | None,
+                     api_key: str | None) -> dict[str, str]:
+        environment = _inherited_environment(existing)
+        environment.update(extra_env or {})
+        if api_key:
+            environment["GEMINI_API_KEY"] = api_key
+        return environment
+
+    def _confirm(self, path: Path, server_command: str, bundle_root: Path,
+                 result: subprocess.CompletedProcess[str]) -> None:
+        """정말 우리가 넣으려던 항목이 들어갔는지 설정을 다시 읽어 본다.
+
+        항목이 있는지만 보면 모자란다. 지우기가 실패하고 넣기가 거절당하면
+        **옛 항목이 그대로 남아 있는데** 있다는 이유로 성공이라고 보고하게
+        된다. `claude` 는 거절하면서도 종료 코드 0 을 주므로 실제로 일어난다.
+        그래서 실행 파일과 번들 경로가 우리가 넘긴 것과 같은지까지 본다.
+        """
+        entry = self._current_entry(path)
+        expected = _forward_slashes(server_command).lower()
+        actual = _forward_slashes(str(entry.get("command", ""))).lower() \
+            if isinstance(entry, dict) else ""
+        if actual == expected and bundle_root_of(entry or {}) == bundle_root.resolve():
+            return
+        detail = (result.stderr or result.stdout or "").strip()[-300:]
+        raise SystemExit(f"{self.label} 에 등록하지 못했다.\n{detail}")
 
 
 def _forward_slashes(value: str) -> str:
@@ -409,17 +436,10 @@ class VsCodeTarget(CliClientTarget):
                 server_command: str, server_args: list[str],
                 extra_env: dict[str, str] | None = None,
                 config_path: Path | None = None) -> dict[str, Any]:
-        existing = self._current_entry()
-        if existing is not None and not is_managed_server(existing):
-            raise SystemExit(
-                f"{self.label} 에 이미 `{SERVER_KEY}` 라는 남의 항목이 있다. 건드리지 않는다.")
+        path = config_path or self.locate_config()
+        existing = self._guard(path)
+        environment = self._environment(existing, extra_env, api_key)
 
-        environment = _inherited_environment(existing)
-        environment.update(extra_env or {})
-        if api_key:
-            environment["GEMINI_API_KEY"] = api_key
-
-        path = self.locate_config()
         backup = backup_file(path)
         bundle_root.mkdir(parents=True, exist_ok=True)
         payload: dict[str, Any] = {
@@ -431,12 +451,9 @@ class VsCodeTarget(CliClientTarget):
         if environment:
             payload["env"] = environment
         # 같은 이름이면 덮어쓰고 다른 항목은 그대로 둔다(실측 확인).
-        result = self._run(["--add-mcp", json.dumps(payload)])
+        result = self._run(["--add-mcp", json.dumps(payload)], path)
 
-        if self._current_entry() is None:
-            detail = (result.stderr or result.stdout or "").strip()[-300:]
-            raise SystemExit(f"{self.label} 에 등록하지 못했다.\n{detail}")
-
+        self._confirm(path, server_command, bundle_root, result)
         return {"config": str(path), "bundle_root": str(bundle_root.resolve()),
                 "backup": str(backup) if backup else None,
                 "api_key_configured": bool(environment.get("GEMINI_API_KEY")),
