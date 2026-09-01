@@ -264,7 +264,25 @@ class FakeCli:
         return [call for call in self.calls if call[2] == "add"][-1]
 
 
-class CliTargetTest(unittest.TestCase):
+class PretendsCommandsExist(unittest.TestCase):
+    """가짜 `subprocess` 로 도는 시험은 이 PC 의 상태에 기대면 안 된다.
+
+    명령을 완전 경로로 부르게 되면서 `shutil.which` 가 끼어들었는데, 그것만
+    진짜였다. `codex`·`claude`·`code` 가 깔려 있는 Windows 에서는 통과하고
+    아무것도 깔려 있지 않은 CI(Linux)에서는 전부 무너졌다. 시험이 무엇을
+    보는지와 무관한 환경 의존이다. 여기서 한 번에 끊는다.
+
+    없는 명령을 일부러 보는 시험은 안에서 다시 덮어쓰면 된다.
+    """
+
+    def setUp(self) -> None:
+        patcher = mock.patch.object(configuration.shutil, "which",
+                                    return_value="/fake/bin/app")
+        self.addCleanup(patcher.stop)
+        patcher.start()
+
+
+class CliTargetTest(PretendsCommandsExist):
     def _target(self, tmp: Path, base: configuration.CliClientTarget,
                 servers: dict, **fake):
         path = tmp / ("config.toml" if base.reads_toml else "config.json")
@@ -502,7 +520,7 @@ class FakeVsCode:
         return subprocess.CompletedProcess(argv, 0, "", "denied")
 
 
-class VsCodeTargetTest(unittest.TestCase):
+class VsCodeTargetTest(PretendsCommandsExist):
     def _target(self, tmp: Path, servers: dict, **fake):
         path = tmp / "mcp.json"
         cli = FakeVsCode(path, servers, **fake)
@@ -677,7 +695,7 @@ class FileClientRegistryTest(unittest.TestCase):
             self.assertFalse(target.is_installed())
 
 
-class GeminiCliTest(unittest.TestCase):
+class GeminiCliTest(PretendsCommandsExist):
     """명령을 먼저 쓰고, 듣지 않으면 설정 파일에 쓴다.
 
     이 앱은 이 PC 에 없어 명령을 태워 보지 못했다. 인자 배치가 판마다 다를 수
