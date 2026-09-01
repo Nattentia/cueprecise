@@ -311,6 +311,14 @@ source for server-side usage.
 
 ---
 
+## Roadmap
+
+- [ ] **Clickable timestamps** — Open the exact moment in the original YouTube video.
+- [ ] **Pipelined chunk transcription** — Analyze one chunk while Gemini processes the next.
+- [ ] **Multi-video research** — Search and compare related videos with source-specific evidence.
+
+---
+
 ## Known limitations
 
 - Caption spelling errors can remain in recovered terms.
