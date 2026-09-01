@@ -481,6 +481,66 @@ class VsCodeTargetTest(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), original)
 
 
+class FileClientRegistryTest(unittest.TestCase):
+    """Cursor·Windsurf·Gemini CLI 는 붙여 보지 못했다. 지킬 것만 지킨다."""
+
+    UNVERIFIED = ("cursor", "windsurf", "gemini-cli")
+
+    def test_every_registered_client_has_a_distinct_key_and_config(self) -> None:
+        keys = [target.key for target in configuration.CLIENTS]
+        self.assertEqual(len(keys), len(set(keys)))
+        paths = [str(target.locate_config()) for target in configuration.CLIENTS]
+        self.assertEqual(len(paths), len(set(paths)))
+
+    def test_unverified_clients_are_detected_by_executable_only(self) -> None:
+        """설정 폴더의 존재를 앱이 있다는 증거로 삼지 않는다.
+
+        이 PC 의 `~/.cursor` 와 `~/.gemini/settings.json` 은 다른 도구가
+        만들어 둔 것이고 앱은 없다. 폴더로 판정하면 안 쓰는 앱에 항목을 쓴다.
+        """
+        for key in self.UNVERIFIED:
+            target = configuration.client_by_key(key)
+            self.assertTrue(target.executable)
+            with mock.patch.object(configuration.shutil, "which", return_value=None):
+                self.assertFalse(target.is_installed(), key)
+            with mock.patch.object(configuration.shutil, "which", return_value="found"):
+                self.assertTrue(target.is_installed(), key)
+
+    def test_unverified_clients_still_obey_the_shared_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for key in self.UNVERIFIED:
+                config = root / f"{key}.json"
+                config.write_text(json.dumps({"mcpServers": {"other": {"command": "keep"}}}),
+                                  encoding="utf-8")
+                target = dataclasses.replace(
+                    configuration.client_by_key(key), locate_config=lambda p=config: p)
+
+                target.install(root / "data", api_key="secret",
+                               server_command="cueprecise-mcp.exe", server_args=[])
+                saved = _read(config)
+                self.assertEqual(saved["mcpServers"]["other"]["command"], "keep", key)
+                self.assertEqual(
+                    saved["mcpServers"]["cueprecise"]["env"]["GEMINI_API_KEY"], "secret", key)
+
+                self.assertTrue(target.remove()["changed"], key)
+                self.assertNotIn("cueprecise", _read(config)["mcpServers"], key)
+                self.assertEqual(_read(config)["mcpServers"]["other"]["command"], "keep", key)
+
+    def test_claude_desktop_still_falls_back_to_its_folder(self) -> None:
+        """CLI 가 아예 없는 앱은 설정 폴더로 판정할 수밖에 없다."""
+        self.assertEqual(configuration.CLAUDE_DESKTOP.executable, "")
+        with tempfile.TemporaryDirectory() as tmp:
+            present = Path(tmp) / "config.json"
+            target = dataclasses.replace(
+                configuration.CLAUDE_DESKTOP, locate_config=lambda: present)
+            self.assertTrue(target.is_installed())
+            absent = Path(tmp) / "nothing" / "config.json"
+            target = dataclasses.replace(
+                configuration.CLAUDE_DESKTOP, locate_config=lambda: absent)
+            self.assertFalse(target.is_installed())
+
+
 class ManagedJudgementTest(unittest.TestCase):
     """우리 항목은 0.1.0 부터 예외 없이 `--bundle-root` 를 달고 있다."""
 

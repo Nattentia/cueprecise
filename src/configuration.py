@@ -264,13 +264,19 @@ class ClientTarget:
     label: str
     locate_config: Callable[[], Path]
     servers_key: str = DEFAULT_SERVERS_KEY
-    # 없으면 설정 파일이나 그 폴더의 존재로 판정한다. CLI 로 붙이는 앱은
-    # 설정 파일이 없어도 설치돼 있을 수 있어 따로 준다.
+    # 설치 판정에 쓸 실행 파일. 설정 폴더의 존재보다 이것이 낫다. 남의 도구가
+    # 만들어 둔 설정 폴더를 앱이 있다는 증거로 삼으면 안 쓰는 앱에 항목을
+    # 써 넣게 된다(이 PC 의 `~/.cursor` 와 `~/.gemini` 가 그런 경우다).
+    executable: str = ""
     detector: Callable[[], bool] | None = None
 
     def is_installed(self) -> bool:
         if self.detector is not None:
             return self.detector()
+        if self.executable:
+            return shutil.which(self.executable) is not None
+        # CLI 가 아예 없는 앱(Claude Desktop)만 여기로 온다. 그 설정 폴더는
+        # 그 앱만 만든다.
         path = self.locate_config()
         return path.exists() or path.parent.is_dir()
 
@@ -297,7 +303,6 @@ class CliClientTarget(ClientTarget):
     우리 항목인지 판정**하는 일만 맡는다.
     """
 
-    executable: str = ""
     # `claude` 는 기본이 프로젝트 스코프다. 전역으로 붙이려면 `-s user` 가 필요하다.
     scope_args: tuple[str, ...] = ()
     env_flag: str = "--env"
@@ -305,11 +310,6 @@ class CliClientTarget(ClientTarget):
     # 설정 위치를 환경변수로 정하는 앱이 있다. 그 값을 비워 두면 이 프로세스가
     # 물려받은 값에 따라 엉뚱한 홈에 쓰게 된다. 읽는 파일과 쓰는 곳을 맞춘다.
     home_var: str = ""
-
-    def is_installed(self) -> bool:
-        if self.detector is not None:
-            return self.detector()
-        return shutil.which(self.executable) is not None
 
     def load_config(self) -> dict[str, Any]:
         path = self.locate_config()
@@ -487,8 +487,25 @@ VS_CODE = VsCodeTarget(
     # VS Code 만 최상위 키가 `servers` 다. `mcpServers` 로 쓰면 조용히 무시된다.
     servers_key="servers", executable="code")
 
-# 붙일 수 있는 앱 목록. P3 에서 Cursor·Windsurf·Gemini CLI 가 여기 붙는다.
-CLIENTS: tuple[ClientTarget, ...] = (CLAUDE_DESKTOP, CODEX, CLAUDE_CODE, VS_CODE)
+# 아래 셋은 이 PC 에 없어 실제로 붙여 보지 못했다. 경로와 키 이름은 각 앱의
+# 문서를 따랐다. 붙이는 방식은 Claude Desktop 과 같은 파일 쓰기이므로 규칙은
+# 이미 검증돼 있고, 확인되지 않은 것은 "그 앱이 이 파일을 읽는가" 하나다.
+# 그래서 감지는 실행 파일로만 한다. 설정 폴더가 있다고 앱이 있다고 보면
+# 남의 도구가 만들어 둔 폴더에 항목을 써 넣게 된다.
+CURSOR = ClientTarget(
+    key="cursor", label="Cursor", executable="cursor",
+    locate_config=lambda: Path.home() / ".cursor" / "mcp.json")
+
+WINDSURF = ClientTarget(
+    key="windsurf", label="Windsurf", executable="windsurf",
+    locate_config=lambda: Path.home() / ".codeium" / "windsurf" / "mcp_config.json")
+
+GEMINI_CLI = ClientTarget(
+    key="gemini-cli", label="Gemini CLI", executable="gemini",
+    locate_config=lambda: Path.home() / ".gemini" / "settings.json")
+
+CLIENTS: tuple[ClientTarget, ...] = (
+    CLAUDE_DESKTOP, CODEX, CLAUDE_CODE, VS_CODE, CURSOR, WINDSURF, GEMINI_CLI)
 
 
 def client_by_key(key: str) -> ClientTarget:
