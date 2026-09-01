@@ -2,13 +2,14 @@
 
 # CuePrecise
 
-> **Drop in a long YouTube video. Start asking questions minutes later.**
+> **A long video in a language you do not speak should still be searchable.**
 
-CuePrecise starts with what people say in the video. It finds the parts that matter, grabs the
-matching frames, and gives your AI both the spoken and on-screen information. In our recorded
+CuePrecise transcribes the original speech with Gemini instead of relying on YouTube captions
+alone. It keeps each passage tied to the timeline and captures the matching frames, so your AI can
+explain the video in your language and show exactly where the answer came from. In our recorded
 test, a 68-minute video was ready for questions in about three minutes; processing time varies by
-video and available captions. It also leaves a local reference your AI can use in later
-conversations, so you do not have to start over.
+video and available captions. It also leaves a local reference for later conversations, so you do
+not have to start over.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
@@ -18,11 +19,11 @@ conversations, so you do not have to start over.
 ### What it feels like
 
 ```text
-You: Find where this video explains self-supervised learning.
+You: I do not speak Polish. What is this interview about?
 
-Claude + CuePrecise:
-Finds the relevant passage, returns its timestamp,
-and provides the exact transcript and visual evidence around it.
+Your AI + CuePrecise:
+Explains the interview in your language, points to the exact moments,
+and provides the original transcript and matching frames as evidence.
 ```
 
 https://github.com/user-attachments/assets/ce7d595b-871f-469a-bcb8-798713751ffd
@@ -31,10 +32,11 @@ https://github.com/user-attachments/assets/ce7d595b-871f-469a-bcb8-798713751ffd
 
 | | |
 |---|---|
+| 🌍 **Explore videos in other languages** | Ask in your language while every answer stays tied to the original video. |
 | 🔎 **Find exact moments** | Get timestamped passages instead of unsupported guesses. |
 | 👁️ **Inspect the screen** | Retrieve frames when the answer exists visually, not in the captions. |
-| 🧩 **Handle technical code-switching** | Recover English terms embedded in Korean technical speech. |
-| 💾 **Keep context across chats** | Store searchable evidence locally for future conversations. |
+| 🧩 **Recover missed terms** | Combine Gemini transcription with captions when names or technical terms disappear. |
+| 💾 **Continue in a later chat** | Leave a local reference your AI can consult without starting over. |
 | 🔐 **No CuePrecise account or server** | No advertising, tracking, or project-operated backend. |
 
 ### Start on Windows
@@ -57,18 +59,22 @@ is complete, download it only from this repository's Releases page.
 
 ## Why CuePrecise?
 
-Most YouTube tools stop at captions. That loses two kinds of evidence:
+Captions alone can be incomplete, rough, or unavailable. A translated summary may be easier to
+read, but it often loses the connection to the exact words and moments in the original video.
+CuePrecise keeps three kinds of evidence together:
 
-- Visual information that was shown but never spoken.
-- English technical terms that multilingual speech recognition can omit or transliterate.
+- Gemini transcription of the original speech.
+- Timestamp-aligned YouTube captions that can recover missed names and technical terms.
+- Frames from the relevant moments, including information that was shown but never spoken.
 
-CuePrecise combines Gemini transcription with timestamp-aligned YouTube captions, preserves the
-source of every recovered word, and lets an AI host retrieve matching transcript spans and video
-frames later.
+Your AI host can explain that evidence in the language you ask, while CuePrecise preserves the
+original timeline and source of every recovered word. CuePrecise itself does not replace the
+source transcript with a translation.
 
-### Measured code-switching example
+### Measured transcription example
 
-On a 23-minute Korean technical lecture (`jcBDSLSeud4`), the phrase
+One measured edge case shows why captions still matter. On a 23-minute Korean technical lecture
+(`jcBDSLSeud4`), the phrase
 `self supervised learning` disappeared from all four Gemini-only transcription runs. CuePrecise
 recovered it from timestamp-aligned YouTube captions without rewriting or deleting Gemini's
 original words.
@@ -134,7 +140,7 @@ Create a key at [Google AI Studio](https://aistudio.google.com/api-keys), then r
 ```bash
 export GEMINI_API_KEY="..."          # Windows PowerShell: $env:GEMINI_API_KEY="..."
 cueprecise setup
-cueprecise run "https://www.youtube.com/watch?v=VIDEO_ID" --language ko-KR
+cueprecise run "https://www.youtube.com/watch?v=VIDEO_ID" --language pl-PL
 cueprecise status VIDEO_ID
 ```
 
@@ -273,9 +279,9 @@ Stages communicate through JSON files and can be rerun independently. Completed 
 when settings match. Raw transcription responses are saved before validation, so a parse failure
 does not automatically spend another Gemini call on the same response.
 
-For Korean content, passing `--language ko-KR` is recommended. Without an explicit language,
-Gemini may occasionally return a translation instead of a verbatim transcript. CuePrecise detects
-that condition and stops before spending calls on remaining chunks.
+Passing the video's original language with `--language` is recommended (`pl-PL`, `ko-KR`, and other
+BCP-47 codes). Without it, Gemini may occasionally return a translation instead of a verbatim
+transcript. CuePrecise detects that condition and stops before spending calls on remaining chunks.
 
 ---
 
