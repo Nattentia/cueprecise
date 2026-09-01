@@ -26,7 +26,9 @@ Claude + CuePrecise:
 그 시점의 정확한 대본과 화면 근거를 보여줍니다.
 ```
 
-<!-- 실제 Claude Desktop 사용 GIF를 확보하면 이 주석 바로 아래에 배치한다. -->
+https://github.com/user-attachments/assets/20499d73-e24f-4a40-aa30-77e42a34a9ef
+
+<sub>데모 원본: 고려대학교 Korea University의 [「ChatGPT와 함께하는 슬기로운 대학생활 - [1부] ChatGPT 너는 누구냐?」](https://www.youtube.com/watch?v=Y7iCGhXHJNQ)</sub>
 
 | | |
 |---|---|
