@@ -270,7 +270,7 @@ class CliTargetTest(unittest.TestCase):
                                         server_args=["server.py"])
 
             argv = cli.last_add()
-            self.assertEqual(argv[:4], ["codex", "mcp", "add", "cueprecise"])
+            self.assertEqual(argv[1:4], ["mcp", "add", "cueprecise"])
             self.assertIn("--env", argv)
             self.assertIn("GEMINI_API_KEY=secret", argv)
             tail = argv[argv.index("--") + 1:]
@@ -402,6 +402,33 @@ class CliTargetTest(unittest.TestCase):
                     target.install(root / "data", api_key=None,
                                    server_command="python.exe", server_args=[])
 
+    def test_the_command_is_called_by_its_resolved_path(self) -> None:
+        """이름만 주면 Windows 에서 `code.CMD` 가 실행되지 않는다.
+
+        `subprocess.run(['code', ...])` 는 `FileNotFoundError [WinError 2]` 를
+        낸다. 완전 경로를 주면 된다. 이름으로 부르면 VS Code 는 이 PC 에서
+        한 번도 붙지 않는다.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, _ = self._target(root, configuration.CODEX, {})
+            with mock.patch.object(configuration.shutil, "which",
+                                   return_value="C:/found/codex.EXE"), \
+                    mock.patch.object(configuration.subprocess, "run", cli.run):
+                target.install(root / "data", api_key=None, server_command="python.exe",
+                               server_args=["-m", "mcp_server"])
+            self.assertEqual(cli.calls[-1][0], "C:/found/codex.EXE")
+
+    def test_a_command_that_is_not_on_path_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, _ = self._target(root, configuration.CODEX, {})
+            with mock.patch.object(configuration.shutil, "which", return_value=None):
+                with self.assertRaisesRegex(SystemExit, "찾지 못했다"):
+                    target.install(root / "data", api_key=None,
+                                   server_command="python.exe", server_args=[])
+            self.assertEqual(cli.calls, [])
+
     def test_detection_uses_the_executable_on_path(self) -> None:
         with mock.patch.object(configuration.shutil, "which", return_value=None):
             self.assertFalse(configuration.CODEX.is_installed())
@@ -458,7 +485,7 @@ class VsCodeTargetTest(unittest.TestCase):
                                server_args=["--flag"])
 
             argv = cli.calls[-1]
-            self.assertEqual(argv[:2], ["code", "--add-mcp"])
+            self.assertEqual(argv[1], "--add-mcp")
             self.assertNotIn("\\", argv[2])
             payload = json.loads(argv[2])
             self.assertEqual(payload["name"], "cueprecise")
@@ -662,6 +689,30 @@ class FailureIsCatchableTest(unittest.TestCase):
                 with self.assertRaises(Exception):
                     target.install(root / "data", api_key=None,
                                    server_command="python.exe", server_args=[])
+
+
+class RealLaunchTest(unittest.TestCase):
+    """이 PC 에 있는 명령을 **모킹 없이** 실제로 띄워 본다.
+
+    나머지 테스트는 `subprocess.run` 을 가짜로 바꾼다. 그래서 "이 명령이 정말
+    실행되는가"는 아무도 보지 않았고, `code` 가 Windows 에서 `code.CMD` 라
+    이름만으로는 실행되지 않는다는 것을 놓쳤다. 설정 파일은 건드리지 않고
+    실행 가능한지만 본다. 없는 앱은 건너뛴다.
+    """
+
+    def test_every_present_command_can_actually_be_launched(self) -> None:
+        targets = [target for target in configuration.CLIENTS
+                   if isinstance(target, configuration.CliClientTarget)]
+        self.assertTrue(targets)
+        for target in targets:
+            with self.subTest(target.key):
+                if not target.is_installed():
+                    self.skipTest(f"{target.key} 없음")
+                executable = target._resolve_executable()
+                self.assertTrue(Path(executable).is_file(), executable)
+                result = subprocess.run([executable, "--version"], capture_output=True,
+                                        text=True, timeout=120)
+                self.assertEqual(result.returncode, 0, result.stderr[:200])
 
 
 class ManagedJudgementTest(unittest.TestCase):

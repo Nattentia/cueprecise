@@ -335,14 +335,29 @@ class CliClientTarget(ClientTarget):
         servers = self.load_config(path).get(self.servers_key)
         return servers.get(SERVER_KEY) if isinstance(servers, dict) else None
 
+    def _resolve_executable(self) -> str:
+        """이름이 아니라 찾아낸 완전 경로로 부른다.
+
+        VS Code 의 `code` 는 Windows 에서 `code.CMD` 다. 이름만 주면
+        `FileNotFoundError [WinError 2]` 로 실행되지 않는다. 완전 경로를 주면
+        된다(실측). 이름과 실행 파일 사이의 PATH 가 감지 시점과 실행 시점에
+        달라지는 일도 함께 막는다.
+        """
+        found = shutil.which(self.executable)
+        if found is None:
+            raise ConfigurationError(
+                f"{self.label} 명령을 찾지 못했다: {self.executable}")
+        return found
+
     def _run(self, arguments: list[str], path: Path) -> subprocess.CompletedProcess[str]:
         environment = dict(os.environ)
         if self.home_var:
             environment[self.home_var] = str(path.parent)
+        executable = self._resolve_executable()
         try:
             # 인자는 반드시 리스트로 넘긴다. 쉘을 거치면 `/c` 같은 인자가
-            # 경로로 오인돼 조용히 바뀐다.
-            return subprocess.run([self.executable, *arguments], capture_output=True,
+            # 경로로 오인돼 조용히 바뀌고, JSON 페이로드의 따옴표도 깨진다.
+            return subprocess.run([executable, *arguments], capture_output=True,
                                   text=True, timeout=60, env=environment)
         except (OSError, subprocess.TimeoutExpired) as error:
             raise ConfigurationError(f"{self.label} 명령을 실행하지 못했다: {error}") from error
