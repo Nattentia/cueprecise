@@ -435,6 +435,29 @@ class CliTargetTest(unittest.TestCase):
         with mock.patch.object(configuration.shutil, "which", return_value="codex"):
             self.assertTrue(configuration.CODEX.is_installed())
 
+    def test_claude_code_config_follows_its_home_variable(self) -> None:
+        """`CLAUDE_CONFIG_DIR` 은 `.claude.json` 을 옮긴다(실측).
+
+        무시하면 `claude mcp add` 는 옮겨진 곳에 잘 써 넣는데 우리는 홈을 읽고
+        실패라고 말한다. 등록은 됐는데 실패로 보고하게 된다.
+        """
+        with mock.patch.dict("os.environ", {"CLAUDE_CONFIG_DIR": "C:/elsewhere"}):
+            self.assertEqual(configuration.default_claude_code_config(),
+                             Path("C:/elsewhere") / ".claude.json")
+        with mock.patch.dict("os.environ"):
+            configuration.os.environ.pop("CLAUDE_CONFIG_DIR", None)
+            self.assertEqual(configuration.default_claude_code_config(),
+                             Path.home() / ".claude.json")
+
+    def test_claude_code_passes_its_home_to_the_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, path = self._target(root, configuration.CLAUDE_CODE, {})
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                target.install(root / "data", api_key=None,
+                               server_command="cueprecise-mcp.exe", server_args=[])
+            self.assertEqual(cli.environments[-1]["CLAUDE_CONFIG_DIR"], str(path.parent))
+
     def test_codex_config_follows_the_home_variable(self) -> None:
         with mock.patch.dict("os.environ", {"CODEX_HOME": "C:/elsewhere"}):
             self.assertEqual(configuration.default_codex_config(),

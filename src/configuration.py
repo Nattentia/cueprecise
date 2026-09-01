@@ -511,7 +511,15 @@ def default_codex_config() -> Path:
 
 
 def default_claude_code_config() -> Path:
-    return Path.home() / ".claude.json"
+    """Claude Code 가 실제로 읽는 설정 파일.
+
+    `CLAUDE_CONFIG_DIR` 이 있으면 그 폴더의 `.claude.json` 이다(실측). Codex 의
+    `CODEX_HOME` 과 같은 함정이다. 무시하고 홈으로 단정하면 `claude mcp add` 는
+    옮겨진 곳에 잘 써 넣는데 우리는 홈을 읽고 "등록하지 못했다"고 말한다.
+    등록은 됐는데 실패로 보고하는, 사용자가 고칠 길 없는 상태가 된다.
+    """
+    home = os.environ.get("CLAUDE_CONFIG_DIR")
+    return (Path(home) if home else Path.home()) / ".claude.json"
 
 
 CLAUDE_DESKTOP = ClientTarget(
@@ -524,7 +532,8 @@ CODEX = CliClientTarget(
 
 CLAUDE_CODE = CliClientTarget(
     key="claude-code", label="Claude Code", locate_config=default_claude_code_config,
-    executable="claude", scope_args=("-s", "user"), env_flag="-e")
+    executable="claude", scope_args=("-s", "user"), env_flag="-e",
+    home_var="CLAUDE_CONFIG_DIR")
 
 VS_CODE = VsCodeTarget(
     key="vscode", label="VS Code", locate_config=default_vscode_config,
