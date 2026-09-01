@@ -16,8 +16,9 @@ CuePrecise는 영상에서 사람들이 한 말을 먼저 읽습니다. 그중 �
 [![Tests](https://img.shields.io/badge/tests-432%20passing-brightgreen.svg)](#테스트)
 
 CuePrecise(큐프리사이스)는 Claude Desktop·Codex 등 AI 앱에 연결하는 오픈소스 도구입니다.
-Gemini의 자연스러운 한국어 전사와 YouTube 자막의 영어 기술 용어를 결합하고,
-질문에 필요한 정확한 장면과 근거를 찾아줍니다.
+YouTube 자막만 가져오는 것이 아니라 Gemini로 영상의 음성을 직접 전사합니다. 여기에
+YouTube 자막을 맞춰 놓친 이름과 영어 기술 용어를 보완하고, 질문에 필요한 장면까지
+함께 찾아줍니다.
 
 ### 이렇게 사용합니다
 
