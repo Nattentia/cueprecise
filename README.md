@@ -23,7 +23,9 @@ Finds the relevant passage, returns its timestamp,
 and provides the exact transcript and visual evidence around it.
 ```
 
-<!-- Insert the real Claude Desktop demo GIF directly below this comment. -->
+https://github.com/user-attachments/assets/ce7d595b-871f-469a-bcb8-798713751ffd
+
+<sub>Demo source: [“Czym jest prompt injection i jak chronić firmę przed złośliwą instrukcją dla AI? Gośc. Tomasz Bartel”](https://www.youtube.com/watch?v=W5C3FdUO0vs) by Daniel Bartosiewicz | Content i Automatyzacja, licensed under CC BY.</sub>
 
 | | |
 |---|---|
