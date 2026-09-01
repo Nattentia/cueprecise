@@ -5,11 +5,14 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 import configuration
@@ -172,6 +175,206 @@ class ClaudeDesktopParityTest(unittest.TestCase):
             self.assertTrue(result["changed"])
             self.assertNotIn("cueprecise", saved["mcpServers"])
             self.assertEqual(saved["mcpServers"]["other"]["command"], "keep")
+
+def _toml_servers(servers: dict) -> str:
+    """테스트가 Codex 설정을 흉내 낼 만큼만 TOML 을 쓴다."""
+    lines = []
+    for name, entry in servers.items():
+        lines.append(f"[mcp_servers.{name}]")
+        for field, value in entry.items():
+            if field != "env":
+                lines.append(f"{field} = {json.dumps(value)}")
+        for key, value in (entry.get("env") or {}).items():
+            if key == next(iter(entry["env"])):
+                lines.append(f"[mcp_servers.{name}.env]")
+            lines.append(f"{key} = {json.dumps(value)}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+class FakeCli:
+    """`codex`/`claude` 를 대신한다. 부른 인자를 남기고 설정 파일을 바꾼다.
+
+    진짜 CLI 를 부르면 이 PC 의 설정이 바뀐다. 테스트는 그러면 안 된다.
+    """
+
+    def __init__(self, path: Path, servers: dict, *, toml: bool, servers_key: str,
+                 obey: bool = True) -> None:
+        self.path, self.servers, self.toml = path, dict(servers), toml
+        self.servers_key, self.obey = servers_key, obey
+        self.calls: list[list[str]] = []
+        self.environments: list[dict] = []
+        self._flush()
+
+    def _flush(self) -> None:
+        if self.toml:
+            self.path.write_text(_toml_servers(self.servers), encoding="utf-8")
+        else:
+            self.path.write_text(json.dumps({self.servers_key: self.servers}),
+                                 encoding="utf-8")
+
+    def run(self, argv, **kwargs):
+        self.calls.append(list(argv))
+        self.environments.append(kwargs.get("env") or {})
+        if self.obey and len(argv) >= 4 and argv[1] == "mcp":
+            name = argv[3]
+            if argv[2] == "remove":
+                self.servers.pop(name, None)
+            elif argv[2] == "add":
+                separator = argv.index("--")
+                environment = {pair.split("=", 1)[0]: pair.split("=", 1)[1]
+                               for pair in argv[4:separator] if "=" in pair}
+                entry = {"command": argv[separator + 1], "args": argv[separator + 2:]}
+                if environment:
+                    entry["env"] = environment
+                self.servers[name] = entry
+            self._flush()
+        # 종료 코드는 언제나 0 이다. 진짜 `claude mcp add` 도 거절하면서 0 을 준다.
+        return subprocess.CompletedProcess(argv, 0, "", "denied")
+
+    def last_add(self) -> list[str]:
+        return [call for call in self.calls if call[2] == "add"][-1]
+
+
+class CliTargetTest(unittest.TestCase):
+    def _target(self, tmp: Path, base: configuration.CliClientTarget,
+                servers: dict, **fake):
+        path = tmp / ("config.toml" if base.reads_toml else "config.json")
+        cli = FakeCli(path, servers, toml=base.reads_toml,
+                      servers_key=base.servers_key, **fake)
+        return dataclasses.replace(base, locate_config=lambda: path), cli, path
+
+    def test_codex_add_carries_env_bundle_root_and_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, path = self._target(root, configuration.CODEX, {})
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                result = target.install(root / "data", api_key="secret",
+                                        server_command="python.exe",
+                                        server_args=["server.py"])
+
+            argv = cli.last_add()
+            self.assertEqual(argv[:4], ["codex", "mcp", "add", "cueprecise"])
+            self.assertIn("--env", argv)
+            self.assertIn("GEMINI_API_KEY=secret", argv)
+            tail = argv[argv.index("--") + 1:]
+            self.assertEqual(tail[:2], ["python.exe", "server.py"])
+            self.assertEqual(tail[2], "--bundle-root")
+            # 읽는 파일과 쓰는 홈이 어긋나면 등록이 조용히 딴 데로 간다.
+            self.assertEqual(cli.environments[-1]["CODEX_HOME"], str(path.parent))
+            self.assertTrue(result["api_key_configured"])
+
+    def test_claude_code_uses_user_scope_and_replaces_existing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            existing = {"cueprecise": {"command": "cueprecise-mcp.exe",
+                                       "args": ["--bundle-root", "old"],
+                                       "env": {"GEMINI_API_KEY": "old-key"}}}
+            target, cli, _ = self._target(root, configuration.CLAUDE_CODE, existing)
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                result = target.install(root / "data", api_key=None,
+                                        server_command="cueprecise-mcp.exe",
+                                        server_args=[])
+
+            self.assertEqual([call[2] for call in cli.calls], ["remove", "add"])
+            for call in cli.calls:
+                self.assertIn("-s", call)
+                self.assertIn("user", call)
+            # 키를 다시 주지 않아도 저장돼 있던 것이 살아남아야 한다.
+            self.assertIn("GEMINI_API_KEY=old-key", cli.last_add())
+            self.assertTrue(result["api_key_configured"])
+
+    def test_install_refuses_someone_elses_entry_without_running_anything(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, _ = self._target(
+                root, configuration.CODEX, {"cueprecise": {"command": "not-ours.exe"}})
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                with self.assertRaisesRegex(SystemExit, "남의 항목"):
+                    target.install(root / "data", api_key=None,
+                                   server_command="python.exe", server_args=[])
+            self.assertEqual(cli.calls, [])
+
+    def test_success_is_read_back_not_taken_from_the_exit_code(self) -> None:
+        """`claude mcp add` 는 거절하면서도 종료 코드 0 을 준다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, _ = self._target(root, configuration.CLAUDE_CODE, {}, obey=False)
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                with self.assertRaisesRegex(SystemExit, "등록하지 못했다"):
+                    target.install(root / "data", api_key=None,
+                                   server_command="cueprecise-mcp.exe", server_args=[])
+
+    def test_remove_skips_entries_that_are_not_ours(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, _ = self._target(
+                root, configuration.CODEX, {"cueprecise": {"command": "not-ours.exe"}})
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                result = target.remove()
+            self.assertFalse(result["changed"])
+            self.assertEqual(cli.calls, [])
+
+    def test_remove_runs_and_reads_back(self) -> None:
+        ours = {"cueprecise": {"command": "cueprecise-mcp.exe", "args": []}}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, _ = self._target(root, configuration.CODEX, dict(ours))
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                result = target.remove()
+            self.assertTrue(result["changed"])
+            self.assertEqual(result["removed"], ["cueprecise"])
+            self.assertNotIn("cueprecise", cli.servers)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, _ = self._target(root, configuration.CODEX, dict(ours), obey=False)
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                with self.assertRaisesRegex(SystemExit, "제거하지 못했다"):
+                    target.remove()
+
+    def test_missing_executable_is_reported_not_crashed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = dataclasses.replace(
+                configuration.CODEX, locate_config=lambda: root / "config.toml")
+            with mock.patch.object(configuration.subprocess, "run",
+                                   side_effect=OSError("없는 명령")):
+                with self.assertRaisesRegex(SystemExit, "실행하지 못했다"):
+                    target.install(root / "data", api_key=None,
+                                   server_command="python.exe", server_args=[])
+
+    def test_detection_uses_the_executable_on_path(self) -> None:
+        with mock.patch.object(configuration.shutil, "which", return_value=None):
+            self.assertFalse(configuration.CODEX.is_installed())
+        with mock.patch.object(configuration.shutil, "which", return_value="codex"):
+            self.assertTrue(configuration.CODEX.is_installed())
+
+    def test_codex_config_follows_the_home_variable(self) -> None:
+        with mock.patch.dict("os.environ", {"CODEX_HOME": "C:/elsewhere"}):
+            self.assertEqual(configuration.default_codex_config(),
+                             Path("C:/elsewhere") / "config.toml")
+        with mock.patch.dict("os.environ"):
+            configuration.os.environ.pop("CODEX_HOME", None)
+            self.assertEqual(configuration.default_codex_config(),
+                             Path.home() / ".codex" / "config.toml")
+
+
+class ManagedJudgementTest(unittest.TestCase):
+    """우리 항목은 0.1.0 부터 예외 없이 `--bundle-root` 를 달고 있다."""
+
+    def test_bundled_executable_is_ours(self) -> None:
+        self.assertTrue(configuration.is_managed_server({"command": "cueprecise-mcp.exe"}))
+        self.assertTrue(configuration.is_managed_server({"command": "ytx-mcp.exe"}))
+
+    def test_our_source_entry_is_ours(self) -> None:
+        self.assertTrue(configuration.is_managed_server(
+            {"command": "python", "args": ["src/mcp_server.py", "--bundle-root", "d"]}))
+
+    def test_someone_elses_mcp_server_is_not_ours(self) -> None:
+        self.assertFalse(configuration.is_managed_server(
+            {"command": "python", "args": ["their/mcp_server.py"]}))
+
 
 if __name__ == "__main__":
     unittest.main()
