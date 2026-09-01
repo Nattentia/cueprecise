@@ -10,7 +10,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![CI](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-361%20passing-brightgreen.svg)](#테스트)
+[![Tests](https://img.shields.io/badge/tests-429%20passing-brightgreen.svg)](#테스트)
 
 CuePrecise(큐프리사이스)는 Claude Desktop에 연결하는 오픈소스 도구입니다.
 Gemini의 자연스러운 한국어 전사와 YouTube 자막의 영어 기술 용어를 결합하고,
@@ -165,8 +165,34 @@ python src/pipeline.py --help
 
 ## MCP 호스트에 붙이기
 
-권장 설치에서는 `cueprecise setup`이 Claude Desktop 설정을 자동으로 합친다. 다음 JSON은
-소스 clone을 사용하거나 다른 MCP 호스트에 수동으로 붙일 때만 필요하다.
+`cueprecise setup`은 이 PC에 설치된 AI 앱을 찾아 전부에 붙인다. 앱 이름을 몰라도 된다.
+
+```bash
+cueprecise setup                    # 찾은 앱 전부
+cueprecise setup --client codex     # 하나만
+cueprecise doctor                   # 앱별 설치·연결 상태
+```
+
+| 앱 | 설정 파일 | 붙이는 방법 |
+|---|---|---|
+| Claude Desktop | `claude_desktop_config.json` | 파일 |
+| Codex | `$CODEX_HOME/config.toml` (기본 `~/.codex`) | `codex mcp add` |
+| Claude Code | `~/.claude.json` | `claude mcp add -s user` |
+| VS Code | `Code/User/mcp.json` (최상위 키가 `servers`) | `code --add-mcp`, 제거는 파일 |
+| Cursor | `~/.cursor/mcp.json` | 파일 |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` | 파일 |
+| Gemini CLI | `~/.gemini/settings.json` | `gemini mcp add -s user`, 실패하면 파일 |
+
+설치 여부는 실행 파일이 `PATH`에 있는지로 판정한다. 남아 있는 설정 폴더를 앱이 있다는
+증거로 삼지 않는다. 감지되지 않은 앱도 `--client <이름>`으로 이름을 대면 붙는다.
+
+`cueprecise`라는 항목이 이미 있는데 CuePrecise가 만든 것이 아니면 그 앱은 건너뛴다.
+남의 설정을 덮어쓰지 않으며, 한 앱이 실패해도 나머지는 계속 붙인다.
+
+**ChatGPT 커넥터와 Claude.ai 웹에는 붙지 않는다.** 둘은 HTTPS 주소와 OAuth로 접속하는
+원격 MCP만 받는다. CuePrecise는 이 PC에서 도는 로컬 서버라 그 자리에 넣을 수 없다.
+
+다음 JSON은 소스 clone을 쓰거나 위 목록에 없는 MCP 호스트에 손으로 붙일 때만 필요하다.
 
 ```json
 {
@@ -364,7 +390,7 @@ python -m pip install -r requirements-optional.txt     # OCR, 시간대 (선택)
 python -m unittest discover -s tests
 ```
 
-361개. stdlib `unittest`만 쓴다. 테스트 의존성이 없고 네트워크와 Gemini API를
+429개. stdlib `unittest`만 쓴다. 테스트 의존성이 없고 네트워크와 Gemini API를
 호출하지 않는다. `google-genai`가 없으면 `test_transcribe`는 skip된다.
 
 ## API 사용량

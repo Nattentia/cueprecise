@@ -74,6 +74,36 @@ def setup_claude(config_path: Path, bundle_root: Path, *, api_key: str | None,
         server_args=server_args or [], extra_env=extra_env)
 
 
+def client_report() -> list[dict[str, Any]]:
+    """등록된 앱마다 설치 여부와 연결 여부를 살핀다.
+
+    설정을 읽다 실패해도 그 앱만 이유를 달고 넘어간다. 한 앱의 깨진 설정이
+    나머지 진단까지 가리면 안 된다.
+    """
+    rows: list[dict[str, Any]] = []
+    for target in configuration.CLIENTS:
+        row: dict[str, Any] = {"key": target.key, "label": target.label,
+                               "installed": False, "connected": False}
+        try:
+            row["installed"] = target.is_installed()
+            path = target.locate_config()
+            row["config"] = str(path)
+            # Codex 는 TOML 이다. 타깃이 자기 포맷으로 읽게 둔다.
+            loader = getattr(target, "load_config", None)
+            config = loader(path) if loader is not None else _read_config(path)
+            found = configuration.find_managed_entry(config, target.servers_key)
+        except Exception as error:
+            # 설정 위치조차 정할 수 없는 환경(HOME 이 없는 등)이나 깨진 설정
+            # 파일이 나머지 앱의 진단까지 가리면 안 된다.
+            row["error"] = str(error)
+        else:
+            row["connected"] = found is not None
+            if found is not None and found[0] != configuration.SERVER_KEY:
+                row["legacy_entry"] = found[0]
+        rows.append(row)
+    return rows
+
+
 def doctor(config_path: Path) -> tuple[dict[str, Any], bool]:
     checks: dict[str, Any] = {
         "python": {"ok": sys.version_info >= (3, 11), "value": sys.version.split()[0]},
@@ -92,28 +122,65 @@ def doctor(config_path: Path) -> tuple[dict[str, Any], bool]:
             checks["claude_config"]["legacy_entries"] = legacy
     except SystemExit as error:
         checks["claude_config"]["error"] = str(error)
-    required_ok = all(checks[name]["ok"] for name in ("python", "ffmpeg", "ffprobe", "claude_config"))
+    checks["clients"] = client_report()
+    # 어느 앱에든 붙어 있으면 쓸 수 있다. `claude_config` 하나로 판정하면
+    # Codex 나 VS Code 에만 붙인 사용자가 실패로 나온다.
+    connected = any(row["connected"] for row in checks["clients"])
+    required_ok = (all(checks[name]["ok"] for name in ("python", "ffmpeg", "ffprobe"))
+                   and (connected or checks["claude_config"]["ok"]))
     return checks, required_ok
 
 
 def _setup_main(argv: list[str]) -> int:
+    known = ", ".join(target.key for target in configuration.CLIENTS)
     parser = argparse.ArgumentParser(
         prog="cueprecise setup",
-        description="Claude Desktop에 CuePrecise MCP를 등록한다.")
-    parser.add_argument("--config", type=Path, default=default_claude_config())
+        description="이 PC에 있는 AI 앱에 CuePrecise MCP를 등록한다.")
+    parser.add_argument("--client", default="all",
+                        help=f"쉼표로 구분한다. 생략하면 감지된 앱 전부다. 가능한 값: all, {known}")
+    parser.add_argument("--config", type=Path, default=None,
+                        help="앱 하나만 지정했을 때 그 앱의 설정 파일 경로를 직접 준다.")
     parser.add_argument("--bundle-root", type=Path, default=default_bundle_root())
     parser.add_argument("--api-key", default=None,
                         help="생략하면 현재 GEMINI_API_KEY를 사용한다. 키 없이도 조회 도구는 동작한다.")
     args = parser.parse_args(argv)
     key = args.api_key or os.environ.get("GEMINI_API_KEY")
-    result = setup_claude(args.config, args.bundle_root, api_key=key)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    targets = configuration.resolve_clients(args.client.split(","))
+    if not targets:
+        print("연결할 AI 앱을 찾지 못했다. `--client` 로 이름을 직접 줄 수 있다: "
+              f"{known}", file=sys.stderr)
+        return 1
+    if args.config is not None and len(targets) != 1:
+        print("`--config` 는 앱을 하나만 지정했을 때만 쓸 수 있다.", file=sys.stderr)
+        return 2
+
+    command, arguments = sys.executable, ["-m", "mcp_server"]
+    connected: list[dict[str, Any]] = []
+    failed: list[dict[str, str]] = []
+    for target in targets:
+        try:
+            result = target.install(args.bundle_root, api_key=key, server_command=command,
+                                    server_args=arguments, config_path=args.config)
+        except Exception as error:  # 한 앱의 실패가 나머지를 막지 않는다.
+            failed.append({"key": target.key, "label": target.label, "reason": str(error)})
+        else:
+            connected.append({"key": target.key, "label": target.label, **result})
+
+    print(json.dumps({"connected": connected, "failed": failed}, ensure_ascii=False, indent=2))
     if not key:
         print("주의: GEMINI_API_KEY가 없어 전사 기능은 키를 설정할 때까지 동작하지 않는다.", file=sys.stderr)
-    if result.get("migrated_from"):
-        print(f"이전 `{result['migrated_from']}` 항목을 `{result['server_key']}`로 옮겼다. "
-              "저장돼 있던 설정은 그대로 유지된다.", file=sys.stderr)
-    print("Claude Desktop을 다시 시작한 뒤 CuePrecise 도구를 사용할 수 있다.", file=sys.stderr)
+    for item in connected:
+        if item.get("migrated_from"):
+            print(f"{item['label']}: 이전 `{item['migrated_from']}` 항목을 "
+                  f"`{item['server_key']}`로 옮겼다. 저장돼 있던 설정은 그대로 유지된다.",
+                  file=sys.stderr)
+    for item in failed:
+        print(f"{item['label']}: {item['reason']}", file=sys.stderr)
+    if not connected:
+        return 1
+    names = ", ".join(item["label"] for item in connected)
+    print(f"{names}을(를) 다시 시작한 뒤 CuePrecise 도구를 사용할 수 있다.", file=sys.stderr)
     return 0
 
 

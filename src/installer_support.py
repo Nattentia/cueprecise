@@ -106,10 +106,18 @@ def probe_mcp(server: Path, bundle_root: Path, environment: dict[str, str]) -> t
     return True, None
 
 
-def connect(api_key: str, install_dir: Path, *,
-            config_path: Path | None = None,
-            bundle_root: Path | None = None) -> dict[str, Any]:
-    """필수 도구를 확인하고 Claude 설정을 안전하게 저장한 뒤 MCP를 시험한다."""
+def connect_clients(api_key: str, install_dir: Path, *,
+                    targets: list[configuration.ClientTarget] | None = None,
+                    config_path: Path | None = None,
+                    bundle_root: Path | None = None) -> dict[str, Any]:
+    """이 PC에 있는 AI 앱을 찾아 하나씩 붙인다.
+
+    한 앱이 실패해도 나머지를 계속 붙인다. 앱마다 사정이 다른데 하나가
+    막혔다고 전부 포기하면, 멀쩡한 앱까지 못 쓰게 된다. 대신 무엇이 되고
+    무엇이 안 됐는지를 그대로 돌려준다.
+
+    필수 도구 확인과 연결 시험은 앱 수와 무관하게 한 번만 한다.
+    """
     key, error = validate_api_key(api_key)
     if error:
         raise ValueError(error)
@@ -117,12 +125,17 @@ def connect(api_key: str, install_dir: Path, *,
     if server is None:
         raise FileNotFoundError(
             "설치된 cueprecise-mcp.exe를 찾지 못했습니다. CuePrecise를 다시 설치해 주세요.")
+    chosen = configuration.detected_clients() if targets is None else list(targets)
+    if not chosen:
+        # 붙인 앱이 하나도 없는 것을 성공이라고 말하면 안 된다.
+        raise RuntimeError(
+            "연결할 AI 앱을 찾지 못했습니다. Claude Desktop, Codex, Claude Code, "
+            "VS Code 중 하나를 설치한 뒤 다시 시도해 주세요.")
     ffmpeg_bin, ffmpeg_error = ensure_ffmpeg()
     if ffmpeg_error or ffmpeg_bin is None:
         raise RuntimeError(ffmpeg_error)
 
     destination = bundle_root or configuration.default_bundle_root()
-    config = config_path or configuration.default_claude_config()
     server_environment = {
         "PATH": str(ffmpeg_bin) + os.pathsep + os.environ.get("PATH", ""),
     }
@@ -130,10 +143,35 @@ def connect(api_key: str, install_dir: Path, *,
     ok, probe_error = probe_mcp(server, destination, {**server_environment, "GEMINI_API_KEY": key})
     if not ok:
         raise RuntimeError(probe_error)
-    result = configuration.setup_claude(
-        config, destination, api_key=key, server_command=str(server), server_args=[],
-        extra_env=server_environment)
-    return {**result, "ffmpeg_bin": str(ffmpeg_bin), "connection_tested": True}
+
+    connected: list[dict[str, Any]] = []
+    failed: list[dict[str, str]] = []
+    for target in chosen:
+        try:
+            result = target.install(
+                destination, api_key=key, server_command=str(server), server_args=[],
+                extra_env=server_environment,
+                config_path=config_path if len(chosen) == 1 else None)
+        except Exception as error:  # 한 앱의 실패가 나머지를 막지 않는다.
+            failed.append({"key": target.key, "label": target.label, "reason": str(error)})
+        else:
+            connected.append({"key": target.key, "label": target.label, **result})
+    if not connected:
+        raise RuntimeError("\n".join(
+            f"{item['label']}: {item['reason']}" for item in failed))
+    return {"connected": connected, "failed": failed,
+            "ffmpeg_bin": str(ffmpeg_bin), "connection_tested": True,
+            "bundle_root": str(destination.resolve())}
+
+
+def connect(api_key: str, install_dir: Path, *,
+            config_path: Path | None = None,
+            bundle_root: Path | None = None) -> dict[str, Any]:
+    """Claude Desktop 하나에만 붙인다. `connect_clients` 의 얇은 이름이다."""
+    result = connect_clients(api_key, install_dir, targets=[configuration.CLAUDE_DESKTOP],
+                             config_path=config_path, bundle_root=bundle_root)
+    entry = result["connected"][0]
+    return {**entry, "ffmpeg_bin": result["ffmpeg_bin"], "connection_tested": True}
 
 
 def migrate(install_dir: Path, config_path: Path | None = None) -> dict[str, Any]:
@@ -175,3 +213,23 @@ def disconnect(config_path: Path | None = None) -> dict[str, Any]:
     """
     config = config_path or configuration.default_claude_config()
     return configuration.remove_claude(config)
+
+
+def disconnect_clients(targets: list[configuration.ClientTarget] | None = None) -> dict[str, Any]:
+    """붙였던 앱 전부에서 우리 항목만 뗀다.
+
+    감지되지 않은 앱도 살펴본다. 붙인 뒤에 앱을 지운 사용자의 설정에 우리
+    항목이 남아 있을 수 있고, 남겨 두면 그 앱을 다시 깔았을 때 없는 서버를
+    가리킨다. 한 앱에서 실패해도 나머지는 계속 뗀다.
+    """
+    removed: list[dict[str, Any]] = []
+    failed: list[dict[str, str]] = []
+    for target in (targets if targets is not None else list(configuration.CLIENTS)):
+        try:
+            result = target.remove()
+        except Exception as error:
+            failed.append({"key": target.key, "label": target.label, "reason": str(error)})
+        else:
+            if result.get("changed"):
+                removed.append({"key": target.key, "label": target.label, **result})
+    return {"removed": removed, "failed": failed, "changed": bool(removed)}

@@ -11,7 +11,7 @@ analysis on your computer so it remains available in future conversations.
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![CI](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-361%20passing-brightgreen.svg)](#tests)
+[![Tests](https://img.shields.io/badge/tests-429%20passing-brightgreen.svg)](#tests)
 
 ### What it feels like
 
@@ -147,8 +147,38 @@ python src/pipeline.py --help
 
 ## Connect another MCP host
 
-`cueprecise setup` configures Claude Desktop automatically. Use a manual configuration only for a
-source checkout or another MCP host:
+`cueprecise setup` finds the AI apps installed on this computer and connects all of them. You do
+not need to know their names.
+
+```bash
+cueprecise setup                    # every app that is found
+cueprecise setup --client codex     # one app only
+cueprecise doctor                   # per-app install and connection state
+```
+
+| App | Configuration file | How it is connected |
+|---|---|---|
+| Claude Desktop | `claude_desktop_config.json` | file |
+| Codex | `$CODEX_HOME/config.toml` (default `~/.codex`) | `codex mcp add` |
+| Claude Code | `~/.claude.json` | `claude mcp add -s user` |
+| VS Code | `Code/User/mcp.json` (top-level key is `servers`) | `code --add-mcp`; removal edits the file |
+| Cursor | `~/.cursor/mcp.json` | file |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` | file |
+| Gemini CLI | `~/.gemini/settings.json` | `gemini mcp add -s user`, file if that fails |
+
+An app counts as installed when its executable is on `PATH`. A leftover configuration folder is not
+treated as proof that the app is there. An app that is not detected can still be named explicitly
+with `--client <name>`.
+
+If an entry called `cueprecise` already exists and CuePrecise did not create it, that app is
+skipped. Someone else's configuration is never overwritten, and one failing app does not stop the
+others.
+
+**ChatGPT connectors and Claude.ai on the web are not supported.** Both accept only remote MCP
+servers reached over HTTPS with OAuth. CuePrecise runs locally on your computer, so it cannot be
+registered there.
+
+The JSON below is needed only for a source checkout or an MCP host that is not listed above:
 
 ```json
 {
@@ -266,7 +296,7 @@ not been published to PyPI yet, so install from the GitHub URL shown above.
 python -m unittest discover -s tests
 ```
 
-The suite contains 361 tests and uses the standard-library `unittest` runner. Tests do not access
+The suite contains 429 tests and uses the standard-library `unittest` runner. Tests do not access
 the network or call the Gemini API. Tests requiring `google-genai` are skipped when the SDK is not
 installed.
 
