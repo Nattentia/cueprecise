@@ -10,9 +10,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![CI](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-429%20passing-brightgreen.svg)](#테스트)
+[![Tests](https://img.shields.io/badge/tests-432%20passing-brightgreen.svg)](#테스트)
 
-CuePrecise(큐프리사이스)는 Claude Desktop에 연결하는 오픈소스 도구입니다.
+CuePrecise(큐프리사이스)는 Claude Desktop·Codex 등 AI 앱에 연결하는 오픈소스 도구입니다.
 Gemini의 자연스러운 한국어 전사와 YouTube 자막의 영어 기술 용어를 결합하고,
 분석 결과를 내 컴퓨터에 보관해 다음 대화에서도 다시 사용할 수 있습니다.
 
@@ -43,7 +43,8 @@ https://github.com/user-attachments/assets/20499d73-e24f-4a40-aa30-77e42a34a9ef
 
 1. `cueprecise-setup.exe`를 실행합니다.
 2. 안내 화면에서 **API 키 만들기**를 누르고, Google에서 만든 키를 붙여넣습니다.
-3. 연결이 끝나면 Claude Desktop을 다시 시작합니다.
+3. 컴퓨터에서 발견된 AI 앱을 선택하고 **연결하기**를 누릅니다.
+4. 연결이 끝나면 선택한 AI 앱을 다시 시작합니다.
 
 Python이나 Git을 설치할 필요가 없습니다. 현재 공개 파일은 SignPath 심사용 미서명
 시험판이므로 Windows 경고가 나타날 수 있습니다. 서명 완료 전에는 반드시 이 저장소의
@@ -96,15 +97,16 @@ Gemini는 4회 실행에서 모두 그 용어를 놓쳤다. CuePrecise는 시간
 
 1. [Releases](https://github.com/Nattentia/cueprecise/releases)에서 `cueprecise-setup.exe`를 내려받아 실행한다.
 2. 설치가 끝나면 자동으로 열리는 화면에서 **API 키 만들기**를 누른다.
-3. Google AI Studio에서 만든 키를 복사해 붙여넣고 **연결하기**를 누른다.
-4. “연결 완료”가 보이면 Claude Desktop을 완전히 껐다가 다시 켠다.
+3. Google AI Studio에서 만든 키를 복사해 붙여넣는다.
+4. 컴퓨터에서 발견된 AI 앱을 선택하고 **연결하기**를 누른다.
+5. “연결 완료”가 보이면 선택한 AI 앱을 완전히 껐다가 다시 켠다.
 
 Python이나 Git을 설치하거나 명령어를 입력할 필요가 없다. 필요한 영상 처리 도구도
-연결 과정에서 자동으로 준비한다. API 키는 Claude Desktop의 내 컴퓨터 설정에만 저장되며,
-기존 Claude 설정은 백업한 뒤 CuePrecise 항목만 추가한다. 이전 이름(`ytx`)으로
+연결 과정에서 자동으로 준비한다. API 키는 선택한 AI 앱의 내 컴퓨터 설정에만 저장되며,
+기존 설정은 백업한 뒤 CuePrecise 항목만 추가한다. 이전 이름(`ytx`)으로
 설치한 적이 있으면 API 키를 포함한 설정을 그대로 물려받아 옮긴다.
 
-> `v0.1.1`은 SignPath Foundation 코드 서명 심사를 위한 시험판이다. 아직 디지털
+> `v0.2.0`은 SignPath Foundation 코드 서명 심사를 위한 시험판이다. 아직 디지털
 > 서명이 없어 Windows에서 "알 수 없는 게시자" 경고가 나타날 수 있다. 반드시 이
 > 저장소의 Releases에서 받은 파일만 사용한다.
 
@@ -392,7 +394,7 @@ python -m pip install -r requirements-optional.txt     # OCR, 시간대 (선택)
 python -m unittest discover -s tests
 ```
 
-429개. stdlib `unittest`만 쓴다. 테스트 의존성이 없고 네트워크와 Gemini API를
+432개. stdlib `unittest`만 쓴다. 테스트 의존성이 없고 네트워크와 Gemini API를
 호출하지 않는다. `google-genai`가 없으면 `test_transcribe`는 skip된다.
 
 ## API 사용량

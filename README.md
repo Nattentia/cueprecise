@@ -11,7 +11,7 @@ analysis on your computer so it remains available in future conversations.
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![CI](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-429%20passing-brightgreen.svg)](#tests)
+[![Tests](https://img.shields.io/badge/tests-432%20passing-brightgreen.svg)](#tests)
 
 ### What it feels like
 
@@ -41,7 +41,8 @@ https://github.com/user-attachments/assets/ce7d595b-871f-469a-bcb8-798713751ffd
 
 1. Run `cueprecise-setup.exe`.
 2. Click **Create API key**, copy the key from Google AI Studio, and paste it into CuePrecise.
-3. Restart Claude Desktop when the connection is complete.
+3. Select the AI apps found on your computer and click **Connect**.
+4. Restart the connected apps when setup is complete.
 
 No Python, Git, or terminal commands are required. The current release is an unsigned preview
 submitted for SignPath review, so Windows may display an unknown-publisher warning. Until signing
@@ -90,14 +91,15 @@ the exact merge rules and validation criteria.
    `cueprecise-setup.exe`.
 2. Run the installer. In the onboarding window, click **Create API key**.
 3. In Google AI Studio, create or select a Gemini API key and copy it.
-4. Paste the key into CuePrecise and click **Connect**.
-5. Fully quit and reopen Claude Desktop.
+4. Paste the key into CuePrecise.
+5. Select the AI apps found on your computer and click **Connect**.
+6. Fully quit and reopen the connected apps.
 
-The installer prepares the bundled video tools, backs up the existing Claude configuration, and
-adds only the CuePrecise MCP entry. The API key is used from the local Claude Desktop configuration;
-CuePrecise does not send it to a project-operated server.
+The installer prepares the bundled video tools, detects supported AI apps, backs up their existing
+configuration, and adds only the CuePrecise MCP entry. The API key is stored in the selected apps'
+local configuration; CuePrecise does not send it to a project-operated server.
 
-> **Unsigned preview:** `v0.1.1` is a prerelease for SignPath Foundation review. Windows may
+> **Unsigned preview:** `v0.2.0` is a prerelease for SignPath Foundation review. Windows may
 > display an unknown-publisher warning until code signing is approved.
 
 ### Upgrading from `ytx`
@@ -296,7 +298,7 @@ not been published to PyPI yet, so install from the GitHub URL shown above.
 python -m unittest discover -s tests
 ```
 
-The suite contains 429 tests and uses the standard-library `unittest` runner. Tests do not access
+The suite contains 432 tests and uses the standard-library `unittest` runner. Tests do not access
 the network or call the Gemini API. Tests requiring `google-genai` are skipped when the SDK is not
 installed.
 
