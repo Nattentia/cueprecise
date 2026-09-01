@@ -360,6 +360,127 @@ class CliTargetTest(unittest.TestCase):
                              Path.home() / ".codex" / "config.toml")
 
 
+class FakeVsCode:
+    """`code --add-mcp` 를 대신한다. 실측한 대로 동기적으로 파일을 쓴다."""
+
+    def __init__(self, path: Path, servers: dict, *, obey: bool = True) -> None:
+        self.path, self.servers, self.obey = path, dict(servers), obey
+        self.calls: list[list[str]] = []
+        self._flush()
+
+    def _flush(self) -> None:
+        self.path.write_text(json.dumps({"servers": self.servers, "inputs": []}),
+                             encoding="utf-8")
+
+    def run(self, argv, **kwargs):
+        self.calls.append(list(argv))
+        if self.obey and len(argv) == 3 and argv[1] == "--add-mcp":
+            payload = json.loads(argv[2])
+            name = payload.pop("name")
+            self.servers[name] = payload
+            self._flush()
+        return subprocess.CompletedProcess(argv, 0, "", "denied")
+
+
+class VsCodeTargetTest(unittest.TestCase):
+    def _target(self, tmp: Path, servers: dict, **fake):
+        path = tmp / "mcp.json"
+        cli = FakeVsCode(path, servers, **fake)
+        return dataclasses.replace(
+            configuration.VS_CODE, locate_config=lambda: path), cli, path
+
+    def test_payload_uses_slashes_and_carries_bundle_root(self) -> None:
+        """`code.cmd` 를 지나며 역슬래시가 죽는다. 경로는 슬래시로 보낸다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, _ = self._target(root, {})
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                target.install(root / "data", api_key="secret",
+                               server_command="C:\\app\\cueprecise-mcp.exe",
+                               server_args=["--flag"])
+
+            argv = cli.calls[-1]
+            self.assertEqual(argv[:2], ["code", "--add-mcp"])
+            self.assertNotIn("\\", argv[2])
+            payload = json.loads(argv[2])
+            self.assertEqual(payload["name"], "cueprecise")
+            self.assertEqual(payload["command"], "C:/app/cueprecise-mcp.exe")
+            self.assertEqual(payload["args"][:2], ["--flag", "--bundle-root"])
+            self.assertEqual(payload["env"]["GEMINI_API_KEY"], "secret")
+
+    def test_install_writes_under_servers_and_spares_the_rest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, path = self._target(root, {"other": {"command": "keep"}})
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                target.install(root / "data", api_key=None,
+                               server_command="cueprecise-mcp.exe", server_args=[])
+
+            saved = _read(path)
+            self.assertEqual(saved["servers"]["other"]["command"], "keep")
+            self.assertIn("cueprecise", saved["servers"])
+            self.assertEqual(saved["inputs"], [])
+            self.assertNotIn("mcpServers", saved)
+
+    def test_existing_key_is_inherited_across_a_reinstall(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, _ = self._target(root, {"cueprecise": {
+                "command": "cueprecise-mcp.exe", "args": ["--bundle-root", "old"],
+                "env": {"GEMINI_API_KEY": "old-key"}}})
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                result = target.install(root / "data", api_key=None,
+                                        server_command="cueprecise-mcp.exe",
+                                        server_args=[])
+            payload = json.loads(cli.calls[-1][2])
+            self.assertEqual(payload["env"]["GEMINI_API_KEY"], "old-key")
+            self.assertTrue(result["api_key_configured"])
+
+    def test_install_refuses_someone_elses_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, _ = self._target(root, {"cueprecise": {"command": "not-ours.exe"}})
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                with self.assertRaisesRegex(SystemExit, "남의 항목"):
+                    target.install(root / "data", api_key=None,
+                                   server_command="cueprecise-mcp.exe", server_args=[])
+            self.assertEqual(cli.calls, [])
+
+    def test_success_is_read_back_not_taken_from_the_exit_code(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, _ = self._target(root, {}, obey=False)
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                with self.assertRaisesRegex(SystemExit, "등록하지 못했다"):
+                    target.install(root / "data", api_key=None,
+                                   server_command="cueprecise-mcp.exe", server_args=[])
+
+    def test_removal_edits_the_file_because_there_is_no_command_for_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, path = self._target(root, {
+                "cueprecise": {"command": "cueprecise-mcp.exe"},
+                "other": {"command": "keep"}})
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                result = target.remove()
+
+            saved = _read(path)
+            self.assertTrue(result["changed"])
+            self.assertNotIn("cueprecise", saved["servers"])
+            self.assertEqual(saved["servers"]["other"]["command"], "keep")
+            self.assertEqual(saved["inputs"], [])
+            self.assertEqual(cli.calls, [])
+
+    def test_removal_spares_someone_elses_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, _, path = self._target(root, {"cueprecise": {"command": "not-ours.exe"}})
+            original = path.read_text(encoding="utf-8")
+            result = target.remove()
+            self.assertFalse(result["changed"])
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+
 class ManagedJudgementTest(unittest.TestCase):
     """우리 항목은 0.1.0 부터 예외 없이 `--bundle-root` 를 달고 있다."""
 

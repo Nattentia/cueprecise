@@ -386,6 +386,75 @@ class CliClientTarget(ClientTarget):
                 "backup": str(backup) if backup else None, "removed": [SERVER_KEY]}
 
 
+def _forward_slashes(value: str) -> str:
+    """경로의 역슬래시를 슬래시로 바꾼다.
+
+    VS Code 는 JSON 한 덩어리를 인자로 받는데, `code.cmd` 래퍼를 지나며
+    역슬래시가 죽어 `Bad escaped character in JSON` 이 난다. Windows 는
+    슬래시 경로를 그대로 받아 준다.
+    """
+    return value.replace("\\", "/")
+
+
+@dataclass(frozen=True)
+class VsCodeTarget(CliClientTarget):
+    """붙이는 것은 VS Code 명령이, 떼는 것은 우리가 한다.
+
+    VS Code 는 `--add-mcp` 만 주고 떼는 명령을 주지 않는다. 그래서 제거는
+    설정 파일에서 직접 하되, 파일 방식과 같은 규칙(우리 항목인지 판정하고,
+    고치기 전에 백업하고, 남의 것은 건드리지 않는다)을 그대로 쓴다.
+    """
+
+    def install(self, bundle_root: Path, *, api_key: str | None,
+                server_command: str, server_args: list[str],
+                extra_env: dict[str, str] | None = None,
+                config_path: Path | None = None) -> dict[str, Any]:
+        existing = self._current_entry()
+        if existing is not None and not is_managed_server(existing):
+            raise SystemExit(
+                f"{self.label} 에 이미 `{SERVER_KEY}` 라는 남의 항목이 있다. 건드리지 않는다.")
+
+        environment = _inherited_environment(existing)
+        environment.update(extra_env or {})
+        if api_key:
+            environment["GEMINI_API_KEY"] = api_key
+
+        path = self.locate_config()
+        backup = backup_file(path)
+        bundle_root.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, Any] = {
+            "name": SERVER_KEY,
+            "command": _forward_slashes(server_command),
+            "args": [_forward_slashes(str(item)) for item in
+                     [*server_args, "--bundle-root", str(bundle_root.resolve())]],
+        }
+        if environment:
+            payload["env"] = environment
+        # 같은 이름이면 덮어쓰고 다른 항목은 그대로 둔다(실측 확인).
+        result = self._run(["--add-mcp", json.dumps(payload)])
+
+        if self._current_entry() is None:
+            detail = (result.stderr or result.stdout or "").strip()[-300:]
+            raise SystemExit(f"{self.label} 에 등록하지 못했다.\n{detail}")
+
+        return {"config": str(path), "bundle_root": str(bundle_root.resolve()),
+                "backup": str(backup) if backup else None,
+                "api_key_configured": bool(environment.get("GEMINI_API_KEY")),
+                "server_key": SERVER_KEY, "migrated_from": None}
+
+    def remove(self, config_path: Path | None = None) -> dict[str, Any]:
+        return remove_file_client(config_path or self.locate_config(), self.servers_key)
+
+
+def default_vscode_config() -> Path:
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        return base / "Code" / "User" / "mcp.json"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Code" / "User" / "mcp.json"
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "Code" / "User" / "mcp.json"
+
+
 def default_codex_config() -> Path:
     """Codex 가 실제로 읽는 설정 파일.
 
@@ -413,8 +482,13 @@ CLAUDE_CODE = CliClientTarget(
     key="claude-code", label="Claude Code", locate_config=default_claude_code_config,
     executable="claude", scope_args=("-s", "user"), env_flag="-e")
 
-# 붙일 수 있는 앱 목록. P2 이후로 VS Code 와 나머지가 여기 붙는다.
-CLIENTS: tuple[ClientTarget, ...] = (CLAUDE_DESKTOP, CODEX, CLAUDE_CODE)
+VS_CODE = VsCodeTarget(
+    key="vscode", label="VS Code", locate_config=default_vscode_config,
+    # VS Code 만 최상위 키가 `servers` 다. `mcpServers` 로 쓰면 조용히 무시된다.
+    servers_key="servers", executable="code")
+
+# 붙일 수 있는 앱 목록. P3 에서 Cursor·Windsurf·Gemini CLI 가 여기 붙는다.
+CLIENTS: tuple[ClientTarget, ...] = (CLAUDE_DESKTOP, CODEX, CLAUDE_CODE, VS_CODE)
 
 
 def client_by_key(key: str) -> ClientTarget:
