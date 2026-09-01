@@ -8,6 +8,12 @@ on:
       - "pyproject.toml"
       - ".github/workflows/windows-installer.yml"
   workflow_dispatch:
+  # 릴리스 워크플로가 같은 빌드와 같은 검사를 그대로 불러 쓴다.
+  workflow_call:
+    outputs:
+      sha256:
+        description: "설치 프로그램의 SHA-256 해시"
+        value: ${{ jobs.build.outputs.sha256 }}
 
 permissions:
   contents: read
@@ -15,6 +21,8 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    outputs:
+      sha256: ${{ steps.hash.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
@@ -24,6 +32,14 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: ./installer/build_windows.ps1
+      - name: Record installer hash
+        id: hash
+        shell: pwsh
+        run: |
+          $installer = "dist/windows/cueprecise-setup.exe"
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLower()
+          "sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Output $hash
       - name: Smoke-test bundled commands
         shell: pwsh
         run: |
