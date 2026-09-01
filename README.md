@@ -2,17 +2,51 @@
 
 **Find the exact moment in any YouTube video.**
 
-한글 표기는 **큐프리사이스**다. 영상을 한 번 분석해 두면, 이후 대화에서 필요한
-대목을 timestamp와 함께 다시 찾아 주는 MCP 서버다.
+긴 YouTube 영상을 한 번 분석해 두면, 나중에는 Claude에게 질문하는 것만으로
+**정확한 장면·대본·근거를 타임스탬프와 함께** 다시 찾을 수 있습니다.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![CI](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/tests-361%20passing-brightgreen.svg)](#테스트)
 
-Gemini 전사와 YouTube 자막을 시각 기준으로 합쳐, 한국어 본문과 영어 용어를 모두
-보존한 대본을 만든다. 결과는 번들과 SQLite 색인으로 남아, 대화가 끝나고 프로세스가
-꺼져도 다음 세션이 근거를 다시 찾는다.
+CuePrecise(큐프리사이스)는 Claude Desktop에 연결하는 오픈소스 도구입니다.
+Gemini의 자연스러운 한국어 전사와 YouTube 자막의 영어 기술 용어를 결합하고,
+분석 결과를 내 컴퓨터에 보관해 다음 대화에서도 다시 사용할 수 있습니다.
+
+### 이렇게 사용합니다
+
+```text
+나: 이 영상에서 self-supervised learning을 설명하는 부분을 찾아줘.
+
+Claude + CuePrecise:
+관련 구간을 타임스탬프와 함께 찾고,
+그 시점의 정확한 대본과 화면 근거를 보여줍니다.
+```
+
+<!-- 실제 Claude Desktop 사용 GIF를 확보하면 이 주석 바로 아래에 배치한다. -->
+
+| | |
+|---|---|
+| 🔎 **정확한 장면 찾기** | 질문과 관련된 구간을 타임스탬프로 반환합니다. |
+| 🧩 **영어 용어 보존** | 한국어 발화 속 영어 기술 용어가 사라지는 문제를 줄입니다. |
+| 💾 **대화가 끝나도 유지** | 분석 결과가 내 컴퓨터에 남아 다음 대화에서도 검색됩니다. |
+| 🔐 **운영자 서버 없음** | 계정·광고·추적 없이 사용자의 컴퓨터에서 동작합니다. |
+
+### Windows에서 시작하기
+
+[**Windows 설치 파일 내려받기 →**](https://github.com/Nattentia/cueprecise/releases)
+
+1. `cueprecise-setup.exe`를 실행합니다.
+2. 안내 화면에서 **API 키 만들기**를 누르고, Google에서 만든 키를 붙여넣습니다.
+3. 연결이 끝나면 Claude Desktop을 다시 시작합니다.
+
+Python이나 Git을 설치할 필요가 없습니다. 현재 공개 파일은 SignPath 심사용 미서명
+시험판이므로 Windows 경고가 나타날 수 있습니다. 서명 완료 전에는 반드시 이 저장소의
+Releases에서 받은 파일만 사용하세요.
+
+**[자세한 설치 방법](#빠른-시작)** · **[지원하는 도구](#도구)** ·
+**[작동 원리](#동작-방식)** · **[알려진 제한](#알려진-제한)**
 
 ---
 
