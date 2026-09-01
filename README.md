@@ -129,8 +129,34 @@ python src/pipeline.py --help
 
 ## MCP 호스트에 붙이기
 
-권장 설치에서는 `cueprecise setup`이 Claude Desktop 설정을 자동으로 합친다. 다음 JSON은
-소스 clone을 사용하거나 다른 MCP 호스트에 수동으로 붙일 때만 필요하다.
+`cueprecise setup`은 이 PC에 설치된 AI 앱을 찾아 전부에 붙인다. 앱 이름을 몰라도 된다.
+
+```bash
+cueprecise setup                    # 찾은 앱 전부
+cueprecise setup --client codex     # 하나만
+cueprecise doctor                   # 앱별 설치·연결 상태
+```
+
+| 앱 | 설정 파일 | 붙이는 방법 |
+|---|---|---|
+| Claude Desktop | `claude_desktop_config.json` | 파일 |
+| Codex | `$CODEX_HOME/config.toml` (기본 `~/.codex`) | `codex mcp add` |
+| Claude Code | `~/.claude.json` | `claude mcp add -s user` |
+| VS Code | `Code/User/mcp.json` (키가 `servers`) | `code --add-mcp`, 제거는 파일 |
+| Cursor | `~/.cursor/mcp.json` | 파일 |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` | 파일 |
+| Gemini CLI | `~/.gemini/settings.json` | 파일 |
+
+설치 여부는 실행 파일로 판정한다. 설정 폴더가 있다고 앱이 있다고 보지 않는다. 찾지
+못한 앱도 `--client <이름>`으로 이름을 대면 붙는다.
+
+같은 이름(`cueprecise`)의 항목이 이미 있는데 우리가 만든 것이 아니면 그 앱은 건너뛴다.
+남의 설정을 덮어쓰지 않는다. 한 앱이 실패해도 나머지는 계속 붙인다.
+
+**ChatGPT 커넥터와 Claude.ai 웹에는 붙지 않는다.** 둘은 HTTPS 주소와 OAuth로 접속하는
+원격 MCP만 받는다. CuePrecise는 이 PC에서 도는 로컬 서버라 그 자리에 넣을 수 없다.
+
+다음 JSON은 소스 clone을 쓰거나 위 목록에 없는 MCP 호스트에 손으로 붙일 때만 필요하다.
 
 ```json
 {
