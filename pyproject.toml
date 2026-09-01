@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cueprecise-mcp"
-version = "0.1.1"
+version = "0.2.0"
 description = "CuePrecise — find the exact moment in any YouTube video."
 readme = "README.md"
 requires-python = ">=3.11"
