@@ -62,7 +62,7 @@ STAGES = ("fetch", "plan", "transcribe", "assemble", "merge", "chapters",
 #
 # render — SRT/TXT 는 사람이 자막 파일을 원할 때 쓴다. 근거 검색은
 # merged.json 과 index 로 하므로 기본 산출물에 있을 이유가 없다. 기능은
-# 그대로다. `--stages render` / `ytx_register(stages=["render"])` 로 언제든
+# 그대로다. `--stages render` / `cueprecise_register(stages=["render"])` 로 언제든
 # 만들 수 있고 단어 보존율 100% 도 그대로다.
 #
 # visual 은 기본에 남긴다. 이 도구의 목적이 "오디오에 안 잡히는 화면 정보를

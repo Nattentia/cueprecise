@@ -1,18 +1,22 @@
-# Code signing policy
+# Code signing policy — CuePrecise
 
 Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
 관련 서비스: [SignPath.io](https://signpath.io/) ·
 [SignPath Foundation](https://signpath.org/)
 
+이 프로젝트는 2026-09-01에 이름을 `ytx`에서 **CuePrecise**로 바꿨다. 저장소는
+`https://github.com/Nattentia/cueprecise`이고 설치 파일 이름은 `cueprecise-setup.exe`다.
+서명 정책과 절차, 담당자는 이름 변경 전후로 같다.
+
 ## 서명 대상과 절차
 
 - 공식 Windows 실행 파일은 이 공개 저장소의 GitHub Actions에서만 빌드한다.
 - 서명 요청은 버전이 표시된 GitHub Release 후보에 대해서만 만든다.
 - 저장소 소유자가 빌드 출처와 검사 결과를 확인한 뒤 각 서명 요청을 승인한다.
-- ytx가 직접 만든 실행 파일과 최종 설치 프로그램만 ytx의 서명 대상으로 삼는다.
-  설치 프로그램에 포함되는 외부 오픈소스 구성 요소를 ytx의 이름으로 다시 서명하지
-  않는다.
+- CuePrecise가 직접 만든 실행 파일과 최종 설치 프로그램만 CuePrecise의 서명 대상으로
+  삼는다. 설치 프로그램에 포함되는 외부 오픈소스 구성 요소를 CuePrecise의 이름으로
+  다시 서명하지 않는다.
 - 서명된 파일은 GitHub Releases에서 배포하고 SHA-256 해시를 함께 게시한다.
 
 ## 역할

@@ -1,11 +1,14 @@
-# ytx
+# CuePrecise
 
-**YouTube 영상을 한 번 분석해 두고, 이후 대화에서 필요한 대목을 timestamp와 함께 다시 찾는 MCP 서버.**
+**Find the exact moment in any YouTube video.**
+
+한글 표기는 **큐프리사이스**다. 영상을 한 번 분석해 두면, 이후 대화에서 필요한
+대목을 timestamp와 함께 다시 찾아 주는 MCP 서버다.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
-[![CI](https://github.com/Nattentia/ytx/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/ytx/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-332%20passing-brightgreen.svg)](#테스트)
+[![CI](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-361%20passing-brightgreen.svg)](#테스트)
 
 Gemini 전사와 YouTube 자막을 시각 기준으로 합쳐, 한국어 본문과 영어 용어를 모두
 보존한 대본을 만든다. 결과는 번들과 SQLite 색인으로 남아, 대화가 끝나고 프로세스가
@@ -27,7 +30,7 @@ Gemini 전사와 YouTube 자막을 시각 기준으로 합쳐, 한국어 본문�
 **❌ YouTube 자동자막만 쓰면** — 영어는 3배 더 살아남지만 한국어가 거칠고,
 문장·화자·검색이 없다.
 
-**✅ ytx는 둘을 합친다.**
+**✅ CuePrecise는 둘을 합친다.**
 
 ```
 그러면 어떻게 이 능력을 학습을 했을까요? self supervised learning 라는 방식으로 학습을 합니다.
@@ -41,9 +44,9 @@ Gemini 전사와 YouTube 자막을 시각 기준으로 합쳐, 한국어 본문�
 | YouTube `ko-orig` 자동자막 | 91 | 있음 | 거칠다 |
 | Gemini 전사 (`ko-KR`) | 29 | **없음** | 좋다 |
 | Gemini 전사 (자동 감지) | 28 | **없음** | 좋다 |
-| **ytx (병합)** | **38** | **있음** | **좋다** |
+| **CuePrecise (병합)** | **38** | **있음** | **좋다** |
 
-Gemini는 4회 실행에서 모두 그 용어를 놓쳤다. ytx는 시간 공백과 한국어 조사 잔존을
+Gemini는 4회 실행에서 모두 그 용어를 놓쳤다. CuePrecise는 시간 공백과 한국어 조사 잔존을
 **함께** 근거로 삼아 그 구간에만 영어를 끼워 넣는다. Gemini 원본 단어는 지우거나
 고쳐 쓰지 않는다.
 
@@ -53,18 +56,31 @@ Gemini는 4회 실행에서 모두 그 용어를 놓쳤다. ytx는 시간 공백
 
 ### Windows — 설치 파일로 시작하기
 
-1. [Releases](https://github.com/Nattentia/ytx/releases)에서 `ytx-setup.exe`를 내려받아 실행한다.
+1. [Releases](https://github.com/Nattentia/cueprecise/releases)에서 `cueprecise-setup.exe`를 내려받아 실행한다.
 2. 설치가 끝나면 자동으로 열리는 화면에서 **API 키 만들기**를 누른다.
 3. Google AI Studio에서 만든 키를 복사해 붙여넣고 **연결하기**를 누른다.
 4. “연결 완료”가 보이면 Claude Desktop을 완전히 껐다가 다시 켠다.
 
 Python이나 Git을 설치하거나 명령어를 입력할 필요가 없다. 필요한 영상 처리 도구도
 연결 과정에서 자동으로 준비한다. API 키는 Claude Desktop의 내 컴퓨터 설정에만 저장되며,
-기존 Claude 설정은 백업한 뒤 ytx 항목만 추가한다.
+기존 Claude 설정은 백업한 뒤 CuePrecise 항목만 추가한다. 이전 이름(`ytx`)으로
+설치한 적이 있으면 API 키를 포함한 설정을 그대로 물려받아 옮긴다.
 
-> `v0.1.0`은 SignPath Foundation 코드 서명 심사를 위한 첫 시험판이다. 아직 디지털
+> `v0.1.1`은 SignPath Foundation 코드 서명 심사를 위한 시험판이다. 아직 디지털
 > 서명이 없어 Windows에서 "알 수 없는 게시자" 경고가 나타날 수 있다. 반드시 이
 > 저장소의 Releases에서 받은 파일만 사용한다.
+
+### 이전 이름 `ytx`를 쓰고 있었다면
+
+이 프로젝트는 `ytx`라는 이름으로 시작했다. **하던 대로 계속 쓸 수 있다.**
+
+- 설치 파일을 그 위에 덮어 설치하면 프로그램이 CuePrecise로 바뀌고, Claude Desktop의
+  `ytx` 연결 항목은 **API 키를 그대로 지닌 채** `cueprecise` 항목으로 옮겨진다.
+  설정을 고치기 전에 백업 파일을 만든다.
+- **분석해 둔 자료는 옮기지 않는다.** `~/.ytx/data`가 있으면 그 폴더를 계속 쓴다.
+  새로 설치하는 경우에만 `~/.cueprecise/data`를 만든다.
+- 명령어 `ytx`, `ytx-mcp`는 계속 동작한다. 실행하면 새 이름을 한 줄 안내한다.
+- 대화에서 도구를 옛 이름(`ytx_query` 등)으로 불러도 같은 도구로 연결된다.
 
 ### macOS·Linux 또는 명령어 설치
 
@@ -72,17 +88,19 @@ Python이나 Git을 설치하거나 명령어를 입력할 필요가 없다. 필
 받거나 Python 환경을 만들 필요가 없다.
 
 ```bash
-uv tool install git+https://github.com/Nattentia/ytx
-ytx setup
+uv tool install git+https://github.com/Nattentia/cueprecise
+cueprecise setup
 ```
 
-`setup`은 Claude Desktop 설정과 기본 데이터 디렉터리 `~/.ytx/data`를 만들고 기존
-설정은 timestamp가 붙은 `.bak` 파일로 보존한다. Claude Desktop을 다시 시작하면 된다.
+`setup`은 Claude Desktop 설정과 기본 데이터 디렉터리 `~/.cueprecise/data`를 만들고
+기존 설정은 timestamp가 붙은 `.bak` 파일로 보존한다. 이전 이름으로 만든
+`~/.ytx/data`가 이미 있으면 **옮기지 않고 그것을 계속 쓴다.** Claude Desktop을
+다시 시작하면 된다.
 
 영상 분석에는 `ffmpeg`와 `ffprobe`가 PATH에 있어야 한다. 환경을 확인하려면:
 
 ```bash
-ytx doctor
+cueprecise doctor
 ```
 
 [API 키](https://aistudio.google.com/api-keys)를 먼저 환경변수로 넣으면 `setup`이 MCP
@@ -90,19 +108,19 @@ ytx doctor
 
 ```bash
 export GEMINI_API_KEY="..."          # Windows PowerShell: $env:GEMINI_API_KEY="..."
-ytx setup
-ytx run "https://www.youtube.com/watch?v=VIDEO_ID" --language ko-KR
-ytx status VIDEO_ID
+cueprecise setup
+cueprecise run "https://www.youtube.com/watch?v=VIDEO_ID" --language ko-KR
+cueprecise status VIDEO_ID
 ```
 
 CLI에서 `--bundle-root`를 생략하면 현재 디렉터리의 `data/<video_id>/`에 쌓인다. MCP는
-`setup`이 만든 `~/.ytx/data`를 쓴다.
+`setup`이 정한 데이터 디렉터리를 쓴다.
 
 소스에서 개발하거나 기존 실행 경로가 필요한 경우에만 clone 방식으로 설치한다.
 
 ```bash
-git clone https://github.com/Nattentia/ytx.git
-cd ytx
+git clone https://github.com/Nattentia/cueprecise.git
+cd cueprecise
 python -m pip install -r requirements.txt
 python src/pipeline.py --help
 ```
@@ -111,18 +129,18 @@ python src/pipeline.py --help
 
 ## MCP 호스트에 붙이기
 
-권장 설치에서는 `ytx setup`이 Claude Desktop 설정을 자동으로 합친다. 다음 JSON은
+권장 설치에서는 `cueprecise setup`이 Claude Desktop 설정을 자동으로 합친다. 다음 JSON은
 소스 clone을 사용하거나 다른 MCP 호스트에 수동으로 붙일 때만 필요하다.
 
 ```json
 {
   "mcpServers": {
-    "ytx": {
+    "cueprecise": {
       "command": "python",
       "args": [
-        "C:/path/to/ytx/src/mcp_server.py",
+        "C:/path/to/cueprecise/src/mcp_server.py",
         "--bundle-root",
-        "C:/path/to/ytx/data"
+        "C:/path/to/cueprecise/data"
       ],
       "env": {
         "GEMINI_API_KEY": "..."
@@ -133,7 +151,7 @@ python src/pipeline.py --help
 ```
 
 절대 경로로 적는다. Windows에서도 `/`를 쓰면 JSON에서 역슬래시를 이스케이프할 일이
-없다. macOS·Linux는 `/home/you/ytx/src/mcp_server.py` 꼴이다.
+없다. macOS·Linux는 `/home/you/cueprecise/src/mcp_server.py` 꼴이다.
 
 `--bundle-root`는 영상 번들을 쌓아둘 디렉터리다. 호스트를 껐다 켜도 그 안의 번들과
 `index.sqlite3`로 이전 대화의 근거를 다시 찾는다.
@@ -145,16 +163,16 @@ python src/pipeline.py --help
 
 | 도구 | 하는 일 | Gemini 호출 |
 |---|---|---|
-| `ytx_register` | 영상 등록·분석. 단계 선택 가능 | 청크당 1회 |
-| `ytx_status` | 진행도, 산출물, 사용량 추정 | 없음 |
-| `ytx_outline` | 개요와 timestamp 목차, 복원 용어, 화자 상태 | 없음 |
-| `ytx_query` | 내용 질의. 근거 span·frame을 timestamp와 함께 반환 | 없음 |
-| `ytx_excerpt` | 특정 시각 구간의 자막과 프레임 | 없음 |
-| `ytx_frames` | 화면 참조 시각의 프레임 추출. 영상이 없으면 그때 받는다 | 없음 |
-| `ytx_summary` | 요청할 때만 요약 생성·조회 | 없음 |
-| `ytx_set_summary` | 호스트가 근거로 개선한 요약을 검증·저장 | 없음 |
-| `ytx_set_chapter_titles` | 호스트가 지은 챕터 제목을 검증·저장 | 없음 |
-| `ytx_purge` | derived 재생성 및 명시적 삭제 | 없음 |
+| `cueprecise_register` | 영상 등록·분석. 단계 선택 가능 | 청크당 1회 |
+| `cueprecise_status` | 진행도, 산출물, 사용량 추정 | 없음 |
+| `cueprecise_outline` | 개요와 timestamp 목차, 복원 용어, 화자 상태 | 없음 |
+| `cueprecise_query` | 내용 질의. 근거 span·frame을 timestamp와 함께 반환 | 없음 |
+| `cueprecise_excerpt` | 특정 시각 구간의 자막과 프레임 | 없음 |
+| `cueprecise_frames` | 화면 참조 시각의 프레임 추출. 영상이 없으면 그때 받는다 | 없음 |
+| `cueprecise_summary` | 요청할 때만 요약 생성·조회 | 없음 |
+| `cueprecise_set_summary` | 호스트가 근거로 개선한 요약을 검증·저장 | 없음 |
+| `cueprecise_set_chapter_titles` | 호스트가 지은 챕터 제목을 검증·저장 | 없음 |
+| `cueprecise_purge` | derived 재생성 및 명시적 삭제 | 없음 |
 
 전사를 뺀 모든 단계는 로컬에서 돈다. 챕터 제목과 요약은 호스트 LLM이 근거를 보고
 직접 쓰며, 그것도 별도 호출을 만들지 않는다.
@@ -191,7 +209,7 @@ data/<video_id>/
 }
 ```
 
-**`ytx_query` 응답** — 근거 없이 답하지 않는다.
+**`cueprecise_query` 응답** — 근거 없이 답하지 않는다.
 
 ```json
 {
@@ -273,7 +291,7 @@ index       번들            →  index.sqlite3                            쿼�
 `--language`를 생략하면 Gemini가 알아서 고른다. 같은 한국어 영상에서 한 번은 한국어
 전사가, 한 번은 **영어 번역문**이 나왔다. 번역문은 원문이 아니므로 근거로 쓸 수 없다.
 
-ytx는 청크마다 번역문 여부를 판정하고 걸리면 그 자리에서 멈춘다 — 남은 청크의 호출을
+CuePrecise는 청크마다 번역문 여부를 판정하고 걸리면 그 자리에서 멈춘다 — 남은 청크의 호출을
 아끼기 위해서다. 판정은 이미 받아둔 자료(원어 자막 → 요청 언어 → 영상 메타데이터)로만
 하며 추가 호출을 쓰지 않는다.
 
@@ -299,9 +317,10 @@ python -m pip install -r requirements-optional.txt     # OCR, 시간대 (선택)
 `google-genai`는 `transcribe` 단계에만 필요하다. 나머지 단계와 MCP 서버는 SDK 없이
 돌아간다.
 
-설치형 배포 이름은 `ytx-mcp`이고 실행 명령은 `ytx`, `ytx-mcp`다. 아직 PyPI 릴리스
-전이므로 위의 GitHub URL로 설치한다. `uv tool`의 격리 환경 안에 기존 모듈을 설치해
-최상위 이름 충돌을 피하며, `python src/*.py` 실행 경로도 계속 지원한다.
+설치형 배포 이름은 `cueprecise-mcp`이고 실행 명령은 `cueprecise`, `cueprecise-mcp`다.
+이전 이름 `ytx`, `ytx-mcp`도 계속 동작하지만 **호환용**이며 실행하면 새 이름을 안내한다.
+아직 PyPI 릴리스 전이므로 위의 GitHub URL로 설치한다. `uv tool`의 격리 환경 안에 기존
+모듈을 설치해 최상위 이름 충돌을 피하며, `python src/*.py` 실행 경로도 계속 지원한다.
 
 ## 테스트
 
@@ -309,7 +328,7 @@ python -m pip install -r requirements-optional.txt     # OCR, 시간대 (선택)
 python -m unittest discover -s tests
 ```
 
-319개. stdlib `unittest`만 쓴다. 테스트 의존성이 없고 네트워크와 Gemini API를
+361개. stdlib `unittest`만 쓴다. 테스트 의존성이 없고 네트워크와 Gemini API를
 호출하지 않는다. `google-genai`가 없으면 `test_transcribe`는 skip된다.
 
 ## API 사용량
@@ -352,4 +371,9 @@ MIT. [`LICENSE`](LICENSE) 참고.
 
 초기 전사 흐름을 설계할 때 MIT 라이선스의
 [`gemini-transcribe-wrapper`](https://pypi.org/project/gemini-transcribe-wrapper/0.0.13/)
-구현을 참고했다. ytx는 별도로 작성된 프로젝트다.
+구현을 참고했다. CuePrecise는 별도로 작성된 프로젝트다.
+
+Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+
+CuePrecise는 YouTube 및 Google과 아무런 제휴 관계가 없고 두 회사의 공식 제품도
+아니다. YouTube는 지원 대상 서비스일 뿐이다.

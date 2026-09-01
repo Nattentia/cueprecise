@@ -1,4 +1,4 @@
-"""Windows 초보자 설치 화면의 검증·연결 로직."""
+"""CuePrecise Windows 설치 화면의 검증·연결 로직."""
 from __future__ import annotations
 
 import json
@@ -13,6 +13,20 @@ import configuration
 
 
 API_KEY_PATTERN = re.compile(r"^AIza[0-9A-Za-z_-]{30,}$")
+
+# 번들 MCP 서버 실행 파일. 앞의 것을 먼저 찾고, 없으면 이전 이름으로 설치된
+# 0.1.0 위에 덮어 설치된 경우를 위해 뒤의 것을 본다.
+SERVER_EXECUTABLES = ("cueprecise-mcp.exe", "ytx-mcp.exe")
+# initialize 응답의 serverInfo.name 허용값. 이전 이름도 받아 준다.
+SERVER_NAMES = {"cueprecise", "ytx"}
+
+
+def _bundled_server(install_dir: Path) -> Path | None:
+    for filename in SERVER_EXECUTABLES:
+        candidate = (install_dir / filename).resolve()
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def normalize_api_key(value: str) -> str:
@@ -80,14 +94,15 @@ def probe_mcp(server: Path, bundle_root: Path, environment: dict[str, str]) -> t
             env={**os.environ, **environment},
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        return False, f"ytx 연결 시험을 시작하지 못했습니다: {error}"
+        return False, f"CuePrecise 연결 시험을 시작하지 못했습니다: {error}"
     try:
         response: dict[str, Any] = json.loads((result.stdout or "").splitlines()[0])
     except (IndexError, json.JSONDecodeError):
         detail = (result.stderr or result.stdout or "응답 없음").strip()[-500:]
-        return False, f"ytx가 올바른 응답을 보내지 않았습니다.\n\n{detail}"
-    if response.get("result", {}).get("serverInfo", {}).get("name") != "ytx":
-        return False, "ytx 연결 시험의 응답을 확인하지 못했습니다."
+        return False, f"CuePrecise가 올바른 응답을 보내지 않았습니다.\n\n{detail}"
+    name = response.get("result", {}).get("serverInfo", {}).get("name")
+    if name not in SERVER_NAMES:
+        return False, "CuePrecise 연결 시험의 응답을 확인하지 못했습니다."
     return True, None
 
 
@@ -98,14 +113,15 @@ def connect(api_key: str, install_dir: Path, *,
     key, error = validate_api_key(api_key)
     if error:
         raise ValueError(error)
-    server = (install_dir / "ytx-mcp.exe").resolve()
-    if not server.is_file():
-        raise FileNotFoundError("설치된 ytx-mcp.exe를 찾지 못했습니다. ytx를 다시 설치해 주세요.")
+    server = _bundled_server(install_dir)
+    if server is None:
+        raise FileNotFoundError(
+            "설치된 cueprecise-mcp.exe를 찾지 못했습니다. CuePrecise를 다시 설치해 주세요.")
     ffmpeg_bin, ffmpeg_error = ensure_ffmpeg()
     if ffmpeg_error or ffmpeg_bin is None:
         raise RuntimeError(ffmpeg_error)
 
-    destination = bundle_root or (Path.home() / ".ytx" / "data")
+    destination = bundle_root or configuration.default_bundle_root()
     config = config_path or configuration.default_claude_config()
     server_environment = {
         "PATH": str(ffmpeg_bin) + os.pathsep + os.environ.get("PATH", ""),
@@ -120,14 +136,42 @@ def connect(api_key: str, install_dir: Path, *,
     return {**result, "ffmpeg_bin": str(ffmpeg_bin), "connection_tested": True}
 
 
-def disconnect(config_path: Path | None = None) -> dict[str, Any]:
-    """Claude 설정에서 ytx 항목만 제거하며 영상 데이터와 FFmpeg는 보존한다."""
+def migrate(install_dir: Path, config_path: Path | None = None) -> dict[str, Any]:
+    """이미 연결돼 있던 설정만 새 이름으로 옮긴다.
+
+    설치 프로그램이 조용히 부른다. 네트워크를 쓰지 않고 사용자에게 아무것도
+    묻지 않으며, 연결된 적이 없으면 아무 일도 하지 않는다. API 키를 포함한
+    기존 환경변수는 `configuration.setup_claude` 가 물려받는다.
+    """
     config = config_path or configuration.default_claude_config()
-    value = configuration.read_config(config)
-    servers = value.get("mcpServers")
-    if not isinstance(servers, dict) or "ytx" not in servers:
-        return {"changed": False, "config": str(config), "backup": None}
-    del servers["ytx"]
-    backup = configuration.write_config(config, value)
-    return {"changed": True, "config": str(config),
-            "backup": str(backup) if backup else None}
+    try:
+        value = configuration.read_config(config)
+    except SystemExit as error:
+        return {"changed": False, "reason": str(error)}
+    found = configuration.find_managed_entry(value)
+    if found is None:
+        return {"changed": False, "reason": "연결된 항목이 없다."}
+    key, entry = found
+    server = _bundled_server(install_dir)
+    if server is None:
+        return {"changed": False, "reason": "번들 서버 실행 파일을 찾지 못했다."}
+    destination = configuration.bundle_root_of(entry) or configuration.default_bundle_root()
+    try:
+        destination.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # 등록된 경로가 지금은 없는 드라이브일 수 있다. 그때는 기본 위치로 돌아간다.
+        destination = configuration.default_bundle_root()
+    result = configuration.setup_claude(
+        config, destination, api_key=None, server_command=str(server), server_args=[])
+    return {**result, "changed": True, "previous_key": key}
+
+
+def disconnect(config_path: Path | None = None) -> dict[str, Any]:
+    """Claude 설정에서 이 프로그램이 만든 항목만 제거한다.
+
+    CuePrecise 항목과 이전 이름(ytx) 항목을 모두 지우되, 같은 이름을 쓰는
+    남의 항목과 다른 MCP 서버는 건드리지 않는다. 영상 데이터와 FFmpeg도
+    그대로 둔다.
+    """
+    config = config_path or configuration.default_claude_config()
+    return configuration.remove_claude(config)

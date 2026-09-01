@@ -34,7 +34,7 @@ class ConnectTest(unittest.TestCase):
             root = Path(tmp)
             install = root / "app"
             install.mkdir()
-            server = install / "ytx-mcp.exe"
+            server = install / "cueprecise-mcp.exe"
             server.write_bytes(b"test")
             config = root / "claude.json"
             config.write_text(json.dumps({"mcpServers": {"other": {"command": "keep"}}}), encoding="utf-8")
@@ -48,10 +48,10 @@ class ConnectTest(unittest.TestCase):
 
             saved = json.loads(config.read_text(encoding="utf-8"))
             self.assertEqual(saved["mcpServers"]["other"]["command"], "keep")
-            ytx = saved["mcpServers"]["ytx"]
-            self.assertEqual(Path(ytx["command"]), server.resolve())
-            self.assertEqual(ytx["env"]["GEMINI_API_KEY"], VALID_KEY)
-            self.assertTrue(ytx["env"]["PATH"].startswith(str(ffmpeg_bin)))
+            entry = saved["mcpServers"]["cueprecise"]
+            self.assertEqual(Path(entry["command"]), server.resolve())
+            self.assertEqual(entry["env"]["GEMINI_API_KEY"], VALID_KEY)
+            self.assertTrue(entry["env"]["PATH"].startswith(str(ffmpeg_bin)))
             self.assertTrue(result["connection_tested"])
             self.assertTrue(Path(result["backup"]).is_file())
 
@@ -69,7 +69,7 @@ class ConnectTest(unittest.TestCase):
             root = Path(tmp)
             install = root / "app"
             install.mkdir()
-            (install / "ytx-mcp.exe").write_bytes(b"test")
+            (install / "cueprecise-mcp.exe").write_bytes(b"test")
             config = root / "claude.json"
             original = '{"mcpServers": {"other": {"command": "keep"}}}'
             config.write_text(original, encoding="utf-8")
@@ -84,17 +84,20 @@ class ConnectTest(unittest.TestCase):
 
             self.assertEqual(config.read_text(encoding="utf-8"), original)
 
-    def test_disconnect_removes_only_ytx_and_preserves_data(self) -> None:
+    def test_disconnect_removes_only_our_entry_and_preserves_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config = root / "claude.json"
             config.write_text(json.dumps({
                 "theme": "dark",
-                "mcpServers": {"ytx": {"command": "old"}, "other": {"command": "keep"}},
+                "mcpServers": {
+                    "cueprecise": {"command": "cueprecise-mcp.exe"},
+                    "other": {"command": "keep"},
+                },
             }), encoding="utf-8")
             result = installer_support.disconnect(config)
             saved = json.loads(config.read_text(encoding="utf-8"))
-            self.assertNotIn("ytx", saved["mcpServers"])
+            self.assertNotIn("cueprecise", saved["mcpServers"])
             self.assertEqual(saved["mcpServers"]["other"]["command"], "keep")
             self.assertEqual(saved["theme"], "dark")
             self.assertTrue(result["changed"])
@@ -105,7 +108,7 @@ class RuntimeToolTest(unittest.TestCase):
     def test_frozen_runtime_prefers_sibling_executable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            executable = root / "ytx-mcp.exe"
+            executable = root / "cueprecise-mcp.exe"
             executable.write_bytes(b"")
             tool = root / "yt-dlp.exe"
             tool.write_bytes(b"")

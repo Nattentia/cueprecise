@@ -27,12 +27,12 @@ jobs:
       - name: Smoke-test bundled commands
         shell: pwsh
         run: |
-          ./dist/windows/ytx-mcp.exe --help
+          ./dist/windows/cueprecise-mcp.exe --help
           ./dist/windows/yt-dlp.exe --version
       - uses: actions/upload-artifact@v6
         with:
-          name: ytx-windows-installer
+          name: cueprecise-windows-installer
           path: |
-            dist/windows/ytx-setup.exe
-            dist/windows/ytx-mcp.exe
+            dist/windows/cueprecise-setup.exe
+            dist/windows/cueprecise-mcp.exe
           if-no-files-found: error

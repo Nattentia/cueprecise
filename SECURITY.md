@@ -6,7 +6,7 @@
 
 ## 취약점 신고
 
-보안 취약점, 비밀정보 노출, 임의 명령 실행 가능성은 공개 이슈로 등록하지 마세요. GitHub의 [비공개 취약점 신고](https://github.com/Nattentia/ytx/security/advisories/new)를 이용해 주세요.
+보안 취약점, 비밀정보 노출, 임의 명령 실행 가능성은 공개 이슈로 등록하지 마세요. GitHub의 [비공개 취약점 신고](https://github.com/Nattentia/cueprecise/security/advisories/new)를 이용해 주세요.
 
 신고에는 영향, 재현 절차, 영향을 받는 커밋 또는 환경, 가능한 완화책을 포함해 주세요. API 키, 쿠키, 비공개 영상이나 전사 원문은 필요한 최소 범위만 공유하세요.
 

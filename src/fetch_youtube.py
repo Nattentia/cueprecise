@@ -146,7 +146,7 @@ def fetch(url: str, output: Path, *, langs: list[str] | None = None) -> dict[str
     # (요청 언어, 자동자막까지 받을지)
     attempts = ([(tuple(langs), True)] if langs
                 else [(ORIGINAL_LANGS, True), (FALLBACK_LANGS, False)])
-    with tempfile.TemporaryDirectory(prefix="ytx-captions-") as directory:
+    with tempfile.TemporaryDirectory(prefix="cueprecise-captions-") as directory:
         root = Path(directory)
         candidates: list[Path] = []
         chosen_langs: tuple[str, ...] = ()
