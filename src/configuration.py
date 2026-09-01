@@ -20,6 +20,18 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 
+class ConfigurationError(SystemExit, Exception):
+    """설정을 고치지 못했다.
+
+    `SystemExit` 를 이어받는다. CLI 는 전처럼 메시지를 내고 끝난다.
+    `Exception` 도 함께 이어받는다. 설치 화면은 `except Exception` 으로 실패를
+    잡아 사용자에게 알리는데, 순수한 `SystemExit` 은 `BaseException` 이라
+    그 그물을 빠져나간다. 그러면 진행 막대가 도는 채로 아무 말도 없이 멈추고,
+    조용히 도는 이관(`--migrate`)은 "실패해도 설치를 막지 않는다"는 약속을
+    깬다. 둘 다 이어받으면 부르는 쪽을 고치지 않고 양쪽을 만족시킨다.
+    """
+
+
 SERVER_KEY = "cueprecise"
 # 서버 목록을 담는 최상위 키. 대부분의 앱이 이 이름을 쓰지만 VS Code 는
 # `servers` 를 쓴다. 그래서 상수로 두고 타깃마다 덮어쓸 수 있게 한다.
@@ -70,9 +82,9 @@ def read_config(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        raise SystemExit(f"설정 파일을 읽을 수 없다: {path}\n{error}") from error
+        raise ConfigurationError(f"설정 파일을 읽을 수 없다: {path}\n{error}") from error
     if not isinstance(value, dict):
-        raise SystemExit(f"설정 파일 최상위 값은 JSON 객체여야 한다: {path}")
+        raise ConfigurationError(f"설정 파일 최상위 값은 JSON 객체여야 한다: {path}")
     return value
 
 
@@ -98,7 +110,7 @@ def read_toml_config(path: Path) -> dict[str, Any]:
         with path.open("rb") as stream:
             return tomllib.load(stream)
     except (OSError, tomllib.TOMLDecodeError) as error:
-        raise SystemExit(f"설정 파일을 읽을 수 없다: {path}\n{error}") from error
+        raise ConfigurationError(f"설정 파일을 읽을 수 없다: {path}\n{error}") from error
 
 
 def write_config(path: Path, value: dict[str, Any]) -> Path | None:
@@ -191,13 +203,13 @@ def setup_file_client(config_path: Path, bundle_root: Path, *, api_key: str | No
     config = read_config(config_path)
     servers = config.setdefault(servers_key, {})
     if not isinstance(servers, dict):
-        raise SystemExit(f"{servers_key}는 JSON 객체여야 한다: {config_path}")
+        raise ConfigurationError(f"{servers_key}는 JSON 객체여야 한다: {config_path}")
 
     existing = servers.get(SERVER_KEY)
     # 이름은 같은데 우리 것이 아니면 멈춘다. 덮어쓰면 남의 서버 설정이 사라지고,
     # 그 항목의 환경변수까지 우리 항목으로 옮겨 붙는다. 붙지 않는 편이 낫다.
     if existing is not None and not is_managed_server(existing):
-        raise SystemExit(
+        raise ConfigurationError(
             f"이미 `{SERVER_KEY}` 라는 남의 항목이 있다. 건드리지 않는다: {config_path}")
     legacy, legacy_key = _take_legacy_entry(servers)
 
@@ -333,7 +345,7 @@ class CliClientTarget(ClientTarget):
             return subprocess.run([self.executable, *arguments], capture_output=True,
                                   text=True, timeout=60, env=environment)
         except (OSError, subprocess.TimeoutExpired) as error:
-            raise SystemExit(f"{self.label} 명령을 실행하지 못했다: {error}") from error
+            raise ConfigurationError(f"{self.label} 명령을 실행하지 못했다: {error}") from error
 
     def install(self, bundle_root: Path, *, api_key: str | None,
                 server_command: str, server_args: list[str],
@@ -373,7 +385,7 @@ class CliClientTarget(ClientTarget):
         result = self._run(["mcp", "remove", SERVER_KEY, *self.scope_args], path)
         if self._current_entry(path) is not None:
             detail = (result.stderr or result.stdout or "").strip()[-300:]
-            raise SystemExit(f"{self.label} 에서 제거하지 못했다.\n{detail}")
+            raise ConfigurationError(f"{self.label} 에서 제거하지 못했다.\n{detail}")
         return {"changed": True, "config": str(path),
                 "backup": str(backup) if backup else None, "removed": [SERVER_KEY]}
 
@@ -381,7 +393,7 @@ class CliClientTarget(ClientTarget):
         """이미 있는 항목이 우리 것인지 본다. 남의 것이면 아무것도 하지 않는다."""
         existing = self._current_entry(path)
         if existing is not None and not is_managed_server(existing):
-            raise SystemExit(
+            raise ConfigurationError(
                 f"{self.label} 에 이미 `{SERVER_KEY}` 라는 남의 항목이 있다. 건드리지 않는다.")
         return existing
 
@@ -404,13 +416,13 @@ class CliClientTarget(ClientTarget):
         그래서 실행 파일과 번들 경로가 우리가 넘긴 것과 같은지까지 본다.
         """
         entry = self._current_entry(path)
+        entry = entry if isinstance(entry, dict) else {}
         expected = _forward_slashes(server_command).lower()
-        actual = _forward_slashes(str(entry.get("command", ""))).lower() \
-            if isinstance(entry, dict) else ""
-        if actual == expected and bundle_root_of(entry or {}) == bundle_root.resolve():
+        actual = _forward_slashes(str(entry.get("command", ""))).lower()
+        if actual == expected and bundle_root_of(entry) == bundle_root.resolve():
             return
         detail = (result.stderr or result.stdout or "").strip()[-300:]
-        raise SystemExit(f"{self.label} 에 등록하지 못했다.\n{detail}")
+        raise ConfigurationError(f"{self.label} 에 등록하지 못했다.\n{detail}")
 
 
 def _forward_slashes(value: str) -> str:
@@ -530,7 +542,7 @@ def client_by_key(key: str) -> ClientTarget:
         if target.key == key:
             return target
     known = ", ".join(target.key for target in CLIENTS)
-    raise SystemExit(f"알 수 없는 클라이언트: {key} (가능한 값: {known})")
+    raise ConfigurationError(f"알 수 없는 클라이언트: {key} (가능한 값: {known})")
 
 
 def detected_clients() -> list[ClientTarget]:

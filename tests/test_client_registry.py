@@ -615,6 +615,55 @@ class FileClientRegistryTest(unittest.TestCase):
             self.assertFalse(target.is_installed())
 
 
+class FailureIsCatchableTest(unittest.TestCase):
+    """설치 화면은 `except Exception` 으로 실패를 잡는다.
+
+    순수한 `SystemExit` 은 `BaseException` 이라 그 그물을 빠져나간다. 그러면
+    진행 막대가 도는 채로 아무 말도 없이 멈추고, 조용히 도는 이관은
+    "실패해도 설치를 막지 않는다"는 약속을 깬다.
+    """
+
+    def _failures(self, tmp: Path):
+        broken = tmp / "broken.json"
+        broken.write_text("not json", encoding="utf-8")
+        stranger = tmp / "stranger.json"
+        stranger.write_text(
+            json.dumps({"mcpServers": {"cueprecise": {"command": "not-ours.exe"}}}),
+            encoding="utf-8")
+        return [
+            lambda: configuration.read_config(broken),
+            lambda: configuration.setup_file_client(
+                stranger, tmp / "data", api_key=None,
+                server_command="cueprecise-mcp.exe", server_args=[]),
+            lambda: configuration.client_by_key("nope"),
+        ]
+
+    def test_every_failure_is_catchable_as_a_plain_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for index, failing in enumerate(self._failures(Path(tmp))):
+                with self.subTest(index):
+                    with self.assertRaises(Exception):
+                        failing()
+
+    def test_the_cli_still_sees_them_as_system_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for index, failing in enumerate(self._failures(Path(tmp))):
+                with self.subTest(index):
+                    with self.assertRaises(SystemExit):
+                        failing()
+
+    def test_a_failing_command_is_catchable_too(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = dataclasses.replace(
+                configuration.CODEX, locate_config=lambda: root / "config.toml")
+            with mock.patch.object(configuration.subprocess, "run",
+                                   side_effect=OSError("없는 명령")):
+                with self.assertRaises(Exception):
+                    target.install(root / "data", api_key=None,
+                                   server_command="python.exe", server_args=[])
+
+
 class ManagedJudgementTest(unittest.TestCase):
     """우리 항목은 0.1.0 부터 예외 없이 `--bundle-root` 를 달고 있다."""
 
