@@ -2,11 +2,12 @@
 
 # CuePrecise
 
-> **Give your AI agent a YouTube URL. Ask it anything about the video.**
+> **Drop in a long YouTube video. Start asking questions minutes later.**
 
-CuePrecise lets Claude understand, search, and visually inspect long YouTube videos. It returns
-the exact moments, transcript evidence, and relevant frames behind each answer—then keeps the
-analysis on your computer so it remains available in future conversations.
+CuePrecise is a lightweight MCP that prepares searchable, timestamped transcript and visual
+context for your AI agent. In one recorded example, a 68-minute video was ready in about three
+minutes; processing time varies by video and available captions. The local context can be
+referenced again in later conversations instead of analyzing the video from scratch.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
