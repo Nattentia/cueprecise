@@ -1732,3 +1732,64 @@ Cursor·Windsurf·Gemini CLI 를 설치하지 않은 채, 이 PC 에서 확인 �
 ### 검증
 
 2개 추가, 총 424개.
+
+## 2026-09-01 — 남들은 어떻게 하나 찾아보고 고친 것
+
+### Gemini CLI 는 파일이 아니라 명령이었다
+
+`gemini mcp add` 가 있다. 우리가 `settings.json` 을 직접 쓰게 만들어 둔 것은
+틀렸다. 문서상 문법은 이렇다.
+
+    gemini mcp add [-s user] [-e KEY=value] <이름> <실행파일> [인자...]
+    gemini mcp remove <이름> -s user
+
+**`-s` 기본값이 `project`** 다. Claude Code 와 같은 함정이라 `-s user` 를 준다.
+
+**구분자가 다르다.** `codex` 와 `claude` 는 `-- <실행파일>` 을 요구하는데 Gemini
+CLI 는 구분자 없이 이름 뒤에 바로 받는다(문서 예시:
+`gemini mcp add python-server python server.py --port 8080`). `command_separator`
+를 두어 타깃마다 정한다.
+
+직접 쓰지 않는 편이 나은 이유가 하나 더 있다. 이 PC 의 `~/.gemini/settings.json`
+은 다른 도구가 관리한다. 우리가 쓰면 그 파일을 통째로 다시 쓰게 된다.
+
+### 명령이 듣지 않으면 파일로 돌아간다
+
+이 앱은 이 PC 에 없어 명령을 실제로 태워 보지 못했다. 인자 배치는 판마다 다를
+수 있다. 그래서 `GeminiCliTarget` 은 명령을 먼저 쓰고, 등록되지 않았을 때만
+설정 파일에 직접 쓴다. 성공 여부를 설정을 다시 읽어 판정하므로 되돌아갈 때를
+정확히 안다. 문서가 틀렸어도 사용자는 붙는다.
+
+**남의 항목 앞에서는 돌아가지 않는다.** 그것은 다른 방법으로 붙여서도 안 되는
+실패다. 그래서 `ForeignEntryError` 를 따로 두어 "다시 해 볼 만한 실패"와
+구분한다.
+
+### 찾아본 것들과 우리 위치
+
+- **FastMCP 는 자동 감지를 하지 않는다.** 사용자가 `fastmcp install cursor` 처럼
+  앱 이름을 댄다. 지원도 Claude Desktop·Cursor·Claude Code 셋뿐이고 나머지는
+  JSON 을 찍어 주고 알아서 붙이라고 한다.
+- **mcp-dock 같은 다중 클라이언트 도구는 설정 폴더의 존재로 감지한다.** P3 에서
+  오탐 때문에 버린 방법이다. 이 PC 에는 다른 도구가 만든 `~/.cursor` 와
+  `~/.gemini` 가 있으므로 그 도구들은 여기서 헛짚는다. 우리 기준이 더 엄격하다.
+- **Cursor 는 설치 딥링크를 공식 지원한다.**
+  `cursor://anysphere.cursor-deeplink/mcp/install?name=<이름>&config=<base64>`.
+  FastMCP 가 Cursor 에 쓰는 방식이다. 사용자가 눌러 승인해야 하므로 조용한
+  설치에는 못 쓰지만, **감지에 실패했을 때 링크를 건네는 폴백**으로는 맞다.
+  아직 넣지 않았다.
+- **Windsurf 는 명령이 없다.** 공식 문서상 방법은 마켓플레이스 UI, 명령 팔레트,
+  그리고 `~/.codeium/windsurf/mcp_config.json` 직접 편집이다. Windows 경로도
+  `%USERPROFILE%\.codeium\windsurf\` 로 우리가 쓰는 위치와 같다. 파일 방식을
+  그대로 둔다.
+
+### 시험 하나가 나머지를 가리고 있었다
+
+`RealLaunchTest` 가 없는 앱을 만나면 `skipTest` 를 불렀는데, `subTest` 안에서
+부르면 **그 시험 전체가 건너뛰어진다.** Gemini CLI 가 명령 방식이 되면서 이
+PC 에 없는 앱이 목록에 들어오자 드러났다. 없는 앱은 미리 걸러 낸다.
+
+### 검증
+
+5개 추가, 총 429개. 명령의 인자 배치, 명령이 듣지 않을 때 파일로 돌아가는지,
+명령이 아예 없을 때도 붙는지, 남의 항목 앞에서는 돌아가지 않고 멈추는지,
+제거도 같은 방식으로 돌아가는지.

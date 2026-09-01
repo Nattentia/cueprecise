@@ -237,10 +237,22 @@ class FakeCli:
             if argv[2] == "remove":
                 self.servers.pop(name, None)
             elif argv[2] == "add":
-                separator = argv.index("--")
-                environment = {pair.split("=", 1)[0]: pair.split("=", 1)[1]
-                               for pair in argv[4:separator] if "=" in pair}
-                entry = {"command": argv[separator + 1], "args": argv[separator + 2:]}
+                # 앱마다 모양이 다르다. `codex`/`claude` 는 `-- <실행파일>` 을
+                # 요구하고 Gemini CLI 는 구분자 없이 바로 받는다. 둘 다 읽는다.
+                index, environment = 4, {}
+                while index < len(argv):
+                    token = argv[index]
+                    if token == "--":
+                        index += 1
+                        break
+                    if not token.startswith("-"):
+                        break
+                    value = argv[index + 1]
+                    if "=" in value:
+                        key, _, rest = value.partition("=")
+                        environment[key] = rest
+                    index += 2
+                entry = {"command": argv[index], "args": argv[index + 1:]}
                 if environment:
                     entry["env"] = environment
                 self.servers[name] = entry
@@ -665,6 +677,86 @@ class FileClientRegistryTest(unittest.TestCase):
             self.assertFalse(target.is_installed())
 
 
+class GeminiCliTest(unittest.TestCase):
+    """명령을 먼저 쓰고, 듣지 않으면 설정 파일에 쓴다.
+
+    이 앱은 이 PC 에 없어 명령을 태워 보지 못했다. 인자 배치가 판마다 다를 수
+    있으므로, 틀렸을 때 조용히 실패하지 않고 파일 쓰기로 돌아가는지를 본다.
+    """
+
+    def _target(self, tmp: Path, servers: dict, **fake):
+        path = tmp / "settings.json"
+        cli = FakeCli(path, servers, toml=False, servers_key="mcpServers", **fake)
+        return dataclasses.replace(
+            configuration.GEMINI_CLI, locate_config=lambda: path), cli, path
+
+    def test_command_has_user_scope_and_no_separator(self) -> None:
+        """`gemini mcp add <이름> -e K=V <실행파일> <인자>` — `--` 가 없다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, _ = self._target(root, {})
+            with mock.patch.object(configuration.shutil, "which", return_value="gemini"), \
+                    mock.patch.object(configuration.subprocess, "run", cli.run):
+                target.install(root / "data", api_key="secret",
+                               server_command="cueprecise-mcp.exe", server_args=[])
+            argv = cli.last_add()
+            self.assertEqual(argv[1:4], ["mcp", "add", "cueprecise"])
+            self.assertNotIn("--", argv)
+            self.assertIn("-s", argv)
+            self.assertIn("user", argv)
+            self.assertIn("-e", argv)
+            self.assertIn("GEMINI_API_KEY=secret", argv)
+            self.assertEqual(argv[-2:], ["--bundle-root", str((root / "data").resolve())])
+
+    def test_falls_back_to_the_file_when_the_command_does_not_take(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, path = self._target(root, {"other": {"command": "keep"}}, obey=False)
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                result = target.install(root / "data", api_key="secret",
+                                        server_command="cueprecise-mcp.exe", server_args=[])
+            saved = _read(path)
+            self.assertEqual(saved["mcpServers"]["other"]["command"], "keep")
+            self.assertEqual(saved["mcpServers"]["cueprecise"]["env"]["GEMINI_API_KEY"],
+                             "secret")
+            self.assertTrue(result["api_key_configured"])
+
+    def test_falls_back_when_the_command_is_missing_entirely(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, _cli, path = self._target(root, {})
+            with mock.patch.object(configuration.shutil, "which", return_value=None):
+                target.install(root / "data", api_key=None,
+                               server_command="cueprecise-mcp.exe", server_args=[])
+            self.assertIn("cueprecise", _read(path)["mcpServers"])
+
+    def test_a_foreign_entry_stops_it_instead_of_falling_back(self) -> None:
+        """남의 항목은 다른 방법으로 붙여서도 안 되는 실패다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, path = self._target(
+                root, {"cueprecise": {"command": "not-ours.exe"}}, obey=False)
+            original = path.read_text(encoding="utf-8")
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                with self.assertRaises(configuration.ForeignEntryError):
+                    target.install(root / "data", api_key=None,
+                                   server_command="cueprecise-mcp.exe", server_args=[])
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+    def test_removal_falls_back_to_the_file_too(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, path = self._target(root, {
+                "cueprecise": {"command": "cueprecise-mcp.exe"},
+                "other": {"command": "keep"}}, obey=False)
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                result = target.remove()
+            saved = _read(path)
+            self.assertTrue(result["changed"])
+            self.assertNotIn("cueprecise", saved["mcpServers"])
+            self.assertEqual(saved["mcpServers"]["other"]["command"], "keep")
+
+
 class FailureIsCatchableTest(unittest.TestCase):
     """설치 화면은 `except Exception` 으로 실패를 잡는다.
 
@@ -725,12 +817,14 @@ class RealLaunchTest(unittest.TestCase):
 
     def test_every_present_command_can_actually_be_launched(self) -> None:
         targets = [target for target in configuration.CLIENTS
-                   if isinstance(target, configuration.CliClientTarget)]
-        self.assertTrue(targets)
+                   if isinstance(target, configuration.CliClientTarget)
+                   and target.is_installed()]
+        if not targets:
+            self.skipTest("이 PC 에 명령으로 붙이는 앱이 없다")
         for target in targets:
+            # `skipTest` 를 여기서 부르면 나머지 앱까지 함께 건너뛴다.
+            # 없는 앱은 위에서 이미 걸렀다.
             with self.subTest(target.key):
-                if not target.is_installed():
-                    self.skipTest(f"{target.key} 없음")
                 executable = target._resolve_executable()
                 self.assertTrue(Path(executable).is_file(), executable)
                 result = subprocess.run([executable, "--version"], capture_output=True,

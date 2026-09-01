@@ -145,7 +145,7 @@ cueprecise doctor                   # 앱별 설치·연결 상태
 | VS Code | `Code/User/mcp.json` (키가 `servers`) | `code --add-mcp`, 제거는 파일 |
 | Cursor | `~/.cursor/mcp.json` | 파일 |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` | 파일 |
-| Gemini CLI | `~/.gemini/settings.json` | 파일 |
+| Gemini CLI | `~/.gemini/settings.json` | `gemini mcp add -s user`, 실패 시 파일 |
 
 설치 여부는 실행 파일로 판정한다. 설정 폴더가 있다고 앱이 있다고 보지 않는다. 찾지
 못한 앱도 `--client <이름>`으로 이름을 대면 붙는다.

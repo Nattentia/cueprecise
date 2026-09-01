@@ -32,6 +32,15 @@ class ConfigurationError(SystemExit, Exception):
     """
 
 
+class ForeignEntryError(ConfigurationError):
+    """이름은 같은데 우리가 만들지 않은 항목이 이미 있다.
+
+    다른 실패와 구분한다. 이것은 **다시 시도해서 될 일이 아니고**, 다른
+    방법으로 붙여서도 안 되는 실패다. 사람이 그 항목을 치우기 전까지 그 앱은
+    건너뛴다.
+    """
+
+
 SERVER_KEY = "cueprecise"
 # 서버 목록을 담는 최상위 키. 대부분의 앱이 이 이름을 쓰지만 VS Code 는
 # `servers` 를 쓴다. 그래서 상수로 두고 타깃마다 덮어쓸 수 있게 한다.
@@ -209,7 +218,7 @@ def setup_file_client(config_path: Path, bundle_root: Path, *, api_key: str | No
     # 이름은 같은데 우리 것이 아니면 멈춘다. 덮어쓰면 남의 서버 설정이 사라지고,
     # 그 항목의 환경변수까지 우리 항목으로 옮겨 붙는다. 붙지 않는 편이 낫다.
     if existing is not None and not is_managed_server(existing):
-        raise ConfigurationError(
+        raise ForeignEntryError(
             f"이미 `{SERVER_KEY}` 라는 남의 항목이 있다. 건드리지 않는다: {config_path}")
     legacy, legacy_key = _take_legacy_entry(servers)
 
@@ -324,6 +333,10 @@ class CliClientTarget(ClientTarget):
     scope_args: tuple[str, ...] = ()
     env_flag: str = "--env"
     reads_toml: bool = False
+    # `codex` 와 `claude` 는 `-- <실행파일> <인자>` 를 요구한다. Gemini CLI 는
+    # 구분자 없이 이름 뒤에 바로 실행 파일과 인자를 받는다(공식 문서 예시:
+    # `gemini mcp add python-server python server.py --port 8080`).
+    command_separator: str | None = "--"
     # 설정 위치를 환경변수로 정하는 앱이 있다. 그 값을 비워 두면 이 프로세스가
     # 물려받은 값에 따라 엉뚱한 홈에 쓰게 된다. 읽는 파일과 쓰는 곳을 맞춘다.
     home_var: str = ""
@@ -380,7 +393,9 @@ class CliClientTarget(ClientTarget):
         arguments = ["mcp", "add", SERVER_KEY, *self.scope_args]
         for name, value in environment.items():
             arguments += [self.env_flag, f"{name}={value}"]
-        arguments += ["--", server_command, *server_args,
+        if self.command_separator:
+            arguments.append(self.command_separator)
+        arguments += [server_command, *server_args,
                       "--bundle-root", str(bundle_root.resolve())]
         result = self._run(arguments, path)
 
@@ -408,7 +423,7 @@ class CliClientTarget(ClientTarget):
         """이미 있는 항목이 우리 것인지 본다. 남의 것이면 아무것도 하지 않는다."""
         existing = self._current_entry(path)
         if existing is not None and not is_managed_server(existing):
-            raise ConfigurationError(
+            raise ForeignEntryError(
                 f"{self.label} 에 이미 `{SERVER_KEY}` 라는 남의 항목이 있다. 건드리지 않는다.")
         return existing
 
@@ -438,6 +453,46 @@ class CliClientTarget(ClientTarget):
             return
         detail = (result.stderr or result.stdout or "").strip()[-300:]
         raise ConfigurationError(f"{self.label} 에 등록하지 못했다.\n{detail}")
+
+
+@dataclass(frozen=True)
+class GeminiCliTarget(CliClientTarget):
+    """`gemini mcp add` 로 붙이되, 듣지 않으면 설정 파일에 직접 쓴다.
+
+    이 앱은 이 PC 에 없어 명령을 실제로 태워 보지 못했다. 인자 배치는 공식
+    문서를 따랐지만 판(版)마다 다를 수 있다. 그렇다고 파일 쓰기만 택하면,
+    다른 도구가 관리하는 `settings.json` 을 우리가 통째로 다시 쓰게 된다.
+
+    그래서 명령을 먼저 쓰고, 그것이 듣지 않을 때만 파일에 쓴다. 설정 형식은
+    다른 앱들과 같은 `mcpServers` 라 우리가 쓸 수 있다. 명령이 성공했는지는
+    설정을 다시 읽어 판정하므로, 되돌아가야 하는 때를 정확히 안다.
+
+    남의 항목 앞에서는 물러서지 않고 그대로 멈춘다. 그것은 다른 방법으로
+    붙여서도 안 되는 실패다.
+    """
+
+    def install(self, bundle_root: Path, *, api_key: str | None,
+                server_command: str, server_args: list[str],
+                extra_env: dict[str, str] | None = None,
+                config_path: Path | None = None) -> dict[str, Any]:
+        try:
+            return super().install(
+                bundle_root, api_key=api_key, server_command=server_command,
+                server_args=server_args, extra_env=extra_env, config_path=config_path)
+        except ForeignEntryError:
+            raise
+        except ConfigurationError:
+            return setup_file_client(
+                config_path or self.locate_config(), bundle_root, api_key=api_key,
+                server_command=server_command, server_args=server_args,
+                extra_env=extra_env, servers_key=self.servers_key)
+
+    def remove(self, config_path: Path | None = None) -> dict[str, Any]:
+        try:
+            return super().remove(config_path)
+        except ConfigurationError:
+            return remove_file_client(
+                config_path or self.locate_config(), self.servers_key)
 
 
 def _forward_slashes(value: str) -> str:
@@ -553,8 +608,11 @@ WINDSURF = ClientTarget(
     key="windsurf", label="Windsurf", executable="windsurf",
     locate_config=lambda: Path.home() / ".codeium" / "windsurf" / "mcp_config.json")
 
-GEMINI_CLI = ClientTarget(
+# Gemini CLI 는 `gemini mcp add` 를 준다. `-s` 기본값이 `project` 라 전역으로
+# 붙이려면 `-s user` 가 필요하다. Claude Code 와 같은 함정이다.
+GEMINI_CLI = GeminiCliTarget(
     key="gemini-cli", label="Gemini CLI", executable="gemini",
+    scope_args=("-s", "user"), env_flag="-e", command_separator=None,
     locate_config=lambda: Path.home() / ".gemini" / "settings.json")
 
 CLIENTS: tuple[ClientTarget, ...] = (
