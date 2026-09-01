@@ -4,10 +4,11 @@
 
 > **Drop in a long YouTube video. Start asking questions minutes later.**
 
-CuePrecise is a lightweight MCP that prepares searchable, timestamped transcript and visual
-context for your AI agent. In one recorded example, a 68-minute video was ready in about three
-minutes; processing time varies by video and available captions. The local context can be
-referenced again in later conversations instead of analyzing the video from scratch.
+CuePrecise starts with what people say in the video. It finds the parts that matter, grabs the
+matching frames, and gives your AI both the spoken and on-screen information. In our recorded
+test, a 68-minute video was ready for questions in about three minutes; processing time varies by
+video and available captions. It also leaves a local reference your AI can use in later
+conversations, so you do not have to start over.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
