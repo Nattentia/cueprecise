@@ -1327,3 +1327,78 @@ video." 기능은 건드리지 않는다. 판정 규칙은 CONTRACT 15절에 적
 명령, 설치 프로그램 메타데이터(AppId·버전 일치·파일명), SignPath 문구.
 
 361 tests 통과 (332 + 29).
+
+## 2026-09-01 — 여러 MCP 클라이언트로 넓히기 (P0: 레지스트리)
+
+0.1.1 까지는 Claude Desktop 하나만 상대했다. Codex, Claude Code, VS Code 를
+붙이려면 앱마다 다른 것을 다뤄야 하는데, 그때마다 `setup_claude` 를 복사하면
+"남의 설정을 건드리지 않는다"는 규칙이 사본마다 갈라진다. 그래서 규칙은
+한 함수에 두고, 앱마다 다른 값만 `ClientTarget` 으로 뽑았다.
+
+- `setup_file_client` / `remove_file_client` — 규칙을 담은 하나뿐인 자리.
+  `servers_key` 를 받는다. **VS Code 는 최상위 키가 `mcpServers` 가 아니라
+  `servers` 다** (실측 확인).
+- `setup_claude` / `remove_claude` — Claude Desktop 을 가리키는 얇은 이름으로
+  남겼다. `installer_support` 와 `cueprecise_cli` 가 이것을 부른다. 부르는
+  쪽을 한꺼번에 고치면 무엇이 깨졌는지 알 수 없다.
+- `ClientTarget.is_installed()` 는 **읽기만 한다.** 설치되지 않은 앱의 설정
+  폴더를 만들지 않는다. 안 쓰는 앱 폴더를 남기지 않기 위해서다.
+- `detector` 를 따로 둔 이유. Codex 와 Claude Code 는 설정 파일이 없어도
+  설치돼 있을 수 있다. 그때는 `shutil.which` 로 봐야 한다.
+- `resolve_clients(None)` 과 `all` 은 **감지된 앱 전부**다. 사용자가 앱 이름을
+  몰라도 되게 하는 것이 이 작업의 목적이다.
+
+CONTRACT 1절은 `src/configuration.py` 를 codex 소유로 적는다. 2026-08-30
+개정으로 전권이 위임됐고, 커밋 #51 에서 같은 절차로 이 파일을 고쳤다.
+codex 가 복귀하면 소유자가 다시 나눈다.
+
+### 넣었다가 도로 뺀 것
+
+`entry_extra`(항목에 얹을 값)와 `describe()` 를 먼저 넣었다가 지웠다. 부르는
+쪽이 하나도 없었다. VS Code 는 `type` 을 쓰지 않고, Claude Code 의
+`type: "stdio"` 는 자기 CLI 가 넣는다. `entry_extra` 는 오히려 `command` 를
+덮을 수 있는 구멍을 스스로 만들고 그것을 막는 테스트까지 딸려 왔다. 쓰는
+곳이 생기면 그때 만든다. `describe()` 는 doctor 가 무엇을 보여줄지 P4 에서
+정한 뒤에 만든다.
+
+### 실측으로 확인한 것 (문서가 아니라 이 PC 에서)
+
+- `claude mcp add <name> [-s user] [-e K=V] -- <cmd> [args]`. **`-s` 기본값이
+  `local`(프로젝트 스코프)이다.** 전역으로 붙이려면 `-s user` 를 줘야 한다.
+  `~/.claude.json` 의 `mcpServers` 에 `type: "stdio"` 와 함께 쓴다.
+- `code --add-mcp '<json>'` 은 `%APPDATA%/Code/User/mcp.json` 의 `servers` 에
+  쓰고 `inputs: []` 를 같이 만든다. `type` 은 쓰지 않는다. **제거 CLI 가 없다**
+  → 설치는 CLI, 제거는 파일 편집인 하이브리드가 된다.
+- JSON 페이로드 안의 경로는 **슬래시로 써야 한다.** `code.cmd` 래퍼를 지나며
+  백슬래시가 죽어 `Bad escaped character in JSON` 이 난다.
+- 인자는 반드시 리스트로 넘기고 `shell=True` 를 쓰지 않는다. 쉘을 거치면
+  `/c` 같은 인자가 경로로 오인돼 `C:/` 로 바뀐다.
+- Codex 는 `codex mcp add/get/remove/list` 가 있어 TOML 을 직접 쓸 필요가 없다.
+  CONTRACT 7절(외부 패키지 금지)을 지킨 채 붙일 수 있다.
+
+### 여러 앱이 한 번들을 함께 쓰는 문제
+
+붙는 앱이 늘어도 `bundle_root` 는 하나다. 두 앱이 같은 영상을 동시에 등록하면
+같은 일을 두 번 하고 Gemini 를 두 번 쓴다. 자료가 깨지지는 않는다. 단계 산출은
+`.tmp` 에 쓰고 `replace` 하며, 사용량 장부는 `usage._file_lock` 이 잠근다.
+지금은 사용자가 CLI 와 Claude Desktop 을 함께 써도 나던 일이고, 앱이 늘면
+확률만 올라간다. 막으려면 번들 단위 잠금이 필요하다. P0 범위가 아니다.
+
+### 함께 넓어지는 위험 — `is_managed_server`
+
+이 판정은 `args` 에 `mcp_server` 라는 글자가 있으면 우리 것으로 본다. 남이
+자기 `mcp_server.py` 를 등록해 두고 이름까지 `cueprecise` 로 지었다면 오판한다.
+전부터 있던 느슨함이지만, 상대하는 설정 파일이 하나에서 여섯으로 늘면 오판이
+닿는 범위도 함께 넓어진다. P1 에서 조일지 판단한다.
+
+### 안 하기로 한 것
+
+원격 MCP 호스팅. ChatGPT 커넥터와 Claude.ai 웹은 HTTPS + OAuth 로만 붙는다.
+거기 붙이려면 사용자 Gemini 키를 서버가 맡고 yt-dlp 를 서버에서 돌려야 한다.
+설치 간편화가 아니라 다른 제품이다.
+
+### 검증
+
+`tests/test_client_registry.py` 12개 추가. 기존 361개 무수정 통과 (총 373).
+보는 것: 타깃 키별 쓰기/제거, 남의 동명 항목 불가침, 감지가 파일을 만들지
+않음, 래퍼와 일반 함수의 결과 동일.

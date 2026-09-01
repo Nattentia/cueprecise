@@ -1,16 +1,27 @@
-"""Claude Desktop 설정을 보존하며 CuePrecise 항목만 관리한다."""
+"""MCP 클라이언트 설정을 보존하며 CuePrecise 항목만 관리한다.
+
+0.1.1 까지는 Claude Desktop 하나만 상대했다. 붙일 앱이 늘어나도 "남의 설정을
+건드리지 않는다"는 규칙은 같으므로, 그 규칙을 담은 함수는 하나로 두고 앱마다
+다른 것(설정 파일 위치, 서버 목록을 담는 키 이름)만 `ClientTarget` 으로 뽑았다.
+`setup_claude` 와 `remove_claude` 는 Claude Desktop 을 가리키는 얇은 이름으로
+남는다. 부르는 쪽을 한꺼번에 고치면 무엇이 깨졌는지 알 수 없기 때문이다.
+"""
 from __future__ import annotations
 
 import json
 import os
 import shutil
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterable
 
 
 SERVER_KEY = "cueprecise"
+# 서버 목록을 담는 최상위 키. 대부분의 앱이 이 이름을 쓰지만 VS Code 는
+# `servers` 를 쓴다. 그래서 상수로 두고 타깃마다 덮어쓸 수 있게 한다.
+DEFAULT_SERVERS_KEY = "mcpServers"
 # 0.1.0 까지 쓰던 항목 이름. 새 설치는 만들지 않고, 발견하면 SERVER_KEY 로 옮긴다.
 LEGACY_SERVER_KEYS = ("ytx",)
 # 0.1.0 까지 쓰던 기본 데이터 폴더. 발견하면 옮기지 않고 그대로 계속 쓴다.
@@ -95,9 +106,10 @@ def is_managed_server(entry: Any) -> bool:
     return "mcp_server" in joined
 
 
-def find_managed_entry(config: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+def find_managed_entry(config: dict[str, Any],
+                       servers_key: str = DEFAULT_SERVERS_KEY) -> tuple[str, dict[str, Any]] | None:
     """설정에서 이 프로그램이 만든 MCP 항목을 찾는다. 새 이름을 먼저 본다."""
-    servers = config.get("mcpServers")
+    servers = config.get(servers_key)
     if not isinstance(servers, dict):
         return None
     for key in (SERVER_KEY, *LEGACY_SERVER_KEYS):
@@ -138,13 +150,19 @@ def _inherited_environment(*sources: Any) -> dict[str, str]:
     return environment
 
 
-def setup_claude(config_path: Path, bundle_root: Path, *, api_key: str | None,
-                 server_command: str, server_args: list[str],
-                 extra_env: dict[str, str] | None = None) -> dict[str, Any]:
+def setup_file_client(config_path: Path, bundle_root: Path, *, api_key: str | None,
+                      server_command: str, server_args: list[str],
+                      extra_env: dict[str, str] | None = None,
+                      servers_key: str = DEFAULT_SERVERS_KEY) -> dict[str, Any]:
+    """JSON 설정 파일에 CuePrecise 항목만 idempotent 하게 쓴다.
+
+    앱이 달라도 지켜야 하는 것은 같다. 남의 항목과 다른 설정을 보존하고,
+    쓰기 전에 백업하고, 이미 저장된 환경변수를 물려받는다.
+    """
     config = read_config(config_path)
-    servers = config.setdefault("mcpServers", {})
+    servers = config.setdefault(servers_key, {})
     if not isinstance(servers, dict):
-        raise SystemExit(f"mcpServers는 JSON 객체여야 한다: {config_path}")
+        raise SystemExit(f"{servers_key}는 JSON 객체여야 한다: {config_path}")
 
     existing = servers.get(SERVER_KEY)
     legacy, legacy_key = _take_legacy_entry(servers)
@@ -172,10 +190,11 @@ def setup_claude(config_path: Path, bundle_root: Path, *, api_key: str | None,
             "migrated_from": legacy_key}
 
 
-def remove_claude(config_path: Path) -> dict[str, Any]:
+def remove_file_client(config_path: Path,
+                       servers_key: str = DEFAULT_SERVERS_KEY) -> dict[str, Any]:
     """이 프로그램이 만든 항목만 제거한다. 다른 MCP 설정은 건드리지 않는다."""
     value = read_config(config_path)
-    servers = value.get("mcpServers")
+    servers = value.get(servers_key)
     if not isinstance(servers, dict):
         return {"changed": False, "config": str(config_path), "backup": None, "removed": []}
     removed = [key for key in (SERVER_KEY, *LEGACY_SERVER_KEYS)
@@ -187,3 +206,88 @@ def remove_claude(config_path: Path) -> dict[str, Any]:
     backup = write_config(config_path, value)
     return {"changed": True, "config": str(config_path),
             "backup": str(backup) if backup else None, "removed": removed}
+
+
+def setup_claude(config_path: Path, bundle_root: Path, *, api_key: str | None,
+                 server_command: str, server_args: list[str],
+                 extra_env: dict[str, str] | None = None) -> dict[str, Any]:
+    """Claude Desktop 설정에 등록한다. `setup_file_client` 의 얇은 이름이다."""
+    return setup_file_client(
+        config_path, bundle_root, api_key=api_key, server_command=server_command,
+        server_args=server_args, extra_env=extra_env)
+
+
+def remove_claude(config_path: Path) -> dict[str, Any]:
+    """Claude Desktop 설정에서 제거한다. `remove_file_client` 의 얇은 이름이다."""
+    return remove_file_client(config_path)
+
+
+@dataclass(frozen=True)
+class ClientTarget:
+    """CuePrecise 를 붙일 수 있는 MCP 클라이언트 하나.
+
+    앱마다 다른 것만 담는다. "우리 항목만 건드린다"는 규칙은 담지 않는다.
+    그 규칙은 `setup_file_client` / `remove_file_client` 안에 하나로 있고,
+    타깃은 그 함수에 넘길 값만 안다.
+    """
+
+    key: str
+    label: str
+    locate_config: Callable[[], Path]
+    servers_key: str = DEFAULT_SERVERS_KEY
+    # 없으면 설정 파일이나 그 폴더의 존재로 판정한다. CLI 로 붙이는 앱은
+    # 설정 파일이 없어도 설치돼 있을 수 있어 따로 준다.
+    detector: Callable[[], bool] | None = None
+
+    def is_installed(self) -> bool:
+        if self.detector is not None:
+            return self.detector()
+        path = self.locate_config()
+        return path.exists() or path.parent.is_dir()
+
+    def install(self, bundle_root: Path, *, api_key: str | None,
+                server_command: str, server_args: list[str],
+                extra_env: dict[str, str] | None = None,
+                config_path: Path | None = None) -> dict[str, Any]:
+        return setup_file_client(
+            config_path or self.locate_config(), bundle_root, api_key=api_key,
+            server_command=server_command, server_args=server_args,
+            extra_env=extra_env, servers_key=self.servers_key)
+
+    def remove(self, config_path: Path | None = None) -> dict[str, Any]:
+        return remove_file_client(config_path or self.locate_config(), self.servers_key)
+
+
+CLAUDE_DESKTOP = ClientTarget(
+    key="claude-desktop", label="Claude Desktop", locate_config=default_claude_config)
+
+# 붙일 수 있는 앱 목록. P1 이후로 Codex·Claude Code·VS Code 가 여기 붙는다.
+CLIENTS: tuple[ClientTarget, ...] = (CLAUDE_DESKTOP,)
+
+
+def client_by_key(key: str) -> ClientTarget:
+    for target in CLIENTS:
+        if target.key == key:
+            return target
+    known = ", ".join(target.key for target in CLIENTS)
+    raise SystemExit(f"알 수 없는 클라이언트: {key} (가능한 값: {known})")
+
+
+def detected_clients() -> list[ClientTarget]:
+    """이 PC 에 설치돼 있다고 판정된 앱만 돌려준다.
+
+    설치되지 않은 앱에 설정 파일을 새로 만들지 않기 위한 것이다.
+    """
+    return [target for target in CLIENTS if target.is_installed()]
+
+
+def resolve_clients(names: Iterable[str] | None) -> list[ClientTarget]:
+    """`--client` 값을 타깃 목록으로 바꾼다. 생략과 `all` 은 감지된 앱 전부다."""
+    requested = [name.strip() for name in (names or []) if name.strip()]
+    if not requested or "all" in requested:
+        return detected_clients()
+    seen: dict[str, ClientTarget] = {}
+    for name in requested:
+        target = client_by_key(name)
+        seen.setdefault(target.key, target)
+    return list(seen.values())
