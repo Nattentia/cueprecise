@@ -1,8 +1,10 @@
 name: CI
 
 on:
+  # main 만 보면 가지에 쌓는 동안 검증이 한 번도 돌지 않는다. 0.2.0 작업 때
+  # 커밋 아홉 개를 쌓고 PR 을 열자 Linux 세 판이 한꺼번에 무너졌다.
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
 
 permissions:
