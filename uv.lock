@@ -339,6 +339,34 @@ wheels = [
 ]
 
 [[package]]
+name = "cueprecise-mcp"
+version = "0.1.1"
+source = { editable = "." }
+dependencies = [
+    { name = "google-genai" },
+    { name = "yt-dlp" },
+]
+
+[package.optional-dependencies]
+ocr = [
+    { name = "pillow" },
+    { name = "pytesseract" },
+]
+timezone = [
+    { name = "tzdata" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "google-genai", specifier = ">=1.0.0" },
+    { name = "pillow", marker = "extra == 'ocr'", specifier = ">=10.0.0" },
+    { name = "pytesseract", marker = "extra == 'ocr'", specifier = ">=0.3.10" },
+    { name = "tzdata", marker = "extra == 'timezone'", specifier = ">=2024.1" },
+    { name = "yt-dlp", specifier = ">=2025.1.15" },
+]
+provides-extras = ["ocr", "timezone"]
+
+[[package]]
 name = "distro"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -865,31 +893,3 @@ sdist = { url = "https://files.pythonhosted.org/packages/1e/e0/832fa4ca334b766a0
 wheels = [
     { url = "https://files.pythonhosted.org/packages/69/b2/8cd1613f56eed7ceb64fbd4df3f1c01246bfb098e6f398228bafda22b80b/yt_dlp-2026.8.19-py3-none-any.whl", hash = "sha256:1d57897e94c6665a0a6f9bc54b34e584284e32c034ffab3a7df25d8f7b24eedf", size = 3185533, upload-time = "2026-08-19T23:48:56.925Z" },
 ]
-
-[[package]]
-name = "ytx-mcp"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "google-genai" },
-    { name = "yt-dlp" },
-]
-
-[package.optional-dependencies]
-ocr = [
-    { name = "pillow" },
-    { name = "pytesseract" },
-]
-timezone = [
-    { name = "tzdata" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "google-genai", specifier = ">=1.0.0" },
-    { name = "pillow", marker = "extra == 'ocr'", specifier = ">=10.0.0" },
-    { name = "pytesseract", marker = "extra == 'ocr'", specifier = ">=0.3.10" },
-    { name = "tzdata", marker = "extra == 'timezone'", specifier = ">=2024.1" },
-    { name = "yt-dlp", specifier = ">=2025.1.15" },
-]
-provides-extras = ["ocr", "timezone"]

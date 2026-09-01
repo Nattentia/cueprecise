@@ -25,6 +25,9 @@ MAX_MEANING_CHARS = 600
 MAX_POINTS = 12
 MAX_BULLETS_PER_CHAPTER = 3
 MAX_TERMS = 20
+# 이미 저장된 요약이 달고 있는 표식이다. 이름이 바뀌었다고 이 값을 바꾸면
+# 0.1.0 이 만든 요약을 더 이상 읽지 못한다. 사용자에게 보이지 않는 내부
+# 표식이므로 그대로 둔다 (CONTRACT 14절).
 META_PREFIX = "<!-- ytx-summary:"
 
 

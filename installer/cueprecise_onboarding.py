@@ -1,4 +1,4 @@
-"""비개발자용 ytx 첫 연결 화면."""
+"""비개발자용 CuePrecise 첫 연결 화면."""
 from __future__ import annotations
 
 import sys
@@ -21,7 +21,7 @@ def install_directory() -> Path:
 class OnboardingApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("ytx 시작하기")
+        self.root.title("CuePrecise 시작하기")
         self.root.geometry("620x500")
         self.root.minsize(560, 460)
         self.root.configure(padx=34, pady=28)
@@ -32,10 +32,10 @@ class OnboardingApp:
         style.configure("Body.TLabel", font=("Malgun Gothic", 10))
         style.configure("Action.TButton", font=("Malgun Gothic", 11, "bold"), padding=(18, 10))
 
-        ttk.Label(root, text="ytx를 Claude Desktop에 연결합니다", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(root, text="CuePrecise를 Claude Desktop에 연결합니다", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             root,
-            text="어려운 설정은 ytx가 자동으로 처리합니다. Gemini API 키만 붙여넣어 주세요.",
+            text="유튜브 영상에서 찾던 그 대목을 정확히 짚어 줍니다. 어려운 설정은 CuePrecise가 자동으로 처리하니 Gemini API 키만 붙여넣어 주세요.",
             style="Body.TLabel", wraplength=540,
         ).pack(anchor="w", pady=(8, 24))
 
@@ -56,7 +56,7 @@ class OnboardingApp:
         self.show_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(root, text="입력한 키 보기", variable=self.show_var,
                         command=self.toggle_key).pack(anchor="w")
-        ttk.Label(root, text="키는 Claude가 ytx를 사용할 수 있도록 이 PC의 Claude 설정에만 저장됩니다.",
+        ttk.Label(root, text="키는 Claude가 CuePrecise를 사용할 수 있도록 이 PC의 Claude 설정에만 저장됩니다.",
                   style="Body.TLabel", foreground="#666666", wraplength=540).pack(anchor="w", pady=(5, 20))
 
         ttk.Label(root, text="3. 연결하기", style="Step.TLabel").pack(anchor="w")
@@ -115,7 +115,7 @@ class OnboardingApp:
         self.status_var.set("✓ 연결이 완료되었습니다. Claude Desktop을 완전히 종료한 뒤 다시 실행하세요.")
         messagebox.showinfo(
             "설치 완료",
-            "ytx가 Claude Desktop에 연결되었습니다.\n\n"
+            "CuePrecise가 Claude Desktop에 연결되었습니다.\n\n"
             "Claude Desktop을 완전히 종료한 뒤 다시 실행하세요.\n"
             "새 대화에서 ‘이 유튜브 영상을 분석해줘’라고 요청하면 됩니다.",
         )
@@ -124,6 +124,13 @@ class OnboardingApp:
 def main() -> None:
     if sys.argv[1:] == ["--uninstall"]:
         installer_support.disconnect()
+        return
+    if sys.argv[1:] == ["--migrate"]:
+        # 설치 프로그램이 조용히 부른다. 실패해도 설치를 막지 않는다.
+        try:
+            installer_support.migrate(install_directory())
+        except Exception:
+            pass
         return
     root = tk.Tk()
     OnboardingApp(root)

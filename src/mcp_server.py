@@ -1,15 +1,15 @@
-"""ytx MCP 서버 — stdio JSON-RPC (CONTRACT.md 12절).
+"""CuePrecise MCP 서버 — stdio JSON-RPC (CONTRACT.md 12절).
 
 owner: claude
 
 계약이 요구하는 도구 표면을 제공한다.
 
-  ytx_register     영상 등록/분석 시작 (단계 선택 가능)
-  ytx_status       작업 상태와 로컬 Gemini 사용량 추정 조회
-  ytx_outline      영상 개요와 timestamp 목차 조회
-  ytx_query        내용 질의. 근거 span/frame 과 timestamp 반환
-  ytx_excerpt      특정 시각 구간의 자막과 프레임 조회
-  ytx_purge        derived 재생성 및 명시적 영상 자료 삭제
+  cueprecise_register     영상 등록/분석 시작 (단계 선택 가능)
+  cueprecise_status       작업 상태와 로컬 Gemini 사용량 추정 조회
+  cueprecise_outline      영상 개요와 timestamp 목차 조회
+  cueprecise_query        내용 질의. 근거 span/frame 과 timestamp 반환
+  cueprecise_excerpt      특정 시각 구간의 자막과 프레임 조회
+  cueprecise_purge        derived 재생성 및 명시적 영상 자료 삭제
 
 의존성 없이 stdlib 만으로 MCP stdio 프로토콜을 구현한다. 외부 패키지를
 새로 들이지 않는다는 합의서 7절 제약을 지키기 위해서다.
@@ -35,7 +35,7 @@ import visual
 
 MAX_EXCERPT_CHARS = 12000
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "ytx", "version": "1.0.0"}
+SERVER_INFO = {"name": "cueprecise", "version": "1.0.0"}
 
 class ToolError(RuntimeError):
     """도구 실행 실패. 호출자에게 그대로 전달한다."""
@@ -53,7 +53,7 @@ def _transcript(bundle: Path) -> dict[str, Any]:
         if path.exists():
             return _read_json(path)
     raise ToolError(
-        "%s 에 전사가 없다. 먼저 ytx_register 로 분석하라." % bundle.name)
+        "%s 에 전사가 없다. 먼저 cueprecise_register 로 분석하라." % bundle.name)
 
 
 def _frames(bundle: Path) -> list[dict[str, Any]]:
@@ -134,7 +134,7 @@ def tool_outline(bundle_root: Path, *, video_id: str,
             for item in selected_chapters if item["needs_title"]
         ],
         "title_action": ("needs_titles 각각에 짧은 title을 직접 지은 뒤 "
-                         "ytx_set_chapter_titles를 한 번 호출하라. 설명은 만들지 마라."
+                         "cueprecise_set_chapter_titles를 한 번 호출하라. 설명은 만들지 마라."
                          if any(item["needs_title"] for item in selected_chapters) else None),
         "outline": entries,
     }
@@ -161,7 +161,7 @@ def tool_summary(bundle_root: Path, *, video_id: str) -> dict[str, Any]:
         result["summary_action"] = (
             "현재 summary는 로컬 추출본이므로 그대로 답해도 된다. 문장 품질을 개선할 수 "
             "있으면 packet의 근거만 사용해 overview, key_points, chapter_summaries, terms를 "
-            "작성하고 ytx_set_summary를 한 번 호출하라. timestamp는 작성하지 마라."
+            "작성하고 cueprecise_set_summary를 한 번 호출하라. timestamp는 작성하지 마라."
         )
     else:
         result["summary_action"] = None
@@ -182,7 +182,7 @@ def tool_query(bundle_root: Path, *, video_id: str, query: str,
     bundle = pipeline.bundle_path(bundle_root, video_id)
     index = bundle / "index.sqlite3"
     if not index.exists():
-        raise ToolError("index.sqlite3 가 없다. ytx_register 의 index 단계를 실행하라.")
+        raise ToolError("index.sqlite3 가 없다. cueprecise_register 의 index 단계를 실행하라.")
 
     hits = context.search(index, query, limit=limit)
     if not hits:
@@ -244,7 +244,7 @@ def tool_purge(bundle_root: Path, *, video_id: str,
         "video_id": video_id,
         "scope": scope,
         "removed": removed,
-        "note": "derived 는 raw 가 남아 있으면 ytx_register 로 재생성할 수 있다. "
+        "note": "derived 는 raw 가 남아 있으면 cueprecise_register 로 재생성할 수 있다. "
                 "chunks 는 원본 오디오가 남아 있으면 plan 단계가 다시 뽑는다.",
     }
 
@@ -260,7 +260,7 @@ def tool_frames(bundle_root: Path, *, video_id: str,
 
 TOOLS: list[dict[str, Any]] = [
     {
-        "name": "ytx_register",
+        "name": "cueprecise_register",
         "description": "YouTube 영상을 등록하고 분석 파이프라인을 실행한다. "
                        "stages 를 주면 일부 단계만 재실행한다.",
         "inputSchema": {
@@ -279,7 +279,7 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "ytx_status",
+        "name": "cueprecise_status",
         "description": "작업 상태, 청크 진행도, 산출물 존재 여부, "
                        "로컬 Gemini 사용량 추정을 조회한다.",
         "inputSchema": {
@@ -289,9 +289,9 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "ytx_outline",
+        "name": "cueprecise_outline",
         "description": "영상 개요와 timestamp 목차를 조회한다. needs_titles가 있으면 "
-                       "근거를 보고 제목을 직접 지은 뒤 ytx_set_chapter_titles를 호출한다.",
+                       "근거를 보고 제목을 직접 지은 뒤 cueprecise_set_chapter_titles를 호출한다.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -302,7 +302,7 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "ytx_query",
+        "name": "cueprecise_query",
         "description": "영상 내용을 질의한다. 근거 span 과 frame 을 timestamp 와 함께 반환한다. "
                        "근거가 없으면 없다고 답한다.",
         "inputSchema": {
@@ -316,10 +316,10 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "ytx_summary",
+        "name": "cueprecise_summary",
         "description": "사용자가 전체 영상 요약을 요청할 때만 요약을 만들거나 "
                        "현재 요약을 재사용한다. 로컬 요약은 즉시 사용 가능하며, packet이 "
-                       "있으면 호스트가 ytx_set_summary로 한 번 개선할 수 있다.",
+                       "있으면 호스트가 cueprecise_set_summary로 한 번 개선할 수 있다.",
         "inputSchema": {
             "type": "object",
             "properties": {"video_id": {"type": "string"}},
@@ -327,8 +327,8 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "ytx_set_summary",
-        "description": "ytx_summary packet만 근거로 작성한 구조화 요약을 검증·저장한다. "
+        "name": "cueprecise_set_summary",
+        "description": "cueprecise_summary packet만 근거로 작성한 구조화 요약을 검증·저장한다. "
                        "chapter 경계와 timestamp는 서버가 결정한다.",
         "inputSchema": {
             "type": "object",
@@ -351,8 +351,8 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "ytx_set_chapter_titles",
-        "description": "ytx_outline의 needs_titles에 대해 호스트가 직접 지은 제목을 "
+        "name": "cueprecise_set_chapter_titles",
+        "description": "cueprecise_outline의 needs_titles에 대해 호스트가 직접 지은 제목을 "
                        "검증 후 저장한다. 경계와 원문은 바꿀 수 없다.",
         "inputSchema": {
             "type": "object",
@@ -368,7 +368,7 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "ytx_excerpt",
+        "name": "cueprecise_excerpt",
         "description": "지정한 시각 구간의 자막 원문과 그 구간의 프레임을 조회한다. 긴 구간은 앞부분만 돌아오고 truncated 가 참이 된다 — 그때는 start 를 옮겨 이어 부른다.",
         "inputSchema": {
             "type": "object",
@@ -381,7 +381,7 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "ytx_frames",
+        "name": "cueprecise_frames",
         "description": "화면 참조 시각의 프레임을 추출하고 frames.json 을 갱신한다. "
                        "기본 분석은 영상을 받지 않으므로 이 도구가 필요할 때 "
                        "원본 URL 로 360p 영상을 받아온다. Gemini 호출 없음.",
@@ -399,7 +399,7 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "ytx_purge",
+        "name": "cueprecise_purge",
         "description": "영상 자료를 명시적으로 삭제한다. "
                        "scope: derived(기본) | chunks | raw | all. "
                        "chunks 는 전사용 청크 오디오만 지우며 원본 오디오에서 다시 만들 수 있다.",
@@ -416,39 +416,55 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+LEGACY_TOOL_PREFIX = "ytx_"
+TOOL_PREFIX = "cueprecise_"
+
+
+def canonical_tool_name(name: str) -> str:
+    """이전 이름(`ytx_*`)으로 부른 도구를 현재 이름으로 옮긴다.
+
+    tools/list 는 현재 이름만 알린다. 목록에 둘 다 실으면 호스트가 같은
+    도구를 두 번 보게 된다. 부르는 쪽만 받아 주면 호환에는 충분하다.
+    """
+    if name.startswith(LEGACY_TOOL_PREFIX):
+        return TOOL_PREFIX + name[len(LEGACY_TOOL_PREFIX):]
+    return name
+
+
 def dispatch(name: str, arguments: dict[str, Any], *, bundle_root: Path,
              api_key: str | None = None) -> dict[str, Any]:
-    if name == "ytx_register":
+    name = canonical_tool_name(name)
+    if name == "cueprecise_register":
         return tool_register(bundle_root, url=arguments["url"],
                              stages=arguments.get("stages"),
                              language=arguments.get("language"))
-    if name == "ytx_status":
+    if name == "cueprecise_status":
         return tool_status(bundle_root, video_id=arguments["video_id"], api_key=api_key)
-    if name == "ytx_outline":
+    if name == "cueprecise_outline":
         return tool_outline(bundle_root, video_id=arguments["video_id"],
                             max_entries=int(arguments.get("max_entries", 100)))
-    if name == "ytx_query":
+    if name == "cueprecise_query":
         return tool_query(bundle_root, video_id=arguments["video_id"],
                           query=arguments["query"], limit=int(arguments.get("limit", 8)))
-    if name == "ytx_summary":
+    if name == "cueprecise_summary":
         return tool_summary(bundle_root, video_id=arguments["video_id"])
-    if name == "ytx_set_summary":
+    if name == "cueprecise_set_summary":
         return tool_set_summary(bundle_root, video_id=arguments["video_id"],
                                 fingerprint=arguments["fingerprint"],
                                 content=arguments["content"])
-    if name == "ytx_set_chapter_titles":
+    if name == "cueprecise_set_chapter_titles":
         return tool_set_chapter_titles(
             bundle_root, video_id=arguments["video_id"],
             fingerprint=arguments["fingerprint"], titles=arguments["titles"])
-    if name == "ytx_excerpt":
+    if name == "cueprecise_excerpt":
         return tool_excerpt(bundle_root, video_id=arguments["video_id"],
                             start=float(arguments["start"]), end=float(arguments["end"]))
-    if name == "ytx_frames":
+    if name == "cueprecise_frames":
         return tool_frames(bundle_root, video_id=arguments["video_id"],
                            at=arguments.get("at"),
                            max_frames=int(arguments.get("max_frames",
                                                         visual.DEFAULT_MAX_FRAMES)))
-    if name == "ytx_purge":
+    if name == "cueprecise_purge":
         return tool_purge(bundle_root, video_id=arguments["video_id"],
                           scope=arguments.get("scope", "derived"))
     raise ToolError("알 수 없는 도구: %s" % name)
@@ -538,7 +554,10 @@ def main() -> int:
     import os
 
     # argparse의 --help도 비ASCII 문서를 출력하므로 파싱 전에 UTF-8로 고정한다.
-    _force_utf8(sys.stdin, sys.stdout)
+    _force_utf8(sys.stdin, sys.stdout, sys.stderr)
+    if Path(sys.argv[0] or "").stem == "ytx-mcp":
+        print("주의: `ytx-mcp`는 이전 이름이며 계속 동작하지만, 앞으로는 "
+              "`cueprecise-mcp`를 사용하기 바란다.", file=sys.stderr)
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bundle-root", type=Path, default=Path("data"))

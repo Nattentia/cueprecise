@@ -38,6 +38,8 @@ jobs:
         run: python -m unittest discover -s tests
       - name: Smoke-test installed and legacy entry points
         run: |
+          cueprecise --help
+          cueprecise-mcp --help
           ytx --help
           ytx-mcp --help
           python src/pipeline.py --help

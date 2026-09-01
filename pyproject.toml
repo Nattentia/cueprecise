@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ytx-mcp"
-version = "0.1.0"
-description = "Persistent, evidence-grounded YouTube transcription MCP server"
+name = "cueprecise-mcp"
+version = "0.1.1"
+description = "CuePrecise — find the exact moment in any YouTube video."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -28,11 +28,14 @@ ocr = ["pytesseract>=0.3.10", "Pillow>=10.0.0"]
 timezone = ["tzdata>=2024.1"]
 
 [project.urls]
-Homepage = "https://github.com/Nattentia/ytx"
-Issues = "https://github.com/Nattentia/ytx/issues"
+Homepage = "https://github.com/Nattentia/cueprecise"
+Issues = "https://github.com/Nattentia/cueprecise/issues"
 
 [project.scripts]
-ytx = "ytx_cli:main"
+cueprecise = "cueprecise_cli:main"
+cueprecise-mcp = "mcp_server:main"
+# 0.1.0 의 ytx 사용자가 계속 실행할 수 있도록 남긴 deprecated 별칭이다.
+ytx = "cueprecise_cli:main"
 ytx-mcp = "mcp_server:main"
 
 [tool.setuptools]
@@ -42,6 +45,7 @@ py-modules = [
   "chapters",
   "configuration",
   "context",
+  "cueprecise_cli",
   "fetch_youtube",
   "installer_support",
   "mcp_server",
@@ -54,5 +58,4 @@ py-modules = [
   "transcribe",
   "usage",
   "visual",
-  "ytx_cli",
 ]

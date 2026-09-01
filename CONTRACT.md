@@ -30,8 +30,10 @@
 | `src/runtime.py` | codex | 읽기만 |
 | `src/configuration.py` | codex | 읽기만 |
 | `src/installer_support.py` | codex | 읽기만 |
+| `src/cueprecise_cli.py` | codex | 읽기만 |
 | `installer/**` | codex | 읽기만 |
-| `tests/test_installer_support.py` | codex | 읽기만 |
+| `tests/test_installer_support.py`, `tests/test_cli.py` | codex | 읽기만 |
+| `tests/test_naming.py` | 사람 | 읽기만 |
 | `src/chapters.py` | claude | 읽기만 |
 | `src/summary.py` | claude | 읽기만 |
 | `tests/test_fetch_youtube.py`, `tests/test_render.py`, `tests/test_pipeline.py`, `tests/test_context.py`, `tests/test_visual.py` | claude | 읽기만 |
@@ -226,7 +228,7 @@ config가 달라져 그 영상의 청크를 전부 다시 부른다.** 언어가
 
 ## 5. 협업 규약
 
-원격: `https://github.com/Nattentia/ytx`
+원격: `https://github.com/Nattentia/cueprecise`
 
 ### 작업 공간 분리
 
@@ -278,8 +280,10 @@ gh pr list
 - 부분 실패를 성공으로 숨기지 않는다. 완료된 청크와 실패 원인을 manifest에 남긴다.
 - 새 writer가 만든 파일은 구 reader가 모르는 필드를 무시해도 기존 기능이 동작해야 한다.
 - 호환 불가능한 변경은 `schema_version`을 올리고 별도 migration을 제공하기 전에는 금지한다.
-- 설치형 진입점 `ytx run|status|purge`는 기존 `python src/pipeline.py`와 같은 CLI 계약을
-  제공한다. `ytx-mcp`는 기존 `python src/mcp_server.py`와 같은 stdio MCP 계약을 제공한다.
+- 설치형 진입점 `cueprecise run|status|purge`는 기존 `python src/pipeline.py`와 같은 CLI
+  계약을 제공한다. `cueprecise-mcp`는 기존 `python src/mcp_server.py`와 같은 stdio MCP
+  계약을 제공한다.
+- 이전 이름 `ytx`, `ytx-mcp`는 같은 진입점을 가리키는 별칭으로 계속 등록한다 (15절).
 - 기존 `python src/*.py` 단일 파일 실행 경로는 설치형 진입점과 함께 유지한다.
 
 ## 7. job.json — 장기 작업 manifest
@@ -451,7 +455,8 @@ data/<video_id>/
 ## 12. pipeline과 MCP 완료 조건
 
 `pipeline.py`는 각 단계를 독립적으로 재실행할 수 있게 조정하고 JSON 파일로만
-연결한다. `mcp_server.py`는 최소 다음 동작을 제공한다.
+연결한다. MCP 도구 이름은 `cueprecise_` 접두사를 쓰며, 이전 접두사 `ytx_` 로 부른
+호출도 같은 도구로 받는다 (15절). `mcp_server.py`는 최소 다음 동작을 제공한다.
 
 - 영상 등록/분석 시작
 - 작업 상태와 로컬 Gemini 사용량 추정 조회
@@ -524,7 +529,7 @@ data/<video_id>/
 - `title_source`는 제목의 출처다. `youtube`(영상이 단 챕터), `local-keywords`
   (키워드 나열), `host-llm`(호스트가 지음).
 - `needs_title`이 참이면 제목이 키워드 나열이라는 뜻이다. 호스트가
-  `ytx_set_chapter_titles`로 제목을 넣는다. **그때 경계는 바뀌지 않는다** —
+  `cueprecise_set_chapter_titles`로 제목을 넣는다. **그때 경계는 바뀌지 않는다** —
   제목만 갈아끼운다. 경계가 함께 흔들리면 요약의 시각 인용이 어긋난다.
 - `transcript_fingerprint`는 이 챕터를 만든 전사의 지문이다. 전사가 바뀌면
   챕터를 다시 만든다.
@@ -583,7 +588,7 @@ data/<video_id>/
   것이다. 이 줄을 없애면 전사를 새로 떠도 옛 요약이 새것인 척 나온다.
 - `generation`은 `local-extractive`(코드가 전사에서 뽑음) 또는
   `host-llm`(호스트가 씀). `local-extractive`면 `needs_host_summary`가 참이고
-  호스트가 `ytx_set_summary`로 한 번 개선할 수 있다.
+  호스트가 `cueprecise_set_summary`로 한 번 개선할 수 있다.
 - 모든 인용에 `[시:분:초]`를 붙인다. 근거 없는 문장을 쓰지 않는다.
 
 ### 상한
@@ -601,3 +606,40 @@ data/<video_id>/
 
 파일로 보관하던 시절의 `derived/summary.md`는 읽기만 지원한다. 새로 만들지
 않는다.
+
+## 15. 이름 이전 — CuePrecise
+
+2026-09-01, 프로젝트 이름을 `ytx`에서 **CuePrecise**로 바꿨다. 기능은 바꾸지
+않는다. 아래는 **이미 쓰고 있던 사용자를 깨뜨리지 않기 위한 절대 규칙**이다.
+
+### 유지해야 하는 것
+
+- **MCP 도구 별칭.** `dispatch` 는 `ytx_*` 를 `cueprecise_*` 로 옮겨 받는다.
+  `tools/list` 는 새 이름만 알린다. 목록에 둘 다 실으면 호스트가 같은 도구를
+  두 번 본다.
+- **실행 명령 별칭.** `ytx`, `ytx-mcp` 진입점을 계속 등록한다. 실행하면
+  stderr 로 새 이름을 안내하되 동작은 같다.
+- **설치 프로그램 AppId.** Inno Setup 의 `AppId` GUID 는 0.1.0 과 같은 값을
+  유지한다. 바꾸면 기존 설치가 지워지지 않고 별개 프로그램으로 남는다.
+- **요약 표식.** `summary.py` 의 `META_PREFIX` 는 `<!-- ytx-summary:` 그대로
+  둔다. 바꾸면 0.1.0 이 만든 요약을 읽지 못한다 (14절). 사용자에게 보이지
+  않는 내부 표식이다.
+- **데이터 폴더.** `~/.ytx/data` 가 이미 있으면 그것을 계속 쓴다. 이름 때문에
+  사용자 자료를 옮기지 않는다. 새 설치만 `~/.cueprecise/data` 를 만든다.
+  판정은 `configuration.default_bundle_root()` 하나가 한다.
+
+### Claude Desktop 설정
+
+- 새 항목 이름은 `cueprecise` 다. `configuration.SERVER_KEY` 가 유일한 진실이다.
+- 기존 `ytx` 항목을 발견하면 **환경변수를 물려받아** 옮기고 옛 키를 지운다.
+  키를 새로 주지 않아도 저장돼 있던 `GEMINI_API_KEY` 가 사라지면 안 된다.
+- 옮긴 뒤 두 항목이 함께 남으면 안 된다. 같은 서버가 두 번 뜬다.
+- **우리가 만든 항목만 만진다.** `configuration.is_managed_server()` 가
+  판정한다. 다른 MCP 서버 설정은 읽지도 지우지도 덮어쓰지도 않는다.
+- 설정을 바꾸기 전에 항상 백업 파일을 만든다.
+- 제거 프로그램은 `cueprecise` 와 `ytx` 중 우리가 만든 항목만 지운다.
+
+### 버전
+
+- `pyproject.toml` 의 `version` 과 `installer/cueprecise.iss` 의
+  `MyAppVersion` 은 항상 같아야 한다. `tests/test_naming.py` 가 검사한다.

@@ -53,9 +53,9 @@ class ToolSurfaceTests(unittest.TestCase):
     def test_contract_required_tools_exist(self) -> None:
         names = {t["name"] for t in mcp_server.TOOLS}
         self.assertEqual(names, {
-            "ytx_register", "ytx_status", "ytx_outline", "ytx_query",
-            "ytx_excerpt", "ytx_frames", "ytx_purge", "ytx_set_chapter_titles",
-            "ytx_summary", "ytx_set_summary"})
+            "cueprecise_register", "cueprecise_status", "cueprecise_outline", "cueprecise_query",
+            "cueprecise_excerpt", "cueprecise_frames", "cueprecise_purge", "cueprecise_set_chapter_titles",
+            "cueprecise_summary", "cueprecise_set_summary"})
 
     def test_every_tool_declares_an_input_schema(self) -> None:
         for tool in mcp_server.TOOLS:
@@ -70,7 +70,7 @@ class ProtocolTests(unittest.TestCase):
             {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
             bundle_root=Path("data"))
         self.assertEqual(reply["result"]["protocolVersion"], mcp_server.PROTOCOL_VERSION)
-        self.assertEqual(reply["result"]["serverInfo"]["name"], "ytx")
+        self.assertEqual(reply["result"]["serverInfo"]["name"], "cueprecise")
 
     def test_notifications_get_no_reply(self) -> None:
         self.assertIsNone(mcp_server.handle(
@@ -85,7 +85,7 @@ class ProtocolTests(unittest.TestCase):
     def test_tool_failure_is_reported_as_iserror_not_crash(self) -> None:
         reply = mcp_server.handle(
             {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-             "params": {"name": "ytx_outline", "arguments": {"video_id": "없음"}}},
+             "params": {"name": "cueprecise_outline", "arguments": {"video_id": "없음"}}},
             bundle_root=Path("data"))
         self.assertTrue(reply["result"]["isError"])
 
@@ -237,7 +237,7 @@ class StdoutIsProtocolOnlyTests(BundleFixture):
     def test_tool_call_writes_only_json_lines(self) -> None:
         captured = io.StringIO()
         request = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                   "params": {"name": "ytx_outline", "arguments": {"video_id": "vid"}}}
+                   "params": {"name": "cueprecise_outline", "arguments": {"video_id": "vid"}}}
         stream_in = io.StringIO(json.dumps(request) + "\n")
         with contextlib.redirect_stdout(captured):
             mcp_server.serve(stream_in, captured, bundle_root=self.root)
@@ -289,7 +289,7 @@ if __name__ == "__main__":
 
 
 class FramesOnDemandTests(unittest.TestCase):
-    """ytx_frames 는 영상이 없으면 그때 받아온다 (작업 A)."""
+    """cueprecise_frames 는 영상이 없으면 그때 받아온다 (작업 A)."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -324,7 +324,7 @@ class FramesOnDemandTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_frames_acquires_video_when_missing(self) -> None:
-        result = mcp_server.dispatch("ytx_frames", {"video_id": "vid"},
+        result = mcp_server.dispatch("cueprecise_frames", {"video_id": "vid"},
                                      bundle_root=self.root)
         self.assertEqual(self.calls, ["https://www.youtube.com/watch?v=vid"])
         self.assertIn("candidates_considered", result)
@@ -339,12 +339,12 @@ class FramesOnDemandTests(unittest.TestCase):
 
         mcp_server.pipeline.visual.build = build
         try:
-            mcp_server.dispatch("ytx_frames", {"video_id": "vid", "max_frames": 3},
+            mcp_server.dispatch("cueprecise_frames", {"video_id": "vid", "max_frames": 3},
                                 bundle_root=self.root)
         finally:
             mcp_server.pipeline.visual.build = original_build
         self.assertEqual(seen.get("max_frames"), 3, "max_frames 가 전달되지 않았다")
 
     def test_frames_schema_exposes_max_frames(self) -> None:
-        tool = [t for t in mcp_server.TOOLS if t["name"] == "ytx_frames"][0]
+        tool = [t for t in mcp_server.TOOLS if t["name"] == "cueprecise_frames"][0]
         self.assertIn("max_frames", tool["inputSchema"]["properties"])
