@@ -2,10 +2,12 @@
 
 # CuePrecise
 
-**Find the exact moment in any YouTube video.**
+> **긴 YouTube 영상을 넣고, 몇 분 뒤부터 질문하세요.**
 
-긴 YouTube 영상을 한 번 분석해 두면, 나중에는 Claude에게 질문하는 것만으로
-**정확한 장면·대본·근거를 타임스탬프와 함께** 다시 찾을 수 있습니다.
+CuePrecise는 AI 에이전트가 참고할 수 있는 검색 가능한 타임스탬프·대본·화면
+컨텍스트를 준비하는 가벼운 MCP입니다. 실제로 녹화한 사례에서는 68분 영상이 약 3분 만에
+준비됐으며, 영상과 사용 가능한 자막에 따라 처리 시간은 달라집니다. 만들어진 로컬
+컨텍스트는 영상을 처음부터 다시 분석하지 않고 이후 대화에서 다시 참고할 수 있습니다.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
@@ -14,7 +16,7 @@
 
 CuePrecise(큐프리사이스)는 Claude Desktop·Codex 등 AI 앱에 연결하는 오픈소스 도구입니다.
 Gemini의 자연스러운 한국어 전사와 YouTube 자막의 영어 기술 용어를 결합하고,
-분석 결과를 내 컴퓨터에 보관해 다음 대화에서도 다시 사용할 수 있습니다.
+질문에 필요한 정확한 장면과 근거를 찾아줍니다.
 
 ### 이렇게 사용합니다
 
