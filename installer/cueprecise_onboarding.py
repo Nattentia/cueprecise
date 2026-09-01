@@ -23,8 +23,7 @@ class OnboardingApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("CuePrecise 시작하기")
-        self.root.geometry("620x500")
-        self.root.minsize(560, 460)
+        # 크기는 위젯을 다 만든 뒤 `_fit_to_contents` 가 내용에 맞춰 정한다.
         self.root.configure(padx=34, pady=28)
 
         style = ttk.Style()
@@ -73,34 +72,65 @@ class OnboardingApp:
         self.status = ttk.Label(root, textvariable=self.status_var, style="Body.TLabel",
                                 wraplength=540, justify="left")
         self.status.pack(anchor="w", pady=(10, 0))
+        self._fit_to_contents()
         self.key_entry.focus_set()
 
     def _build_client_choices(self, root: tk.Misc) -> dict:
-        """찾은 앱만 체크박스로 보여 준다. 없는 앱은 이유와 함께 잠가 둔다."""
+        """찾은 앱만 체크박스로 보여 준다.
+
+        없는 앱까지 잠긴 줄로 늘어놓으면 목록이 앱 수만큼 길어진다. 창 아래의
+        연결 버튼이 화면 밖으로 밀려 **연결 자체가 불가능해진다.** 실제로 그렇게
+        됐다. 없는 앱은 한 줄로 이름만 알린다.
+        """
         frame = ttk.Frame(root)
         frame.pack(fill="x", pady=(8, 18))
         chosen: dict = {}
-        found = 0
+        self.client_targets: dict = {}
+        missing: list[str] = []
         for target in configuration.CLIENTS:
             try:
                 installed = target.is_installed()
             except Exception:
                 installed = False
-            variable = tk.BooleanVar(value=installed)
-            ttk.Checkbutton(frame, text=target.label, variable=variable,
-                            state="normal" if installed else "disabled").pack(anchor="w")
+            if not installed:
+                missing.append(target.label)
+                continue
+            variable = tk.BooleanVar(value=True)
+            ttk.Checkbutton(frame, text=target.label, variable=variable).pack(anchor="w")
             chosen[target.key] = variable
-            found += int(installed)
-        if not found:
+            self.client_targets[target.key] = target
+        if not chosen:
             ttk.Label(frame, text="연결할 수 있는 AI 앱을 찾지 못했습니다. "
                                   "Claude Desktop, Codex, Claude Code, VS Code 중 하나를 "
                                   "설치한 뒤 다시 열어 주세요.",
                       style="Body.TLabel", foreground="#a33", wraplength=540).pack(anchor="w")
+        elif missing:
+            ttk.Label(frame, text="이 PC에서 찾지 못한 앱: " + ", ".join(missing),
+                      style="Body.TLabel", foreground="#666666",
+                      wraplength=540).pack(anchor="w", pady=(4, 0))
         return chosen
 
+    def _fit_to_contents(self) -> None:
+        """창을 내용에 맞춘다.
+
+        크기를 숫자로 못 박아 두면 내용이 한 줄만 늘어도 아래가 잘린다. 잘리는
+        것은 언제나 마지막에 놓인 것, 곧 연결 버튼이다.
+        """
+        self.root.update_idletasks()
+        width = max(620, self.root.winfo_reqwidth())
+        height = self.root.winfo_reqheight()
+        # 화면보다 큰 창은 그 자체로 잘린다. 작업 표시줄 몫도 남긴다.
+        height = min(height, int(self.root.winfo_screenheight() * 0.88))
+        self.root.geometry(f"{width}x{height}")
+        self.root.minsize(min(560, width), min(460, height))
+
     def _selected_targets(self) -> list:
-        keys = {key for key, variable in self.client_vars.items() if variable.get()}
-        return [target for target in configuration.CLIENTS if target.key in keys]
+        """체크박스를 만들 때 쓴 그 앱들만 돌려준다.
+
+        전역 목록을 다시 읽으면, 화면에 그린 것과 붙이는 것이 어긋날 수 있다.
+        """
+        return [target for key, target in self.client_targets.items()
+                if self.client_vars[key].get()]
 
     def paste_key(self) -> None:
         try:
