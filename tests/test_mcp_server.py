@@ -64,13 +64,83 @@ class ToolSurfaceTests(unittest.TestCase):
             self.assertTrue(tool["description"].strip())
 
 
+MODERN_META = {"_meta": {mcp_server.PROTOCOL_VERSION_KEY:
+                         mcp_server.MODERN_PROTOCOL_VERSION}}
+
+
 class ProtocolTests(unittest.TestCase):
     def test_initialize_returns_protocol_version(self) -> None:
         reply = mcp_server.handle(
             {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
             bundle_root=Path("data"))
-        self.assertEqual(reply["result"]["protocolVersion"], mcp_server.PROTOCOL_VERSION)
+        self.assertEqual(reply["result"]["protocolVersion"],
+                         mcp_server.LEGACY_PROTOCOL_VERSION)
         self.assertEqual(reply["result"]["serverInfo"]["name"], "cueprecise")
+
+    def test_initialize_echoes_a_version_we_support(self) -> None:
+        reply = mcp_server.handle(
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+             "params": {"protocolVersion": mcp_server.MODERN_PROTOCOL_VERSION}},
+            bundle_root=Path("data"))
+        self.assertEqual(reply["result"]["protocolVersion"],
+                         mcp_server.MODERN_PROTOCOL_VERSION)
+
+    def test_initialize_falls_back_when_the_asked_version_is_unknown(self) -> None:
+        reply = mcp_server.handle(
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+             "params": {"protocolVersion": "1900-01-01"}},
+            bundle_root=Path("data"))
+        self.assertEqual(reply["result"]["protocolVersion"],
+                         mcp_server.LEGACY_PROTOCOL_VERSION)
+
+
+class ModernEraTests(unittest.TestCase):
+    """스펙 2026-07-28: 악수 없이 요청마다 판을 싣고 온다."""
+
+    def test_discover_reports_both_eras_and_identity(self) -> None:
+        reply = mcp_server.handle(
+            {"jsonrpc": "2.0", "id": 1, "method": "server/discover",
+             "params": dict(MODERN_META)},
+            bundle_root=Path("data"))
+        result = reply["result"]
+        self.assertEqual(result["resultType"], "complete")
+        self.assertIn(mcp_server.MODERN_PROTOCOL_VERSION, result["supportedVersions"])
+        self.assertIn(mcp_server.LEGACY_PROTOCOL_VERSION, result["supportedVersions"])
+        self.assertEqual(result["capabilities"], {"tools": {}})
+        self.assertEqual(result["_meta"][mcp_server.SERVER_INFO_KEY]["name"], "cueprecise")
+
+    def test_discover_works_without_any_handshake(self) -> None:
+        """신식 클라이언트의 첫 요청이 이것이다. initialize 가 앞설 수 없다."""
+        reply = mcp_server.handle(
+            {"jsonrpc": "2.0", "id": 1, "method": "server/discover"},
+            bundle_root=Path("data"))
+        self.assertIn("result", reply)
+
+    def test_tools_list_is_served_with_modern_metadata(self) -> None:
+        reply = mcp_server.handle(
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list",
+             "params": dict(MODERN_META)},
+            bundle_root=Path("data"))
+        self.assertEqual(len(reply["result"]["tools"]), len(mcp_server.TOOLS))
+
+    def test_unsupported_version_is_rejected_with_the_supported_list(self) -> None:
+        reply = mcp_server.handle(
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/list",
+             "params": {"_meta": {mcp_server.PROTOCOL_VERSION_KEY: "1900-01-01"}}},
+            bundle_root=Path("data"))
+        error = reply["error"]
+        self.assertEqual(error["code"], mcp_server.UNSUPPORTED_VERSION_CODE)
+        self.assertEqual(error["data"]["requested"], "1900-01-01")
+        self.assertEqual(error["data"]["supported"],
+                         list(mcp_server.SUPPORTED_PROTOCOL_VERSIONS))
+
+    def test_a_request_without_metadata_is_not_version_checked(self) -> None:
+        """구식 요청에는 판이 실리지 않는다. 없다고 끊으면 지금 쓰는 앱이 죽는다."""
+        self.assertIsNone(mcp_server.requested_protocol_version(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+        reply = mcp_server.handle(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, bundle_root=Path("data"))
+        self.assertIn("result", reply)
 
     def test_notifications_get_no_reply(self) -> None:
         self.assertIsNone(mcp_server.handle(

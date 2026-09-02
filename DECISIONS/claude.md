@@ -1905,3 +1905,61 @@ PATH 를 비워 CI 를 흉내 낼 수 있다.
 세션 시작 로그에 `ytx (CONNECTION_CLOSED)` 가 떠 있었다. 스펙과 무관한 일로,
 `~/.claude.json` 의 MCP 등록이 리네임 전 경로 `C:/dev/ytx/src/mcp_server.py` 를
 가리키고 있었다. 항목을 `cueprecise` 로 다시 등록해 연결됐다.
+
+## 2026-09-03 — 신식(2026-07-28) MCP 를 함께 받는다
+
+스펙이 `initialize` 악수를 없앴다. 호환성 표에 **신식 클라이언트 + 구식 서버 =
+실패** 라고 적혀 있다. 지금은 클라이언트가 양쪽을 다 하니 붙지만, 구식 지원이
+끊기는 날 연결 자체가 안 된다.
+
+### 이미 되어 있던 것과 아니었던 것
+
+악수 없이 `tools/call` 을 던져 보면 그냥 동작했다. 이걸 "신식 대응" 으로 읽을
+뻔했는데, 스펙이 바로 그 상태를 위험으로 지목한다.
+
+> some legacy servers do not validate that a request arrives after `initialize`
+> and would process an era-ambiguous method (such as `tools/call`) under legacy
+> semantics. Probing yields a deterministic failure instead.
+
+동작이 같아 보여도 **판별이 안 되는 것**이 문제다. 신식 클라이언트는 말을 걸기
+전에 `server/discover` 를 던지고, 그 답으로 서버의 세대를 정한다. 우리는
+`-32601` 을 돌려주고 있었으니 "구식" 으로 분류됐다.
+
+어려운 쪽은 이미 끝나 있었다. `handle()` 은 (요청, bundle_root) 만 보는 순수
+함수라 요청 사이에 상태가 없다. 신식의 전제가 그것이다. 남은 것은 자기가
+신식도 한다고 밝히는 일뿐이었다.
+
+### 넣은 것
+
+- `server/discover` — 미리 적어 둔 dict 를 그대로 돌려준다. 계산도 파일 접근도
+  없다. `supportedVersions` 에 신식·구식을 함께 싣는다.
+- `_meta` 의 `io.modelcontextprotocol/protocolVersion` 검사. 모르는 판이면
+  `-32022` 와 지원 목록으로 거절한다.
+- `initialize` 는 그대로 둔다. 클라이언트가 우리가 아는 판을 부르면 그 판으로,
+  모르는 판이면 우리 판으로 답한다.
+
+**판이 실려 있지 않으면 따지지 않는다.** 구식 요청에는 그 자리가 아예 없다.
+없다고 거절하면 지금 쓰는 앱이 전부 끊긴다. 이 한 줄이 dual-era 의 핵심이다.
+
+### 무거워지지 않았다
+
+요청 1건 처리 시간(중앙값, 20000회 x 5회):
+
+| 경로 | 시간 |
+|---|---|
+| `tools/list` 구식 (`_meta` 없음) | 0.62 us |
+| `tools/list` 신식 (판 검사 포함) | 0.70 us |
+| `server/discover` | 0.90 us |
+| `initialize` 구식 악수 | 0.87 us |
+
+판 검사가 더하는 것은 요청당 0.1 us 미만이다. 실제 도구 하나가 파일을 읽는
+시간에 비하면 없는 것과 같다. 외부 패키지도 늘지 않았다(7절).
+
+신식 쪽은 오히려 왕복이 준다. 구식은 `initialize` → `initialized` →
+`tools/list` 로 세 번을 주고받은 뒤에야 일을 시작하는데, 신식은 첫 요청이 곧
+작업이다.
+
+### 확인
+
+실제 프로세스로 세 경로를 돌렸다 — 악수 없이 `server/discover` → `tools/call`
+성공, 구식 악수 후 `tools/list` 성공, 모르는 판은 `-32022` 거절. 445 개 통과.

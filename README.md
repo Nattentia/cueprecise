@@ -147,6 +147,11 @@ python src/pipeline.py --help
 
 ## Connect another MCP host
 
+The MCP specification dropped the `initialize` handshake in revision `2026-07-28` and now carries
+the protocol version on every request. **CuePrecise works with both the new revision and the
+earlier handshake-based ones:** it answers `server/discover` with the versions it supports, and
+still accepts an `initialize` handshake.
+
 `cueprecise setup` finds the AI apps installed on this computer and connects all of them. You do
 not need to know their names.
 

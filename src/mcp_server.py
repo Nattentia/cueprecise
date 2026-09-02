@@ -34,8 +34,23 @@ import summary as summary_mod
 import visual
 
 MAX_EXCERPT_CHARS = 12000
-PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "cueprecise", "version": "1.0.0"}
+
+# 스펙 2026-07-28 은 initialize 악수를 없애고 요청마다 판을 실어 보낸다. 그
+# 이전 판들은 악수로 세션을 연다. 두 쪽을 다 받는다(dual-era).
+#
+# 이 서버는 원래부터 요청 사이에 아무 상태도 두지 않는다. `handle()` 은
+# (요청, bundle_root) 만 보는 순수 함수라 신식 요구를 이미 만족한다. 남은
+# 것은 자기가 신식도 한다고 밝히는 일뿐이라, 아래 상수와 `server/discover`
+# 응답이 전부다. 요청 처리 경로에는 판 검사 한 줄만 늘어난다.
+MODERN_PROTOCOL_VERSION = "2026-07-28"
+LEGACY_PROTOCOL_VERSION = "2024-11-05"
+SUPPORTED_PROTOCOL_VERSIONS = (MODERN_PROTOCOL_VERSION, LEGACY_PROTOCOL_VERSION)
+# 신식 요청이 판을 싣고 오는 자리. 스펙이 정한 이름이라 바꾸면 안 된다.
+PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion"
+SERVER_INFO_KEY = "io.modelcontextprotocol/serverInfo"
+# UnsupportedProtocolVersionError. 스펙이 정한 코드다.
+UNSUPPORTED_VERSION_CODE = -32022
 
 class ToolError(RuntimeError):
     """도구 실행 실패. 호출자에게 그대로 전달한다."""
@@ -459,14 +474,50 @@ def dispatch(name: str, arguments: dict[str, Any], *, bundle_root: Path,
 
 # --------------------------------------------------------------------- protocol
 
+def requested_protocol_version(message: dict[str, Any]) -> str | None:
+    """신식 요청이 `_meta` 에 실어 보낸 판을 읽는다. 없으면 None.
+
+    구식 요청에는 이 자리가 없다. 없다고 거절하면 지금 쓰는 클라이언트가
+    전부 끊기므로, 없으면 판을 따지지 않는다.
+    """
+    meta = (message.get("params") or {}).get("_meta")
+    if not isinstance(meta, dict):
+        return None
+    version = meta.get(PROTOCOL_VERSION_KEY)
+    return version if isinstance(version, str) else None
+
+
 def handle(message: dict[str, Any], *, bundle_root: Path,
            api_key: str | None = None) -> dict[str, Any] | None:
     method = message.get("method")
     request_id = message.get("id")
 
-    if method == "initialize":
+    version = requested_protocol_version(message)
+    if version is not None and version not in SUPPORTED_PROTOCOL_VERSIONS:
+        if request_id is None:
+            return None
+        return {"jsonrpc": "2.0", "id": request_id,
+                "error": {"code": UNSUPPORTED_VERSION_CODE,
+                          "message": "Unsupported protocol version",
+                          "data": {"supported": list(SUPPORTED_PROTOCOL_VERSIONS),
+                                   "requested": version}}}
+
+    if method == "server/discover":
+        # 신식 클라이언트가 말을 걸기 전에 딱 한 번 묻는 것. 미리 적어 둔
+        # 것을 그대로 돌려준다. 계산도 파일 접근도 없다.
         result: dict[str, Any] = {
-            "protocolVersion": PROTOCOL_VERSION,
+            "resultType": "complete",
+            "supportedVersions": list(SUPPORTED_PROTOCOL_VERSIONS),
+            "capabilities": {"tools": {}},
+            "_meta": {SERVER_INFO_KEY: SERVER_INFO},
+        }
+    elif method == "initialize":
+        # 구식 악수. 클라이언트가 우리가 아는 판을 부르면 그 판으로 답하고,
+        # 모르는 판이면 우리 판을 알린다(구 스펙의 협상 규칙).
+        asked = (message.get("params") or {}).get("protocolVersion")
+        result = {
+            "protocolVersion": (asked if asked in SUPPORTED_PROTOCOL_VERSIONS
+                                else LEGACY_PROTOCOL_VERSION),
             "capabilities": {"tools": {}},
             "serverInfo": SERVER_INFO,
         }

@@ -160,6 +160,10 @@ python src/pipeline.py --help
 
 ## MCP 호스트에 붙이기
 
+MCP 스펙은 `2026-07-28`판에서 `initialize` 악수를 없애고 요청마다 판을 싣는
+방식으로 바뀌었다. CuePrecise는 **새 판과 그 이전 판 양쪽 모두에서 동작한다.**
+`server/discover`로 물으면 지원 판을 알리고, `initialize`로 걸어오면 악수로 받는다.
+
 `cueprecise setup`은 이 PC에 설치된 AI 앱을 찾아 전부에 붙인다. 앱 이름을 몰라도 된다.
 
 ```bash
