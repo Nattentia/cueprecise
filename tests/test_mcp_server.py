@@ -354,6 +354,54 @@ class NarrowConsoleEncodingTests(unittest.TestCase):
         self.assertIn("—", response["result"]["content"][0]["text"])
 
 
+class ArgumentValidationTests(unittest.TestCase):
+    """도구를 부르는 쪽은 모델이다. 무엇이 빠졌는지 말해 주면 스스로 고쳐 부른다."""
+
+    def _error(self, name: str, arguments: dict) -> str:
+        with self.assertRaises(mcp_server.ToolError) as caught:
+            mcp_server.dispatch(name, arguments, bundle_root=Path("data"))
+        return str(caught.exception)
+
+    def test_missing_required_value_names_the_field_and_the_tool(self) -> None:
+        message = self._error("cueprecise_status", {})
+        self.assertIn("video_id", message)
+        self.assertIn("cueprecise_status", message)
+
+    def test_every_missing_field_is_listed_at_once(self) -> None:
+        message = self._error("cueprecise_set_summary", {"video_id": "a"})
+        self.assertIn("fingerprint", message)
+        self.assertIn("content", message)
+
+    def test_a_value_of_the_wrong_type_names_the_field(self) -> None:
+        message = self._error("cueprecise_excerpt",
+                              {"video_id": "a", "start": "처음", "end": 10})
+        self.assertIn("start", message)
+
+    def test_a_boolean_is_not_accepted_as_a_number(self) -> None:
+        """파이썬에서 True 는 int 다. 그냥 두면 max_entries=true 가 1 로 통과한다."""
+        message = self._error("cueprecise_outline",
+                              {"video_id": "a", "max_entries": True})
+        self.assertIn("max_entries", message)
+
+    def test_optional_values_may_be_omitted(self) -> None:
+        mcp_server.validate_arguments("cueprecise_outline", {"video_id": "a"})
+
+    def test_a_valid_call_passes_validation(self) -> None:
+        mcp_server.validate_arguments(
+            "cueprecise_excerpt", {"video_id": "a", "start": 0, "end": 1.5})
+
+    def test_an_unknown_tool_still_reports_the_tool_name(self) -> None:
+        self.assertIn("cueprecise_nope", self._error("cueprecise_nope", {}))
+
+    def test_the_failure_reaches_the_caller_as_an_error_result(self) -> None:
+        reply = mcp_server.handle(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+             "params": {"name": "cueprecise_status", "arguments": {}}},
+            bundle_root=Path("data"))
+        self.assertTrue(reply["result"]["isError"])
+        self.assertIn("video_id", reply["result"]["content"][0]["text"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

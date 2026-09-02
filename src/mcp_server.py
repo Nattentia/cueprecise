@@ -434,8 +434,64 @@ TOOLS: list[dict[str, Any]] = [
 TOOL_PREFIX = "cueprecise_"
 
 
+# JSON Schema 의 타입 이름을 파이썬 타입으로 옮긴 것. `integer` 와 `number` 는
+# bool 을 따로 걸러낸다. 파이썬에서 `True` 는 `int` 의 인스턴스라 그냥 두면
+# `max_entries: true` 같은 것이 통과한다.
+_SCHEMA_TYPES: dict[str, tuple[type, ...]] = {
+    "string": (str,),
+    "integer": (int,),
+    "number": (int, float),
+    "array": (list,),
+    "object": (dict,),
+    "boolean": (bool,),
+}
+_TYPE_NAMES_KO = {"string": "문자열", "integer": "정수", "number": "숫자",
+                  "array": "목록", "object": "객체", "boolean": "참/거짓"}
+
+
+def _tool_schema(name: str) -> dict[str, Any] | None:
+    for tool in TOOLS:
+        if tool["name"] == name:
+            return tool["inputSchema"]
+    return None
+
+
+def validate_arguments(name: str, arguments: dict[str, Any]) -> None:
+    """도구를 부르기 전에 인자를 스키마와 맞춰 본다.
+
+    없으면 `arguments["video_id"]` 가 KeyError 를 내고, 그 문구는 그대로
+    호스트에 `실패: 'video_id'` 로 나간다. 무엇이 잘못됐는지도, 어떻게 고치는
+    지도 알 수 없다. 도구를 부르는 쪽은 사람이 아니라 모델이므로 **무엇이
+    빠졌는지 말해 주면 스스로 고쳐서 다시 부른다.** 그 한 번을 벌기 위한
+    검사다.
+    """
+    schema = _tool_schema(name)
+    if schema is None:
+        return
+    properties = schema.get("properties") or {}
+
+    missing = [key for key in schema.get("required") or [] if arguments.get(key) is None]
+    if missing:
+        raise ToolError(
+            "%s 에 필요한 값이 빠졌다: %s" % (name, ", ".join(missing)))
+
+    for key, value in arguments.items():
+        declared = (properties.get(key) or {}).get("type")
+        expected = _SCHEMA_TYPES.get(declared)
+        if expected is None or value is None:
+            continue
+        if isinstance(value, bool) is not (declared == "boolean"):
+            # bool 이 숫자로, 숫자가 참/거짓으로 새는 것을 둘 다 막는다.
+            raise ToolError("%s 의 %s 는 %s여야 한다." %
+                            (name, key, _TYPE_NAMES_KO.get(declared, declared)))
+        if not isinstance(value, expected):
+            raise ToolError("%s 의 %s 는 %s여야 한다." %
+                            (name, key, _TYPE_NAMES_KO.get(declared, declared)))
+
+
 def dispatch(name: str, arguments: dict[str, Any], *, bundle_root: Path,
              api_key: str | None = None) -> dict[str, Any]:
+    validate_arguments(name, arguments)
     if name == "cueprecise_register":
         return tool_register(bundle_root, url=arguments["url"],
                              stages=arguments.get("stages"),
