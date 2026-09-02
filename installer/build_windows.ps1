@@ -6,8 +6,7 @@ $work = Join-Path $repo "build\pyinstaller"
 $spec = Join-Path $repo "build\spec"
 
 New-Item -ItemType Directory -Force -Path $dist, $work, $spec | Out-Null
-foreach ($stale in @("ytx.exe", "ytx-mcp.exe", "ytx-onboarding.exe", "ytx-setup.exe",
-                     "cueprecise.exe", "cueprecise-setup.exe")) {
+foreach ($stale in @("cueprecise.exe", "cueprecise-setup.exe")) {
     Remove-Item -LiteralPath (Join-Path $dist $stale) -Force -ErrorAction SilentlyContinue
 }
 
