@@ -107,14 +107,12 @@ Gemini는 4회 실행에서 모두 그 용어를 놓쳤다. CuePrecise는 시간
 
 Python이나 Git을 설치하거나 명령어를 입력할 필요가 없다. 필요한 영상 처리 도구도
 연결 과정에서 자동으로 준비한다. API 키는 선택한 AI 앱의 내 컴퓨터 설정에만 저장되며,
-기존 설정은 백업한 뒤 CuePrecise 항목만 추가한다. 이전 이름(`ytx`)으로
-설치한 적이 있으면 API 키를 포함한 설정을 그대로 물려받아 옮긴다.
+기존 설정은 백업한 뒤 CuePrecise 항목만 추가한다. 이미 연결해 둔 적이 있으면
+API 키를 포함한 설정을 그대로 물려받는다.
 
 > `v0.2.0`은 SignPath Foundation 코드 서명 심사를 위한 시험판이다. 아직 디지털
 > 서명이 없어 Windows에서 "알 수 없는 게시자" 경고가 나타날 수 있다. 반드시 이
 > 저장소의 Releases에서 받은 파일만 사용한다.
-
-
 
 ### macOS·Linux 또는 명령어 설치
 
@@ -127,9 +125,8 @@ cueprecise setup
 ```
 
 `setup`은 Claude Desktop 설정과 기본 데이터 디렉터리 `~/.cueprecise/data`를 만들고
-기존 설정은 timestamp가 붙은 `.bak` 파일로 보존한다. 이전 이름으로 만든
-`~/.ytx/data`가 이미 있으면 **옮기지 않고 그것을 계속 쓴다.** Claude Desktop을
-다시 시작하면 된다.
+기존 설정은 timestamp가 붙은 `.bak` 파일로 보존한다. Claude Desktop을 다시
+시작하면 된다.
 
 영상 분석에는 `ffmpeg`와 `ffprobe`가 PATH에 있어야 한다. 환경을 확인하려면:
 
@@ -378,7 +375,6 @@ python -m pip install -r requirements-optional.txt     # OCR, 시간대 (선택)
 돌아간다.
 
 설치형 배포 이름은 `cueprecise-mcp`이고 실행 명령은 `cueprecise`, `cueprecise-mcp`다.
-이전 이름 `ytx`, `ytx-mcp`도 계속 동작하지만 **호환용**이며 실행하면 새 이름을 안내한다.
 아직 PyPI 릴리스 전이므로 위의 GitHub URL로 설치한다. `uv tool`의 격리 환경 안에 기존
 모듈을 설치해 최상위 이름 충돌을 피하며, `python src/*.py` 실행 경로도 계속 지원한다.
 

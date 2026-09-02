@@ -1852,3 +1852,56 @@ PATH 를 비워 CI 를 흉내 낼 수 있다.
 레이아웃이 잘리는지는 단위 시험이 보지 못한다. 대신 계산된 크기는 확인할 수
 있다. `winfo_reqheight()` 가 고정 높이를 넘는지 보면 같은 사고를 잡는다.
 지금은 사람이 화면을 보고 확인했다.
+
+## 2026-09-03 — ytx 호환 표면을 전부 걷어냈다
+
+0.1.0 의 `ytx` 사용자를 깨뜨리지 않으려고 별칭 한 겹을 계속 들고 있었다.
+사용자가 자기 말고는 쓴 사람이 없다고 확인해 줬다. 지킬 대상이 없는 호환
+계약은 유지비만 남는다. 전부 지웠다.
+
+### 지운 것
+
+- **진입점 별칭.** `pyproject.toml` 의 `ytx`, `ytx-mcp`.
+- **MCP 도구 별칭.** `mcp_server.canonical_tool_name()` 과
+  `LEGACY_TOOL_PREFIX`. 이제 `ytx_status` 로 부르면 "알 수 없는 도구" 다.
+- **설정 항목 승계.** `configuration.LEGACY_SERVER_KEYS`,
+  `_take_legacy_entry()`, 반환값의 `migrated_from`, `cueprecise_cli` 의
+  `warn_if_deprecated_alias()` 와 doctor 의 `legacy_entries`.
+- **데이터 폴더 승계.** `LEGACY_BUNDLE_DIRS`. `default_bundle_root()` 는
+  이제 `~/.cueprecise/data` 한 줄이다. 이 기계에 `~/.ytx` 는 없었다.
+- **`MANAGED_COMMANDS` 의 `ytx-mcp.exe`**, `installer_support` 의
+  `SERVER_EXECUTABLES`·`SERVER_NAMES` 옛 항목.
+- 설치 스크립트의 `[InstallDelete]` 옛 파일 목록, CI 의 `ytx --help`
+  스모크, 문서(README 둘·PRIVACY·CONTRACT 15절·CODE_SIGNING_POLICY).
+
+### 요약 표식은 데이터를 함께 고쳤다
+
+`summary.py` 의 `META_PREFIX` 를 `<!-- ytx-summary:` 에서
+`<!-- cueprecise-summary:` 로 바꿨다. 이건 코드만 바꾸면 **이미 저장된 요약을
+못 읽는다.** 상수를 바꾼 뒤 기존 번들을 함께 고쳤다.
+
+- `data/vRTcE19M-KE/derived/summary.md` 의 첫 줄
+- `data/AMvF8VrTXWg/index.sqlite3` 의 `metadata.summary`
+
+앞으로 이 표식을 또 바꾸려면 같은 두 자리를 함께 고쳐야 한다. CONTRACT 15절에
+적어 뒀다.
+
+### 시험은 지우지 않고 방향을 돌렸다
+
+`tests/test_naming.py` 는 "옛 항목을 옮기는가" 를 보던 파일이었다. 지우면
+설정을 다루는 규칙 자체가 무방비가 된다. 대상만 바꿨다 — **재설치가 이미
+등록된 항목의 `--bundle-root` 와 `GEMINI_API_KEY` 를 보존하는가**, 남의 항목을
+건드리지 않는가, 백업을 만드는가. 이름만 같고 우리 것이 아닌 항목에 대해서는
+`ForeignEntryError` 를 던지는지 보게 했다.
+
+설치 프로그램 CI 도 같은 방향으로 고쳤다. 옛 `ytx` 항목을 심어 두고 옮겨졌는지
+보던 것을, 이전 경로의 `cueprecise` 항목을 심어 두고 새 실행 파일로 다시
+가리키면서 환경변수를 보존하는지 보게 했다.
+
+438 개가 통과한다.
+
+### 곁가지로 잡은 것
+
+세션 시작 로그에 `ytx (CONNECTION_CLOSED)` 가 떠 있었다. 스펙과 무관한 일로,
+`~/.claude.json` 의 MCP 등록이 리네임 전 경로 `C:/dev/ytx/src/mcp_server.py` 를
+가리키고 있었다. 항목을 `cueprecise` 로 다시 등록해 연결됐다.

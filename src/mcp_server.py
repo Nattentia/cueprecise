@@ -416,24 +416,11 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
-LEGACY_TOOL_PREFIX = "ytx_"
 TOOL_PREFIX = "cueprecise_"
-
-
-def canonical_tool_name(name: str) -> str:
-    """이전 이름(`ytx_*`)으로 부른 도구를 현재 이름으로 옮긴다.
-
-    tools/list 는 현재 이름만 알린다. 목록에 둘 다 실으면 호스트가 같은
-    도구를 두 번 보게 된다. 부르는 쪽만 받아 주면 호환에는 충분하다.
-    """
-    if name.startswith(LEGACY_TOOL_PREFIX):
-        return TOOL_PREFIX + name[len(LEGACY_TOOL_PREFIX):]
-    return name
 
 
 def dispatch(name: str, arguments: dict[str, Any], *, bundle_root: Path,
              api_key: str | None = None) -> dict[str, Any]:
-    name = canonical_tool_name(name)
     if name == "cueprecise_register":
         return tool_register(bundle_root, url=arguments["url"],
                              stages=arguments.get("stages"),
@@ -555,9 +542,6 @@ def main() -> int:
 
     # argparse의 --help도 비ASCII 문서를 출력하므로 파싱 전에 UTF-8로 고정한다.
     _force_utf8(sys.stdin, sys.stdout, sys.stderr)
-    if Path(sys.argv[0] or "").stem == "ytx-mcp":
-        print("주의: `ytx-mcp`는 이전 이름이며 계속 동작하지만, 앞으로는 "
-              "`cueprecise-mcp`를 사용하기 바란다.", file=sys.stderr)
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bundle-root", type=Path, default=Path("data"))

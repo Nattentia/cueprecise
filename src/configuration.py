@@ -45,16 +45,9 @@ SERVER_KEY = "cueprecise"
 # 서버 목록을 담는 최상위 키. 대부분의 앱이 이 이름을 쓰지만 VS Code 는
 # `servers` 를 쓴다. 그래서 상수로 두고 타깃마다 덮어쓸 수 있게 한다.
 DEFAULT_SERVERS_KEY = "mcpServers"
-# 0.1.0 까지 쓰던 항목 이름. 새 설치는 만들지 않고, 발견하면 SERVER_KEY 로 옮긴다.
-LEGACY_SERVER_KEYS = ("ytx",)
-# 0.1.0 까지 쓰던 기본 데이터 폴더. 발견하면 옮기지 않고 그대로 계속 쓴다.
-LEGACY_BUNDLE_DIRS = (".ytx",)
 
 # 이 프로그램이 만든 MCP 항목인지 판정할 때 쓰는 실행 파일 이름.
-MANAGED_COMMANDS = {
-    "cueprecise-mcp", "cueprecise-mcp.exe",
-    "ytx-mcp", "ytx-mcp.exe",
-}
+MANAGED_COMMANDS = {"cueprecise-mcp", "cueprecise-mcp.exe"}
 
 
 def default_claude_config() -> Path:
@@ -69,20 +62,9 @@ def default_claude_config() -> Path:
 def default_bundle_root(home: Path | None = None) -> Path:
     """번들을 쌓을 기본 디렉터리.
 
-    이름이 바뀌었다고 사용자의 분석 자료를 옮기지 않는다. 옮기는 순간
-    중간에 실패하면 되돌릴 수 없고, 얻는 것은 폴더 이름뿐이다. 그래서
-    `~/.ytx/data` 가 이미 있으면 그것을 계속 쓰고, 없을 때만 새 이름으로
-    만든다. 사용자는 `--bundle-root` 로 언제든 직접 지정할 수 있다.
+    사용자는 `--bundle-root` 로 언제든 직접 지정할 수 있다.
     """
-    base = home or Path.home()
-    current = base / ".cueprecise" / "data"
-    if current.is_dir():
-        return current
-    for legacy in LEGACY_BUNDLE_DIRS:
-        candidate = base / legacy / "data"
-        if candidate.is_dir():
-            return candidate
-    return current
+    return (home or Path.home()) / ".cueprecise" / "data"
 
 
 def read_config(path: Path) -> dict[str, Any]:
@@ -158,14 +140,13 @@ def is_managed_server(entry: Any) -> bool:
 
 def find_managed_entry(config: dict[str, Any],
                        servers_key: str = DEFAULT_SERVERS_KEY) -> tuple[str, dict[str, Any]] | None:
-    """설정에서 이 프로그램이 만든 MCP 항목을 찾는다. 새 이름을 먼저 본다."""
+    """설정에서 이 프로그램이 만든 MCP 항목을 찾는다."""
     servers = config.get(servers_key)
     if not isinstance(servers, dict):
         return None
-    for key in (SERVER_KEY, *LEGACY_SERVER_KEYS):
-        entry = servers.get(key)
-        if is_managed_server(entry):
-            return key, entry
+    entry = servers.get(SERVER_KEY)
+    if is_managed_server(entry):
+        return SERVER_KEY, entry
     return None
 
 
@@ -178,16 +159,6 @@ def bundle_root_of(entry: dict[str, Any]) -> Path | None:
         if item == "--bundle-root" and index + 1 < len(arguments):
             return Path(str(arguments[index + 1]))
     return None
-
-
-def _take_legacy_entry(servers: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
-    """레거시 항목이 우리 것이면 떼어내고 그 설정을 돌려준다."""
-    for key in LEGACY_SERVER_KEYS:
-        entry = servers.get(key)
-        if is_managed_server(entry):
-            del servers[key]
-            return entry, key
-    return None, None
 
 
 def _inherited_environment(*sources: Any) -> dict[str, str]:
@@ -220,15 +191,14 @@ def setup_file_client(config_path: Path, bundle_root: Path, *, api_key: str | No
     if existing is not None and not is_managed_server(existing):
         raise ForeignEntryError(
             f"이미 `{SERVER_KEY}` 라는 남의 항목이 있다. 건드리지 않는다: {config_path}")
-    legacy, legacy_key = _take_legacy_entry(servers)
 
     server: dict[str, Any] = {
         "command": server_command,
         "args": [*server_args, "--bundle-root", str(bundle_root.resolve())],
     }
-    # 이전 항목의 환경변수를 물려받는다. 새 키를 주지 않아도 이미 저장된
+    # 이미 저장된 환경변수를 물려받는다. 새 키를 주지 않아도 이미 저장된
     # GEMINI_API_KEY 가 사라지면 안 된다.
-    environment = _inherited_environment(legacy, existing)
+    environment = _inherited_environment(existing)
     environment.update(extra_env or {})
     if api_key:
         environment["GEMINI_API_KEY"] = api_key
@@ -241,8 +211,7 @@ def setup_file_client(config_path: Path, bundle_root: Path, *, api_key: str | No
     return {"config": str(config_path), "bundle_root": str(bundle_root.resolve()),
             "backup": str(backup) if backup else None,
             "api_key_configured": bool(environment.get("GEMINI_API_KEY")),
-            "server_key": SERVER_KEY,
-            "migrated_from": legacy_key}
+            "server_key": SERVER_KEY}
 
 
 def remove_file_client(config_path: Path,
@@ -252,8 +221,7 @@ def remove_file_client(config_path: Path,
     servers = value.get(servers_key)
     if not isinstance(servers, dict):
         return {"changed": False, "config": str(config_path), "backup": None, "removed": []}
-    removed = [key for key in (SERVER_KEY, *LEGACY_SERVER_KEYS)
-               if is_managed_server(servers.get(key))]
+    removed = [SERVER_KEY] if is_managed_server(servers.get(SERVER_KEY)) else []
     if not removed:
         return {"changed": False, "config": str(config_path), "backup": None, "removed": []}
     for key in removed:
@@ -403,9 +371,7 @@ class CliClientTarget(ClientTarget):
         return {"config": str(path), "bundle_root": str(bundle_root.resolve()),
                 "backup": str(backup) if backup else None,
                 "api_key_configured": bool(environment.get("GEMINI_API_KEY")),
-                "server_key": SERVER_KEY,
-                # 0.1.0 은 Claude Desktop 에만 썼다. 여기에 옛 항목은 있을 수 없다.
-                "migrated_from": None}
+                "server_key": SERVER_KEY}
 
     def remove(self, config_path: Path | None = None) -> dict[str, Any]:
         path = config_path or self.locate_config()
@@ -539,7 +505,7 @@ class VsCodeTarget(CliClientTarget):
         return {"config": str(path), "bundle_root": str(bundle_root.resolve()),
                 "backup": str(backup) if backup else None,
                 "api_key_configured": bool(environment.get("GEMINI_API_KEY")),
-                "server_key": SERVER_KEY, "migrated_from": None}
+                "server_key": SERVER_KEY}
 
     def remove(self, config_path: Path | None = None) -> dict[str, Any]:
         return remove_file_client(config_path or self.locate_config(), self.servers_key)

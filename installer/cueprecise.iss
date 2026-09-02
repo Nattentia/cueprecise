@@ -4,8 +4,8 @@
 #define MyAppURL "https://github.com/Nattentia/cueprecise"
 
 [Setup]
-; AppId 는 0.1.0 과 같은 값을 유지한다. 이 값이 바뀌면 기존 ytx 설치가
-; 지워지지 않고 별개의 프로그램으로 남는다.
+; AppId 는 바꾸지 않는다. 이 값이 바뀌면 기존 설치가 지워지지 않고 별개의
+; 프로그램으로 남는다.
 AppId={{E5118050-5C8A-47D9-8A61-A4A94C6298ED}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
@@ -30,13 +30,10 @@ ArchitecturesInstallIn64BitMode=x64compatible
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
-; 0.1.0(ytx) 위에 덮어 설치할 때 남는 옛 이름의 파일과 시작 메뉴 항목을 지운다.
-; 아래 [Run] 의 --migrate 가 Claude 설정을 새 실행 파일로 먼저 옮기므로 연결은
-; 끊기지 않는다.
+; 덮어 설치할 때 남는 이전 버전의 시작 메뉴 항목을 지운다. 아래 [Run] 의
+; --migrate 가 Claude 설정을 새 실행 파일로 먼저 옮기므로 연결은 끊기지 않는다.
 [InstallDelete]
-Type: files; Name: "{app}\ytx-mcp.exe"
-Type: files; Name: "{app}\ytx-onboarding.exe"
-Type: filesandordirs; Name: "{autoprograms}\ytx"
+Type: filesandordirs; Name: "{autoprograms}\CuePrecise"
 
 [Files]
 Source: "..\dist\windows\cueprecise-mcp.exe"; DestDir: "{app}"; Flags: ignoreversion

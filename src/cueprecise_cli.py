@@ -23,9 +23,6 @@ def _force_utf8(*streams: Any) -> None:
                 pass
 
 
-DEPRECATED_PROGRAMS = {"ytx", "ytx-mcp"}
-
-
 def default_claude_config() -> Path:
     return configuration.default_claude_config()
 
@@ -36,17 +33,6 @@ def default_bundle_root() -> Path:
 
 def program_name(argv0: str | None = None) -> str:
     return Path(argv0 or sys.argv[0] or "cueprecise").stem
-
-
-def warn_if_deprecated_alias(argv0: str | None = None) -> str | None:
-    """옛 이름으로 실행하면 계속 동작하되 새 이름을 알린다."""
-    name = program_name(argv0)
-    if name not in DEPRECATED_PROGRAMS:
-        return None
-    replacement = "cueprecise-mcp" if name == "ytx-mcp" else "cueprecise"
-    print(f"주의: `{name}`는 이전 이름이며 계속 동작하지만, 앞으로는 "
-          f"`{replacement}`를 사용하기 바란다.", file=sys.stderr)
-    return name
 
 
 def _read_config(path: Path) -> dict[str, Any]:
@@ -63,7 +49,6 @@ def setup_claude(config_path: Path, bundle_root: Path, *, api_key: str | None,
                  extra_env: dict[str, str] | None = None) -> dict[str, Any]:
     """Claude Desktop 설정에 CuePrecise를 idempotent하게 등록한다.
 
-    이전 이름(`ytx`) 항목이 있으면 API 키를 포함한 설정을 물려받아 옮기고,
     다른 MCP 서버 설정은 그대로 둔다.
     """
     if server_command is None:
@@ -117,9 +102,6 @@ def doctor(config_path: Path) -> tuple[dict[str, Any], bool]:
         servers = config.get("mcpServers", {})
         servers = servers if isinstance(servers, dict) else {}
         checks["claude_config"]["ok"] = configuration.SERVER_KEY in servers
-        legacy = [key for key in configuration.LEGACY_SERVER_KEYS if key in servers]
-        if legacy:
-            checks["claude_config"]["legacy_entries"] = legacy
     except SystemExit as error:
         checks["claude_config"]["error"] = str(error)
     checks["clients"] = client_report()
@@ -170,11 +152,6 @@ def _setup_main(argv: list[str]) -> int:
     print(json.dumps({"connected": connected, "failed": failed}, ensure_ascii=False, indent=2))
     if not key:
         print("주의: GEMINI_API_KEY가 없어 전사 기능은 키를 설정할 때까지 동작하지 않는다.", file=sys.stderr)
-    for item in connected:
-        if item.get("migrated_from"):
-            print(f"{item['label']}: 이전 `{item['migrated_from']}` 항목을 "
-                  f"`{item['server_key']}`로 옮겼다. 저장돼 있던 설정은 그대로 유지된다.",
-                  file=sys.stderr)
     for item in failed:
         print(f"{item['label']}: {item['reason']}", file=sys.stderr)
     if not connected:
@@ -196,7 +173,6 @@ def _doctor_main(argv: list[str]) -> int:
 
 def main() -> int:
     _force_utf8(sys.stdin, sys.stdout, sys.stderr)
-    warn_if_deprecated_alias()
     argv = sys.argv[1:]
     if argv and argv[0] == "setup":
         return _setup_main(argv[1:])
@@ -216,9 +192,7 @@ CuePrecise — Find the exact moment in any YouTube video.
   status            작업 상태와 사용량 조회
   purge             파생 자료 또는 원본 삭제
 
-각 명령의 도움말: cueprecise <command> --help
-
-`ytx`, `ytx-mcp`는 이전 이름이며 호환을 위해 계속 동작한다.""")
+각 명령의 도움말: cueprecise <command> --help""")
         return 0
     if argv[0] not in {"run", "status", "purge"}:
         print(f"알 수 없는 명령: {argv[0]}", file=sys.stderr)

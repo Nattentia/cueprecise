@@ -110,16 +110,6 @@ local configuration; CuePrecise does not send it to a project-operated server.
 > **Unsigned preview:** `v0.2.0` is a prerelease for SignPath Foundation review. Windows may
 > display an unknown-publisher warning until code signing is approved.
 
-### Upgrading from `ytx`
-
-CuePrecise was originally named `ytx`. Existing users can install the new version over the old one.
-
-- The installer migrates the managed `ytx` Claude entry to `cueprecise` while preserving its API
-  key and making a configuration backup.
-- Other MCP server entries are left untouched.
-- Existing `~/.ytx/data` analysis remains in place and continues to work.
-- Legacy commands and MCP tool names remain available as compatibility aliases.
-
 ### macOS, Linux, and command-line installation
 
 With [`uv`](https://docs.astral.sh/uv/getting-started/installation/):
@@ -297,8 +287,8 @@ python -m pip install -r requirements-optional.txt  # optional OCR and timezone 
 ```
 
 The installable distribution is `cueprecise-mcp`; its primary commands are `cueprecise` and
-`cueprecise-mcp`. The old `ytx` commands remain deprecated compatibility aliases. The package has
-not been published to PyPI yet, so install from the GitHub URL shown above.
+`cueprecise-mcp`. The package has not been published to PyPI yet, so install from the GitHub URL
+shown above.
 
 ## Tests
 

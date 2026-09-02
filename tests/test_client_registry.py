@@ -851,11 +851,10 @@ class RealLaunchTest(unittest.TestCase):
 
 
 class ManagedJudgementTest(unittest.TestCase):
-    """우리 항목은 0.1.0 부터 예외 없이 `--bundle-root` 를 달고 있다."""
+    """우리 항목은 예외 없이 `--bundle-root` 를 달고 있다."""
 
     def test_bundled_executable_is_ours(self) -> None:
         self.assertTrue(configuration.is_managed_server({"command": "cueprecise-mcp.exe"}))
-        self.assertTrue(configuration.is_managed_server({"command": "ytx-mcp.exe"}))
 
     def test_our_source_entry_is_ours(self) -> None:
         self.assertTrue(configuration.is_managed_server(

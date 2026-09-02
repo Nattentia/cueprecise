@@ -14,11 +14,10 @@ import configuration
 
 API_KEY_PATTERN = re.compile(r"^AIza[0-9A-Za-z_-]{30,}$")
 
-# 번들 MCP 서버 실행 파일. 앞의 것을 먼저 찾고, 없으면 이전 이름으로 설치된
-# 0.1.0 위에 덮어 설치된 경우를 위해 뒤의 것을 본다.
-SERVER_EXECUTABLES = ("cueprecise-mcp.exe", "ytx-mcp.exe")
-# initialize 응답의 serverInfo.name 허용값. 이전 이름도 받아 준다.
-SERVER_NAMES = {"cueprecise", "ytx"}
+# 번들 MCP 서버 실행 파일.
+SERVER_EXECUTABLES = ("cueprecise-mcp.exe",)
+# initialize 응답의 serverInfo.name 허용값.
+SERVER_NAMES = {"cueprecise"}
 
 
 def _bundled_server(install_dir: Path) -> Path | None:
@@ -175,7 +174,7 @@ def connect(api_key: str, install_dir: Path, *,
 
 
 def migrate(install_dir: Path, config_path: Path | None = None) -> dict[str, Any]:
-    """이미 연결돼 있던 설정만 새 이름으로 옮긴다.
+    """이미 연결돼 있던 설정을 이번에 설치한 실행 파일로 다시 가리킨다.
 
     설치 프로그램이 조용히 부른다. 네트워크를 쓰지 않고 사용자에게 아무것도
     묻지 않으며, 연결된 적이 없으면 아무 일도 하지 않는다. API 키를 포함한
@@ -207,7 +206,7 @@ def migrate(install_dir: Path, config_path: Path | None = None) -> dict[str, Any
 def disconnect(config_path: Path | None = None) -> dict[str, Any]:
     """Claude 설정에서 이 프로그램이 만든 항목만 제거한다.
 
-    CuePrecise 항목과 이전 이름(ytx) 항목을 모두 지우되, 같은 이름을 쓰는
+    CuePrecise 항목을 지우되, 같은 이름을 쓰는
     남의 항목과 다른 MCP 서버는 건드리지 않는다. 영상 데이터와 FFmpeg도
     그대로 둔다.
     """

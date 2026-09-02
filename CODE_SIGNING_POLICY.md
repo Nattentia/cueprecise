@@ -5,9 +5,8 @@ Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 관련 서비스: [SignPath.io](https://signpath.io/) ·
 [SignPath Foundation](https://signpath.org/)
 
-이 프로젝트는 2026-09-01에 이름을 `ytx`에서 **CuePrecise**로 바꿨다. 저장소는
-`https://github.com/Nattentia/cueprecise`이고 설치 파일 이름은 `cueprecise-setup.exe`다.
-서명 정책과 절차, 담당자는 이름 변경 전후로 같다.
+저장소는 `https://github.com/Nattentia/cueprecise`이고 설치 파일 이름은
+`cueprecise-setup.exe`다.
 
 ## 서명 대상과 절차
 

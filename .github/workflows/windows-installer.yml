@@ -59,19 +59,20 @@ jobs:
           $installDir = Join-Path $sandbox "Programs\CuePrecise"
           New-Item -ItemType Directory -Force -Path $claude | Out-Null
 
-          # 0.1.0 을 쓰던 사용자의 설정을 흉내낸다.
-          $legacy = @{
+          # 이미 등록해 둔 사용자의 설정을 흉내낸다. 재설치가 저장된
+          # 환경변수와 남의 항목을 보존하는지 본다.
+          $existing = @{
             theme = "dark"
             mcpServers = @{
-              ytx = @{
-                command = "C:/Legacy/ytx/ytx-mcp.exe"
-                args = @("--bundle-root", (Join-Path $sandbox "legacydata"))
+              cueprecise = @{
+                command = "C:/Old/CuePrecise/cueprecise-mcp.exe"
+                args = @("--bundle-root", (Join-Path $sandbox "olddata"))
                 env = @{ GEMINI_API_KEY = $key; PATH = "C:/ffmpeg/bin" }
               }
               other = @{ command = "keep-me"; args = @("--serve") }
             }
           }
-          $legacy | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $config -Encoding utf8
+          $existing | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $config -Encoding utf8
 
           $env:APPDATA = $appdata
           $setup = (Resolve-Path "dist/windows/cueprecise-setup.exe").Path
@@ -90,7 +91,6 @@ jobs:
           $saved = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
           $names = $saved.mcpServers.PSObject.Properties.Name
           if ($names -notcontains "cueprecise") { throw "cueprecise 항목이 만들어지지 않았다" }
-          if ($names -contains "ytx") { throw "옛 ytx 항목이 남았다" }
           if ($saved.mcpServers.cueprecise.env.GEMINI_API_KEY -ne $key) { throw "API 키가 보존되지 않았다" }
           if ($saved.mcpServers.other.command -ne "keep-me") { throw "다른 MCP 설정이 훼손됐다" }
           if ($saved.theme -ne "dark") { throw "다른 설정이 훼손됐다" }

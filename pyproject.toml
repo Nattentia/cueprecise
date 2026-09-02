@@ -34,9 +34,6 @@ Issues = "https://github.com/Nattentia/cueprecise/issues"
 [project.scripts]
 cueprecise = "cueprecise_cli:main"
 cueprecise-mcp = "mcp_server:main"
-# 0.1.0 의 ytx 사용자가 계속 실행할 수 있도록 남긴 deprecated 별칭이다.
-ytx = "cueprecise_cli:main"
-ytx-mcp = "mcp_server:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

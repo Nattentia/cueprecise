@@ -283,7 +283,6 @@ gh pr list
 - 설치형 진입점 `cueprecise run|status|purge`는 기존 `python src/pipeline.py`와 같은 CLI
   계약을 제공한다. `cueprecise-mcp`는 기존 `python src/mcp_server.py`와 같은 stdio MCP
   계약을 제공한다.
-- 이전 이름 `ytx`, `ytx-mcp`는 같은 진입점을 가리키는 별칭으로 계속 등록한다 (15절).
 - 기존 `python src/*.py` 단일 파일 실행 경로는 설치형 진입점과 함께 유지한다.
 
 ## 7. job.json — 장기 작업 manifest
@@ -455,8 +454,8 @@ data/<video_id>/
 ## 12. pipeline과 MCP 완료 조건
 
 `pipeline.py`는 각 단계를 독립적으로 재실행할 수 있게 조정하고 JSON 파일로만
-연결한다. MCP 도구 이름은 `cueprecise_` 접두사를 쓰며, 이전 접두사 `ytx_` 로 부른
-호출도 같은 도구로 받는다 (15절). `mcp_server.py`는 최소 다음 동작을 제공한다.
+연결한다. MCP 도구 이름은 `cueprecise_` 접두사를 쓴다. `mcp_server.py`는 최소
+다음 동작을 제공한다.
 
 - 영상 등록/분석 시작
 - 작업 상태와 로컬 Gemini 사용량 추정 조회
@@ -558,7 +557,7 @@ data/<video_id>/
 마크다운이고, **첫 줄이 지문 주석이다.**
 
 ```text
-<!-- ytx-summary: {"chapters_fingerprint":"sha256:...","generation":"local-extractive","schema_version":1,"transcript_fingerprint":"sha256:...","video_id":"87DyyMV0kCY"} -->
+<!-- cueprecise-summary: {"chapters_fingerprint":"sha256:...","generation":"local-extractive","schema_version":1,"transcript_fingerprint":"sha256:...","video_id":"87DyyMV0kCY"} -->
 
 # 영상 제목
 
@@ -581,7 +580,7 @@ data/<video_id>/
 - **용어**: 뜻 [00:12:16]
 ```
 
-- 주석은 `<!-- ytx-summary:` 로 시작하고 ` -->` 로 끝난다. JSON은 키 정렬,
+- 주석은 `<!-- cueprecise-summary:` 로 시작하고 ` -->` 로 끝난다. JSON은 키 정렬,
   공백 없음.
 - **지문 두 개가 요약의 신선도를 판정한다.** `transcript_fingerprint`가 현재
   전사와 다르거나 `chapters_fingerprint`가 현재 챕터와 다르면 그 요약은 낡은
@@ -607,37 +606,35 @@ data/<video_id>/
 파일로 보관하던 시절의 `derived/summary.md`는 읽기만 지원한다. 새로 만들지
 않는다.
 
-## 15. 이름 이전 — CuePrecise
+## 15. 이름 — CuePrecise
 
-2026-09-01, 프로젝트 이름을 `ytx`에서 **CuePrecise**로 바꿨다. 기능은 바꾸지
-않는다. 아래는 **이미 쓰고 있던 사용자를 깨뜨리지 않기 위한 절대 규칙**이다.
+2026-09-01 에 이름을 CuePrecise 로 바꿨고, 2026-09-03 에 옛 이름 호환 표면을
+전부 걷어냈다. 옛 이름은 저장소 어디에도 남기지 않는다. 아래는 이름과 설치
+표면에 대한 규칙이다.
 
-### 유지해야 하는 것
+### 고정된 것
 
-- **MCP 도구 별칭.** `dispatch` 는 `ytx_*` 를 `cueprecise_*` 로 옮겨 받는다.
-  `tools/list` 는 새 이름만 알린다. 목록에 둘 다 실으면 호스트가 같은 도구를
-  두 번 본다.
-- **실행 명령 별칭.** `ytx`, `ytx-mcp` 진입점을 계속 등록한다. 실행하면
-  stderr 로 새 이름을 안내하되 동작은 같다.
-- **설치 프로그램 AppId.** Inno Setup 의 `AppId` GUID 는 0.1.0 과 같은 값을
-  유지한다. 바꾸면 기존 설치가 지워지지 않고 별개 프로그램으로 남는다.
-- **요약 표식.** `summary.py` 의 `META_PREFIX` 는 `<!-- ytx-summary:` 그대로
-  둔다. 바꾸면 0.1.0 이 만든 요약을 읽지 못한다 (14절). 사용자에게 보이지
-  않는 내부 표식이다.
-- **데이터 폴더.** `~/.ytx/data` 가 이미 있으면 그것을 계속 쓴다. 이름 때문에
-  사용자 자료를 옮기지 않는다. 새 설치만 `~/.cueprecise/data` 를 만든다.
-  판정은 `configuration.default_bundle_root()` 하나가 한다.
+- **이름은 하나다.** 실행 명령은 `cueprecise`, `cueprecise-mcp`. MCP 도구
+  접두사는 `cueprecise_`. 설정 항목 이름은 `cueprecise`. 별칭은 두지 않는다.
+- **설치 프로그램 AppId.** Inno Setup 의 `AppId` GUID 는 바꾸지 않는다. 바꾸면
+  기존 설치가 지워지지 않고 별개 프로그램으로 남는다.
+- **요약 표식.** `summary.py` 의 `META_PREFIX` 는 `<!-- cueprecise-summary:` 다
+  (14절). 사용자에게 보이지 않는 내부 표식이다. 바꾸면 이미 저장된 요약을
+  읽지 못하므로, 바꿀 때는 기존 번들의 `summary.md` 와 색인
+  `metadata.summary` 를 함께 고쳐야 한다.
+- **데이터 폴더.** `~/.cueprecise/data`. 판정은
+  `configuration.default_bundle_root()` 하나가 한다.
 
 ### Claude Desktop 설정
 
-- 새 항목 이름은 `cueprecise` 다. `configuration.SERVER_KEY` 가 유일한 진실이다.
-- 기존 `ytx` 항목을 발견하면 **환경변수를 물려받아** 옮기고 옛 키를 지운다.
+- 항목 이름은 `cueprecise` 다. `configuration.SERVER_KEY` 가 유일한 진실이다.
+- 재설치는 이미 등록된 항목의 `--bundle-root` 와 환경변수를 물려받는다.
   키를 새로 주지 않아도 저장돼 있던 `GEMINI_API_KEY` 가 사라지면 안 된다.
-- 옮긴 뒤 두 항목이 함께 남으면 안 된다. 같은 서버가 두 번 뜬다.
+- 같은 서버 항목이 둘 남으면 안 된다. 같은 서버가 두 번 뜬다.
 - **우리가 만든 항목만 만진다.** `configuration.is_managed_server()` 가
   판정한다. 다른 MCP 서버 설정은 읽지도 지우지도 덮어쓰지도 않는다.
+  이름만 같고 우리 것이 아닌 항목은 건드리지 않는다.
 - 설정을 바꾸기 전에 항상 백업 파일을 만든다.
-- 제거 프로그램은 `cueprecise` 와 `ytx` 중 우리가 만든 항목만 지운다.
 
 ### 버전
 
