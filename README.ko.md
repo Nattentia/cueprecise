@@ -115,6 +115,7 @@ Python이나 Git을 설치하거나 명령어를 입력할 필요가 없다. 필
 > 저장소의 Releases에서 받은 파일만 사용한다.
 
 
+
 ### macOS·Linux 또는 명령어 설치
 
 [`uv`](https://docs.astral.sh/uv/getting-started/installation/)가 있으면 저장소를 직접
