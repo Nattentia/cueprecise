@@ -234,12 +234,11 @@ class InstallerMetadataTest(unittest.TestCase):
 
 
 class PolicyDocumentTest(unittest.TestCase):
-    def test_signpath_attribution_is_present_verbatim(self) -> None:
-        required = ("Free code signing provided by SignPath.io, "
-                    "certificate by SignPath Foundation")
-        for name in ("CODE_SIGNING_POLICY.md", "README.md"):
+    def test_unsigned_release_status_is_clear(self) -> None:
+        for name in ("CODE_SIGNING_POLICY.md", "README.md", "README.ko.md"):
             with self.subTest(document=name):
-                self.assertIn(required, (ROOT / name).read_text(encoding="utf-8"))
+                text = (ROOT / name).read_text(encoding="utf-8").lower()
+                self.assertTrue("unsigned" in text or "서명되지" in text)
 
     def test_repository_links_point_at_the_new_name(self) -> None:
         for name in ("README.md", "SECURITY.md", "pyproject.toml"):

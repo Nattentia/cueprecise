@@ -1,22 +1,18 @@
 # Code signing policy — CuePrecise
 
-Free code signing provided by SignPath.io, certificate by SignPath Foundation.
-
-관련 서비스: [SignPath.io](https://signpath.io/) ·
-[SignPath Foundation](https://signpath.org/)
+현재 공개하는 Windows 파일은 디지털 서명되지 않았다. 사용자는 공식 GitHub Releases와
+함께 게시한 SHA-256 해시로 출처와 무결성을 확인할 수 있다.
 
 저장소는 `https://github.com/Nattentia/cueprecise`이고 설치 파일 이름은
 `cueprecise-setup.exe`다.
 
-## 서명 대상과 절차
+## 빌드와 배포 절차
 
 - 공식 Windows 실행 파일은 이 공개 저장소의 GitHub Actions에서만 빌드한다.
-- 서명 요청은 버전이 표시된 GitHub Release 후보에 대해서만 만든다.
-- 저장소 소유자가 빌드 출처와 검사 결과를 확인한 뒤 각 서명 요청을 승인한다.
-- CuePrecise가 직접 만든 실행 파일과 최종 설치 프로그램만 CuePrecise의 서명 대상으로
-  삼는다. 설치 프로그램에 포함되는 외부 오픈소스 구성 요소를 CuePrecise의 이름으로
-  다시 서명하지 않는다.
-- 서명된 파일은 GitHub Releases에서 배포하고 SHA-256 해시를 함께 게시한다.
+- 저장소 소유자가 빌드 출처와 검사 결과를 확인한 뒤 GitHub Release를 공개한다.
+- CuePrecise가 직접 만든 실행 파일과 설치 프로그램만 향후 코드 서명의 대상으로 삼는다.
+  포함된 외부 오픈소스 구성 요소를 CuePrecise의 이름으로 다시 서명하지 않는다.
+- 모든 Windows 배포 파일은 GitHub Releases에서 배포하고 SHA-256 해시를 함께 게시한다.
 
 ## 역할
 
