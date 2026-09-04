@@ -26,7 +26,8 @@ pwsh -File installer/mcpb/build_mcpb.ps1
 
 This creates `dist/mcpb/cueprecise-windows.mcpb`. The build downloads a pinned BtbN LGPL
 shared FFmpeg archive, verifies its SHA-256 hash, omits `ffplay`, and includes the applicable
-license and source/build links.
+license and source/build links. The MCP executable also contains yt-dlp; a small sibling shim
+preserves the existing subprocess interface without bundling a second Python runtime.
 
 ## Manual acceptance test
 

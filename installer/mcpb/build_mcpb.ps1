@@ -6,18 +6,22 @@ $stage = Join-Path $repo "build\mcpb\release"
 $server = Join-Path $stage "server"
 $licenses = Join-Path $stage "licenses"
 $windows = Join-Path $repo "dist\windows"
+$mcpbBin = Join-Path $repo "dist\mcpb-bin"
 
-& (Join-Path $PSScriptRoot "build_mcpb_poc.ps1")
-if ($LASTEXITCODE -ne 0) { throw "CuePrecise MCP executable build failed" }
+New-Item -ItemType Directory -Force -Path $mcpbBin | Out-Null
+& uv run --with pyinstaller pyinstaller --noconfirm --clean --onefile --console `
+    --name "cueprecise-mcp" --distpath $mcpbBin `
+    --workpath (Join-Path $repo "build\pyinstaller\cueprecise-mcpb") `
+    --specpath (Join-Path $repo "build\spec") `
+    --paths (Join-Path $repo "src") --hidden-import google.genai --collect-all yt_dlp `
+    (Join-Path $PSScriptRoot "mcpb_entrypoint.py")
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed: integrated CuePrecise MCP" }
 
-if (-not (Test-Path -LiteralPath (Join-Path $windows "yt-dlp.exe"))) {
-    & uv run --with pyinstaller pyinstaller --noconfirm --clean --onefile --console `
-        --name "yt-dlp" --distpath $windows `
-        --workpath (Join-Path $repo "build\pyinstaller\yt-dlp") `
-        --specpath (Join-Path $repo "build\spec") --collect-all yt_dlp `
-        (Join-Path $repo "installer\yt_dlp_launcher.py")
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed: yt-dlp" }
-}
+$csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+if (-not (Test-Path -LiteralPath $csc -PathType Leaf)) { throw "C# compiler not found: $csc" }
+& $csc /nologo /optimize+ /target:exe `
+    "/out:$(Join-Path $mcpbBin 'yt-dlp.exe')" (Join-Path $PSScriptRoot "yt_dlp_shim.cs")
+if ($LASTEXITCODE -ne 0) { throw "C# compiler failed: yt-dlp shim" }
 
 $ffmpegTag = "autobuild-2026-09-03-13-17"
 $ffmpegAsset = "ffmpeg-N-126390-g9fc8c785e2-win64-lgpl-shared.zip"
@@ -51,8 +55,8 @@ if (Test-Path -LiteralPath $stage) {
 }
 New-Item -ItemType Directory -Force -Path $server, $licenses, $dist | Out-Null
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "manifest.json") -Destination (Join-Path $stage "manifest.json")
-Copy-Item -LiteralPath (Join-Path $windows "cueprecise-mcp.exe") -Destination $server
-Copy-Item -LiteralPath (Join-Path $windows "yt-dlp.exe") -Destination $server
+Copy-Item -LiteralPath (Join-Path $mcpbBin "cueprecise-mcp.exe") -Destination $server
+Copy-Item -LiteralPath (Join-Path $mcpbBin "yt-dlp.exe") -Destination $server
 Get-ChildItem -LiteralPath $ffmpegBin -File | Where-Object { $_.Name -ne "ffplay.exe" } | Copy-Item -Destination $server
 Copy-Item -LiteralPath $ffmpegLicense -Destination (Join-Path $licenses "FFmpeg-LICENSE.txt")
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "THIRD_PARTY_NOTICES.md") -Destination $licenses
