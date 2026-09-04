@@ -67,6 +67,9 @@ jobs:
         run: |
           ./dist/windows/cueprecise-mcp.exe --help
           ./dist/windows/yt-dlp.exe --version
+          ./build/mcpb/release/server/yt-dlp.exe --version
+          ./build/mcpb/release/server/ffmpeg.exe -version
+          ./build/mcpb/release/server/ffprobe.exe -version
       # 설치 프로그램이 실제로 하는 일을 격리된 임시 위치에서 확인한다.
       # APPDATA 를 이 단계에서만 바꿔 진짜 Claude 설정과 시작 메뉴는 건드리지 않는다.
       - name: Silent install, migrate and uninstall

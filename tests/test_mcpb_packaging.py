@@ -51,6 +51,19 @@ class McpbPackagingTest(unittest.TestCase):
         self.assertIn("github.com/yt-dlp/yt-dlp", notices)
         self.assertIn("github.com/BtbN/FFmpeg-Builds", notices)
 
+    def test_release_bundle_integrates_yt_dlp_without_a_second_pyinstaller_app(self):
+        script = (ROOT / "installer" / "mcpb" / "build_mcpb.ps1").read_text(
+            encoding="utf-8"
+        )
+        entrypoint = (ROOT / "installer" / "mcpb" / "mcpb_entrypoint.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("--collect-all yt_dlp", script)
+        self.assertIn("yt_dlp_shim.cs", script)
+        self.assertNotIn('PyInstaller failed: yt-dlp', script)
+        self.assertIn('sys.argv[1] == "--yt-dlp"', entrypoint)
+
 
 if __name__ == "__main__":
     unittest.main()
