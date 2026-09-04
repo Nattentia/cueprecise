@@ -111,3 +111,25 @@ visual, diarization, render는 opt-in으로 전환한다. summary는 PR #22에�
 **왜:** 영상 다운로드와 프레임 처리가 가장 큰 불필요 비용이고, 화자 구분과 자막
 파일은 전체 요약·원문 검색의 필수 조건이 아니다. 반면 완료 청크 자동 삭제는 raw
 삭제를 명시적으로만 허용한 계약에 어긋나므로 제외하고 수동 purge를 유지한다.
+
+## 2026-09-04 · Claude 원클릭 후보는 Python형이 아닌 binary MCPB로 검증
+
+**무엇:** `cueprecise-mcp.exe`와 manifest만 담는 Windows 전용 MCPB PoC를 만든다.
+Gemini 키는 MCPB의 `sensitive` 사용자 설정으로 받고 환경 변수로만 서버에 전달한다.
+FFmpeg, yt-dlp, 온보딩 프로그램과 기존 설치 프로그램은 이 PoC에 포함하지 않는다.
+
+**확인된 것:** 공식 MCPB CLI의 manifest 검증과 bundle 정보 읽기를 통과했다. 서명되지
+않은 PyInstaller 실행 파일은 Python 없이 MCP 초기화, 도구 목록, 기존 자료 상태 조회를
+수행했다. 인터넷 영역 표시(ZoneId=3)를 붙인 MCPB를 Windows `Expand-Archive`로 풀면
+내부 EXE에는 영역 표시가 전파되지 않았다. 이는 일반 ZIP 해제 동작에 대한 증거이며,
+Claude Desktop 자체 해제기가 같은지에 대한 최종 증거는 아니다.
+
+**Claude 실기 확인:** Claude Desktop 1.40609.1.0에서 인터넷 영역 표시가 붙은 MCPB를
+설치·활성화했으며 SmartScreen은 나타나지 않았다. 설치된 미서명 EXE에도
+`Zone.Identifier`가 없었다. `sensitive` canary 값은 Claude 데이터 폴더의 평문 검색에서
+발견되지 않았고 설정 파일에는 `__encrypted__:` 값으로 저장됐다. 확장 제거 후 실행 파일
+디렉터리와 설정 파일이 모두 삭제됐고, canary의 평문 흔적도 발견되지 않았다.
+
+**남은 판정:** 서버 프로세스에 복호화된 키가 환경 변수로만 전달되는지를 별도로 확인한다.
+새 영상 수집은 yt-dlp/FFmpeg 배포 결정을 하기 전까지 지원 완료로 간주하지 않는다. 이
+항목들이 통과하기 전에는 MCPB를 공식 릴리스에 올리지 않는다.
