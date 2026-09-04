@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -48,6 +49,69 @@ DEFAULT_SERVERS_KEY = "mcpServers"
 
 # 이 프로그램이 만든 MCP 항목인지 판정할 때 쓰는 실행 파일 이름.
 MANAGED_COMMANDS = {"cueprecise-mcp", "cueprecise-mcp.exe"}
+
+# 이 이름의 환경변수는 값이 비밀이다. 화면에 내보내기 전에 지운다.
+SECRET_ENV_NAMES = ("GEMINI_API_KEY",)
+
+REDACTED = "***"
+# 값을 모르는 자리에서 쓰는 그물. `AIza` 로 시작하는 옛 Google API 키를 잡는다.
+# **이것만 믿으면 안 된다.** 2026 년부터 발급되는 Google Auth 키는 이 접두사를
+# 쓰지 않아 이 그물에 걸리지 않는다. 그래서 `mask_secrets` 는 값을 아는 자리에서
+# 값 자체를 함께 받아 지운다. 생김새는 마지막 보루일 뿐이다.
+SECRET_PATTERN = re.compile(r"AIza[0-9A-Za-z_-]{30,}")
+
+
+def mask_secrets(text: str, *secrets: str | None) -> str:
+    """비밀값을 지운 문자열을 돌려준다.
+
+    CLI 는 실패하면서 자기가 받은 명령줄을 그대로 되뱉는 일이 있다. 그 명령줄에는
+    `-e GEMINI_API_KEY=<키>` 가 들어 있으므로, 실패 메시지를 그대로 사용자 화면에
+    올리면 키가 함께 올라간다.
+
+    **자르기 전에 지워야 한다.** 먼저 자르면 키가 중간에서 끊겨 남는데, 끊긴
+    조각은 이 함수의 그물에도 걸리지 않으면서 앞부분은 그대로 노출된다.
+    """
+    for secret in secrets:
+        # 짧은 값으로 바꾸면 멀쩡한 글자가 통째로 사라져 메시지를 읽을 수 없게
+        # 된다. 빈 문자열이면 모든 위치에 끼어든다.
+        if secret and len(secret) >= 8:
+            text = text.replace(secret, REDACTED)
+    return SECRET_PATTERN.sub(REDACTED, text)
+
+
+def secrets_of(environment: dict[str, str] | None) -> tuple[str, ...]:
+    """환경변수 묶음에서 비밀값만 뽑는다. `mask_secrets` 에 그대로 넘긴다."""
+    if not environment:
+        return ()
+    return tuple(value for name in SECRET_ENV_NAMES
+                 if (value := environment.get(name)))
+
+
+def _secrets_in(arguments: Iterable[str]) -> tuple[str, ...]:
+    """명령줄 인자에 실린 비밀값을 되찾는다.
+
+    실패 메시지를 만드는 자리에서는 원래 값이 손에 없다. 그러나 우리가 그 명령줄을
+    만들었으므로 거기서 다시 읽어낼 수 있다. 두 가지 꼴이 있다 — 앱 CLI 가 받는
+    `NAME=<값>` 과, VS Code 가 받는 `--add-mcp <JSON>` 의 `env` 안이다.
+    """
+    found: list[str] = []
+    for argument in arguments:
+        for name in SECRET_ENV_NAMES:
+            if name not in argument:
+                continue
+            marker = f"{name}="
+            if marker in argument:
+                found.append(argument.split(marker, 1)[1])
+                continue
+            try:
+                payload = json.loads(argument)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(payload, dict):
+                value = (payload.get("env") or {}).get(name)
+                if isinstance(value, str):
+                    found.append(value)
+    return tuple(found)
 
 
 def default_claude_config() -> Path:
@@ -341,7 +405,12 @@ class CliClientTarget(ClientTarget):
             return subprocess.run([executable, *arguments], capture_output=True,
                                   text=True, timeout=60, env=environment)
         except (OSError, subprocess.TimeoutExpired) as error:
-            raise ConfigurationError(f"{self.label} 명령을 실행하지 못했다: {error}") from error
+            # `TimeoutExpired` 는 자기 문자열에 **명령줄 전체**를 담는다. 그 안에는
+            # `-e GEMINI_API_KEY=<키>` 가 들어 있다. 여기서 지우지 않으면 시간 초과
+            # 한 번에 키가 사용자 화면으로 나온다.
+            raise ConfigurationError(
+                f"{self.label} 명령을 실행하지 못했다: "
+                f"{mask_secrets(str(error), *_secrets_in(arguments))}") from error
 
     def install(self, bundle_root: Path, *, api_key: str | None,
                 server_command: str, server_args: list[str],
@@ -367,7 +436,8 @@ class CliClientTarget(ClientTarget):
                       "--bundle-root", str(bundle_root.resolve())]
         result = self._run(arguments, path)
 
-        self._confirm(path, server_command, bundle_root, result)
+        self._confirm(path, server_command, bundle_root, result,
+                      secrets=secrets_of(environment))
         return {"config": str(path), "bundle_root": str(bundle_root.resolve()),
                 "backup": str(backup) if backup else None,
                 "api_key_configured": bool(environment.get("GEMINI_API_KEY")),
@@ -380,7 +450,10 @@ class CliClientTarget(ClientTarget):
         backup = backup_file(path)
         result = self._run(["mcp", "remove", SERVER_KEY, *self.scope_args], path)
         if self._current_entry(path) is not None:
-            detail = (result.stderr or result.stdout or "").strip()[-300:]
+            # 제거 명령줄에는 키가 없다. 그래도 지운다 — 이 자리에 오는 것은
+            # 우리가 만들지 않은 CLI 의 출력이고, 거기에 무엇이 실릴지는 우리가
+            # 정하지 않는다.
+            detail = mask_secrets((result.stderr or result.stdout or "").strip())[-300:]
             raise ConfigurationError(f"{self.label} 에서 제거하지 못했다.\n{detail}")
         return {"changed": True, "config": str(path),
                 "backup": str(backup) if backup else None, "removed": [SERVER_KEY]}
@@ -403,7 +476,8 @@ class CliClientTarget(ClientTarget):
         return environment
 
     def _confirm(self, path: Path, server_command: str, bundle_root: Path,
-                 result: subprocess.CompletedProcess[str]) -> None:
+                 result: subprocess.CompletedProcess[str],
+                 secrets: tuple[str, ...] = ()) -> None:
         """정말 우리가 넣으려던 항목이 들어갔는지 설정을 다시 읽어 본다.
 
         항목이 있는지만 보면 모자란다. 지우기가 실패하고 넣기가 거절당하면
@@ -417,7 +491,10 @@ class CliClientTarget(ClientTarget):
         actual = _forward_slashes(str(entry.get("command", ""))).lower()
         if actual == expected and bundle_root_of(entry) == bundle_root.resolve():
             return
-        detail = (result.stderr or result.stdout or "").strip()[-300:]
+        # 이 경로에 오는 `result` 는 `-e GEMINI_API_KEY=<키>` 를 명령줄에 받은
+        # 실행의 결과다. 실패한 CLI 는 자기 명령줄을 되뱉는 일이 있다.
+        detail = mask_secrets((result.stderr or result.stdout or "").strip(),
+                              *secrets)[-300:]
         raise ConfigurationError(f"{self.label} 에 등록하지 못했다.\n{detail}")
 
 
@@ -501,7 +578,8 @@ class VsCodeTarget(CliClientTarget):
         # 같은 이름이면 덮어쓰고 다른 항목은 그대로 둔다(실측 확인).
         result = self._run(["--add-mcp", json.dumps(payload)], path)
 
-        self._confirm(path, server_command, bundle_root, result)
+        self._confirm(path, server_command, bundle_root, result,
+                      secrets=secrets_of(environment))
         return {"config": str(path), "bundle_root": str(bundle_root.resolve()),
                 "backup": str(backup) if backup else None,
                 "api_key_configured": bool(environment.get("GEMINI_API_KEY")),

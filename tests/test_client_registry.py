@@ -865,5 +865,128 @@ class ManagedJudgementTest(unittest.TestCase):
             {"command": "python", "args": ["their/mcp_server.py"]}))
 
 
+# 실패한 CLI 는 자기 명령줄을 되뱉는다. 그 명령줄에는 `-e GEMINI_API_KEY=<키>` 가
+# 들어 있다. 아래 가짜 CLI 가 그 습성을 그대로 흉내낸다.
+class EchoesArgvCli(FakeCli):
+    def run(self, argv, **kwargs):
+        result = super().run(argv, **kwargs)
+        return subprocess.CompletedProcess(argv, 0, "", " ".join(argv))
+
+
+class MaskSecretsTest(unittest.TestCase):
+    def test_known_value_is_removed(self) -> None:
+        masked = configuration.mask_secrets("보낸 값: hunter2-and-more", "hunter2-and-more")
+        self.assertNotIn("hunter2-and-more", masked)
+        self.assertIn(configuration.REDACTED, masked)
+
+    def test_unknown_google_key_is_caught_by_shape(self) -> None:
+        key = "AIza" + "b" * 35
+        self.assertNotIn(key, configuration.mask_secrets(f"stderr: {key} 끝"))
+
+    def test_short_or_empty_value_does_not_eat_the_message(self) -> None:
+        # 빈 문자열로 바꾸면 글자 사이마다 끼어들어 메시지를 못 읽게 된다.
+        for secret in ("", None, "ab"):
+            self.assertEqual(configuration.mask_secrets("정상 메시지", secret), "정상 메시지")
+
+    def test_secrets_are_read_back_from_both_argv_shapes(self) -> None:
+        payload = json.dumps({"env": {"GEMINI_API_KEY": "json-shaped-secret"}})
+        found = configuration._secrets_in(
+            ["-e", "GEMINI_API_KEY=flag-shaped-secret", payload])
+        self.assertIn("flag-shaped-secret", found)
+        self.assertIn("json-shaped-secret", found)
+
+
+class SecretsDoNotReachTheUserTest(PretendsCommandsExist):
+    """설치가 실패해도 API 키가 사용자 화면으로 나오면 안 된다."""
+
+    KEY = "AIza" + "s" * 36
+
+    def _codex(self, root: Path, cli_class=EchoesArgvCli):
+        path = root / "config.toml"
+        cli = cli_class(path, {}, toml=True,
+                        servers_key=configuration.CODEX.servers_key, obey=False)
+        return dataclasses.replace(configuration.CODEX, locate_config=lambda: path), cli
+
+    def test_registration_failure_does_not_show_the_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli = self._codex(root)
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                with self.assertRaises(SystemExit) as caught:
+                    target.install(root / "data", api_key=self.KEY,
+                                   server_command="python.exe", server_args=["s.py"])
+            # 키가 명령줄에 실렸다는 것부터 확인한다. 안 실렸다면 이 시험은
+            # 아무것도 지키지 않으면서 통과한다.
+            self.assertIn(f"GEMINI_API_KEY={self.KEY}", cli.last_add())
+            self.assertNotIn(self.KEY, str(caught.exception))
+
+    def test_masking_runs_before_truncation(self) -> None:
+        """먼저 자르면 키가 중간에서 끊겨 앞부분만 남는다. 그 조각은 그물에도 안 걸린다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "config.toml"
+
+            # 꼬리 300 자를 남기는 잘림 경계가 키 **한가운데**를 지나도록 길이를
+            # 맞춘다. 키가 통째로 잘려 나가는 배치를 쓰면 마스킹을 꺼도 통과해
+            # 아무것도 지키지 못한다. 40 자 키 + 280 자 = 320 자, 경계는 20 번째
+            # 글자를 지나므로 마스킹이 없으면 키의 뒤 20 자가 그대로 남는다.
+            padding = "x" * (300 - len(self.KEY) // 2)
+
+            class LongTail(FakeCli):
+                def run(inner, argv, **kwargs):
+                    super().run(argv, **kwargs)
+                    return subprocess.CompletedProcess(
+                        argv, 0, "", self.KEY + padding)
+
+            cli = LongTail(path, {}, toml=True,
+                           servers_key=configuration.CODEX.servers_key, obey=False)
+            target = dataclasses.replace(configuration.CODEX, locate_config=lambda: path)
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                with self.assertRaises(SystemExit) as caught:
+                    target.install(root / "data", api_key=self.KEY,
+                                   server_command="python.exe", server_args=["s.py"])
+            message = str(caught.exception)
+            self.assertNotIn(self.KEY, message)
+            # 경계에 끊긴 조각도 남으면 안 된다. 이 조각은 `AIza` 로 시작하지
+            # 않으므로 생김새 그물에 걸리지 않는다.
+            self.assertNotIn(self.KEY[len(self.KEY) // 2:], message)
+
+    def test_timeout_does_not_show_the_key(self) -> None:
+        """`TimeoutExpired` 는 자기 문자열에 명령줄 전체를 담는다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "config.toml"
+            path.write_text("", encoding="utf-8")
+            target = dataclasses.replace(configuration.CODEX, locate_config=lambda: path)
+
+            def timeout(argv, **kwargs):
+                raise subprocess.TimeoutExpired(argv, 60)
+
+            with mock.patch.object(configuration.subprocess, "run", timeout):
+                with self.assertRaises(SystemExit) as caught:
+                    target.install(root / "data", api_key=self.KEY,
+                                   server_command="python.exe", server_args=["s.py"])
+            self.assertNotIn(self.KEY, str(caught.exception))
+
+    def test_probe_failure_does_not_show_the_key(self) -> None:
+        sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
+        import installer_support
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            def echoes_env(argv, **kwargs):
+                # 서버가 죽으면서 자기 환경변수를 stderr 로 흘리는 상황.
+                environment = kwargs.get("env") or {}
+                return subprocess.CompletedProcess(
+                    argv, 1, "", f"crash: GEMINI_API_KEY={environment['GEMINI_API_KEY']}")
+
+            with mock.patch.object(installer_support.subprocess, "run", echoes_env):
+                ok, error = installer_support.probe_mcp(
+                    root / "server.exe", root / "data", {"GEMINI_API_KEY": self.KEY})
+            self.assertFalse(ok)
+            self.assertNotIn(self.KEY, error)
+
+
 if __name__ == "__main__":
     unittest.main()
