@@ -113,6 +113,28 @@ def doctor(config_path: Path) -> tuple[dict[str, Any], bool]:
     return checks, required_ok
 
 
+def _resolve_setup_key(api_key: str | None, api_key_file: Path | None) -> str | None:
+    """등록에 쓸 키를 정한다. 명령줄에 값을 적는 길은 남기되 값을 치른다.
+
+    `--api-key <값>` 은 그 값을 셸 기록 파일에 영구히 남긴다. 명령줄 노출은 그
+    프로세스가 사는 동안뿐이지만 기록 파일은 지울 때까지 남는다. 자동화가 이미
+    쓰고 있을 수 있으므로 없애지 않고, 대신 소리를 내고 대안을 알린다.
+    """
+    if api_key_file is not None:
+        # 빈 파일은 첫 줄이 없다. 키가 없는 것으로 보고 넘어간다 — 키 없이도
+        # 조회 도구는 등록되고 동작한다.
+        lines = api_key_file.read_text(encoding="utf-8").splitlines()
+        return (lines[0].strip() or None) if lines else None
+    if api_key == "-":
+        return sys.stdin.readline().strip() or None
+    if api_key:
+        print("주의: `--api-key` 에 적은 키는 셸 기록에 남는다. "
+              "`--api-key-file <파일>` 이나 `--api-key -` (표준 입력)를 권한다.",
+              file=sys.stderr)
+        return api_key
+    return os.environ.get("GEMINI_API_KEY")
+
+
 def _setup_main(argv: list[str]) -> int:
     known = ", ".join(target.key for target in configuration.CLIENTS)
     parser = argparse.ArgumentParser(
@@ -124,9 +146,21 @@ def _setup_main(argv: list[str]) -> int:
                         help="앱 하나만 지정했을 때 그 앱의 설정 파일 경로를 직접 준다.")
     parser.add_argument("--bundle-root", type=Path, default=default_bundle_root())
     parser.add_argument("--api-key", default=None,
-                        help="생략하면 현재 GEMINI_API_KEY를 사용한다. 키 없이도 조회 도구는 동작한다.")
+                        help="키를 직접 적으면 셸 기록에 남는다. `-` 를 주면 표준 입력에서 "
+                             "읽고, `--api-key-file` 은 파일에서 읽는다. "
+                             "생략하면 현재 GEMINI_API_KEY를 사용한다. "
+                             "키 없이도 조회 도구는 동작한다.")
+    parser.add_argument("--api-key-file", type=Path, default=None,
+                        help="키가 들어 있는 파일. 첫 줄만 읽는다.")
     args = parser.parse_args(argv)
-    key = args.api_key or os.environ.get("GEMINI_API_KEY")
+    if args.api_key is not None and args.api_key_file is not None:
+        print("`--api-key` 와 `--api-key-file` 은 함께 쓸 수 없다.", file=sys.stderr)
+        return 2
+    try:
+        key = _resolve_setup_key(args.api_key, args.api_key_file)
+    except OSError as error:
+        print(f"키 파일을 읽지 못했다: {error}", file=sys.stderr)
+        return 2
 
     targets = configuration.resolve_clients(args.client.split(","))
     if not targets:

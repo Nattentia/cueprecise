@@ -80,7 +80,7 @@ def ensure_ffmpeg() -> tuple[Path | None, str | None]:
     found = find_ffmpeg_bin()
     if found:
         return found, None
-    detail = (result.stderr or result.stdout or "").strip()[-500:]
+    detail = configuration.mask_secrets((result.stderr or result.stdout or "").strip())[-500:]
     return None, "FFmpeg 자동 설치에 실패했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요." + (f"\n\n{detail}" if detail else "")
 
 
@@ -97,7 +97,11 @@ def probe_mcp(server: Path, bundle_root: Path, environment: dict[str, str]) -> t
     try:
         response: dict[str, Any] = json.loads((result.stdout or "").splitlines()[0])
     except (IndexError, json.JSONDecodeError):
-        detail = (result.stderr or result.stdout or "응답 없음").strip()[-500:]
+        # 서버는 키를 환경변수로 받았다. 우리가 만들지 않은 라이브러리가 그 값을
+        # 예외에 실어 stderr 로 낼 수 있으므로 값 자체를 지운다.
+        detail = configuration.mask_secrets(
+            (result.stderr or result.stdout or "응답 없음").strip(),
+            *configuration.secrets_of(environment))[-500:]
         return False, f"CuePrecise가 올바른 응답을 보내지 않았습니다.\n\n{detail}"
     name = response.get("result", {}).get("serverInfo", {}).get("name")
     if name not in SERVER_NAMES:

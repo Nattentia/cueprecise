@@ -144,6 +144,17 @@ cueprecise run "https://www.youtube.com/watch?v=VIDEO_ID" --language ko-KR
 cueprecise status VIDEO_ID
 ```
 
+키를 파일이나 표준 입력으로 줄 수도 있다. 셸 기록 파일에 키를 남기지 않는 경로다.
+
+```bash
+cueprecise setup --api-key-file ~/.gemini-key      # 파일에서 읽는다
+pass show gemini/api-key | cueprecise setup --api-key -   # 표준 입력에서 읽는다
+```
+
+키가 노출됐다고 판단되면 [Google AI Studio](https://aistudio.google.com/api-keys)에서
+지우고 새로 만든다. 자세한 절차는 [개인정보 정책](PRIVACY.md#api-키를-폐기하는-방법)에
+있다.
+
 CLI에서 `--bundle-root`를 생략하면 현재 디렉터리의 `data/<video_id>/`에 쌓인다. MCP는
 `setup`이 정한 데이터 디렉터리를 쓴다.
 

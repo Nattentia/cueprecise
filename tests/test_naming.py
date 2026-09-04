@@ -98,9 +98,16 @@ class ReinstallTest(unittest.TestCase):
                                                 server_command="python", server_args=[])
             backup = Path(result["backup"])
             self.assertTrue(backup.is_file())
-            self.assertEqual(
-                json.loads(backup.read_text(encoding="utf-8"))["mcpServers"]["cueprecise"],
-                EXISTING_ENTRY)
+            text = backup.read_text(encoding="utf-8")
+            saved = json.loads(text)["mcpServers"]["cueprecise"]
+            # 되돌리는 데 필요한 것은 전부 남아 있어야 한다. 비밀값만 빠진다 —
+            # 백업은 복구 수단이지 폐기한 키의 보관소가 아니다.
+            expected = {name: (value if name != "env"
+                               else {k: v for k, v in value.items()
+                                     if k not in configuration.SECRET_ENV_NAMES})
+                        for name, value in EXISTING_ENTRY.items()}
+            self.assertEqual(saved, expected)
+            self.assertNotIn(EXISTING_ENTRY["env"]["GEMINI_API_KEY"], text)
 
     def test_foreign_entry_sharing_the_name_is_not_taken_over(self) -> None:
         foreign = {"command": "some-other-tool", "args": ["--serve"]}

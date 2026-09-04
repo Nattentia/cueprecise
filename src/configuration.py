@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -49,6 +50,69 @@ DEFAULT_SERVERS_KEY = "mcpServers"
 # 이 프로그램이 만든 MCP 항목인지 판정할 때 쓰는 실행 파일 이름.
 MANAGED_COMMANDS = {"cueprecise-mcp", "cueprecise-mcp.exe"}
 
+# 이 이름의 환경변수는 값이 비밀이다. 화면에 내보내기 전에 지운다.
+SECRET_ENV_NAMES = ("GEMINI_API_KEY",)
+
+REDACTED = "***"
+# 값을 모르는 자리에서 쓰는 그물. `AIza` 로 시작하는 옛 Google API 키를 잡는다.
+# **이것만 믿으면 안 된다.** 2026 년부터 발급되는 Google Auth 키는 이 접두사를
+# 쓰지 않아 이 그물에 걸리지 않는다. 그래서 `mask_secrets` 는 값을 아는 자리에서
+# 값 자체를 함께 받아 지운다. 생김새는 마지막 보루일 뿐이다.
+SECRET_PATTERN = re.compile(r"AIza[0-9A-Za-z_-]{30,}")
+
+
+def mask_secrets(text: str, *secrets: str | None) -> str:
+    """비밀값을 지운 문자열을 돌려준다.
+
+    CLI 는 실패하면서 자기가 받은 명령줄을 그대로 되뱉는 일이 있다. 그 명령줄에는
+    `-e GEMINI_API_KEY=<키>` 가 들어 있으므로, 실패 메시지를 그대로 사용자 화면에
+    올리면 키가 함께 올라간다.
+
+    **자르기 전에 지워야 한다.** 먼저 자르면 키가 중간에서 끊겨 남는데, 끊긴
+    조각은 이 함수의 그물에도 걸리지 않으면서 앞부분은 그대로 노출된다.
+    """
+    for secret in secrets:
+        # 짧은 값으로 바꾸면 멀쩡한 글자가 통째로 사라져 메시지를 읽을 수 없게
+        # 된다. 빈 문자열이면 모든 위치에 끼어든다.
+        if secret and len(secret) >= 8:
+            text = text.replace(secret, REDACTED)
+    return SECRET_PATTERN.sub(REDACTED, text)
+
+
+def secrets_of(environment: dict[str, str] | None) -> tuple[str, ...]:
+    """환경변수 묶음에서 비밀값만 뽑는다. `mask_secrets` 에 그대로 넘긴다."""
+    if not environment:
+        return ()
+    return tuple(value for name in SECRET_ENV_NAMES
+                 if (value := environment.get(name)))
+
+
+def _secrets_in(arguments: Iterable[str]) -> tuple[str, ...]:
+    """명령줄 인자에 실린 비밀값을 되찾는다.
+
+    실패 메시지를 만드는 자리에서는 원래 값이 손에 없다. 그러나 우리가 그 명령줄을
+    만들었으므로 거기서 다시 읽어낼 수 있다. 두 가지 꼴이 있다 — 앱 CLI 가 받는
+    `NAME=<값>` 과, VS Code 가 받는 `--add-mcp <JSON>` 의 `env` 안이다.
+    """
+    found: list[str] = []
+    for argument in arguments:
+        for name in SECRET_ENV_NAMES:
+            if name not in argument:
+                continue
+            marker = f"{name}="
+            if marker in argument:
+                found.append(argument.split(marker, 1)[1])
+                continue
+            try:
+                payload = json.loads(argument)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(payload, dict):
+                value = (payload.get("env") or {}).get(name)
+                if isinstance(value, str):
+                    found.append(value)
+    return tuple(found)
+
 
 def default_claude_config() -> Path:
     if sys.platform == "win32":
@@ -79,13 +143,78 @@ def read_config(path: Path) -> dict[str, Any]:
     return value
 
 
+# 설정 파일 하나당 남겨 둘 백업 개수. 백업은 되돌리기 위한 것이지 이력을 쌓기
+# 위한 것이 아니다. 무한히 쌓이면 폐기한 옛 키가 디스크에 영원히 남는다.
+BACKUP_KEEP = 3
+
+
+def _without_secrets(value: Any) -> tuple[Any, bool]:
+    """설정 사본에서 비밀 환경변수만 지운다. 지웠는지도 함께 알린다."""
+    if not isinstance(value, dict):
+        return value, False
+    removed = False
+    cleaned: dict[str, Any] = {}
+    for name, item in value.items():
+        if name == "env" and isinstance(item, dict):
+            kept = {k: v for k, v in item.items() if k not in SECRET_ENV_NAMES}
+            removed = removed or len(kept) != len(item)
+            cleaned[name] = kept
+            continue
+        cleaned[name], child_removed = _without_secrets(item)
+        removed = removed or child_removed
+    return cleaned, removed
+
+
+def prune_backups(path: Path, keep: int = BACKUP_KEEP) -> list[Path]:
+    """이 설정 파일의 옛 백업을 오래된 것부터 지운다. 지운 목록을 돌려준다."""
+    existing = sorted(path.parent.glob(f"{path.name}.*.bak"))
+    removed: list[Path] = []
+    for stale in existing[:max(0, len(existing) - keep)]:
+        try:
+            stale.unlink()
+        except OSError:
+            # 지우지 못해도 설치를 막지 않는다. 백업 정리는 부수 작업이다.
+            continue
+        removed.append(stale)
+    return removed
+
+
 def backup_file(path: Path) -> Path | None:
-    """고치기 전 사본을 남긴다. 없는 파일은 남길 것도 없다."""
+    """고치기 전 사본을 남긴다. 없는 파일은 남길 것도 없다.
+
+    **사본에서 API 키를 지운다.** 백업은 되돌리기 위한 것이고, 되돌릴 때 필요한
+    것은 어떤 항목이 어떤 실행 파일을 가리켰는가지 비밀값이 아니다. 지우지 않으면
+    사용자가 키를 폐기해도 옛 키를 담은 사본이 설정 폴더에 영원히 남는다.
+
+    JSON 으로 읽히지 않는 파일(Codex 의 TOML)은 손대지 않고 그대로 복사한다.
+    설정 파일을 우리가 해석해 다시 쓰는 것보다, 원본을 그대로 두고 개수를 줄이는
+    쪽이 안전하다.
+    """
     if not path.exists():
         return None
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     backup = path.with_name(f"{path.name}.{stamp}.bak")
     shutil.copy2(path, backup)
+    try:
+        original = json.loads(backup.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # 읽어내지 못하는 서식이다. 원본 사본을 그대로 둔다 — 복구 수단을
+        # 없애느니 개수 제한에 맡긴다.
+        prune_backups(path)
+        return backup
+    cleaned, removed = _without_secrets(original)
+    if removed:
+        try:
+            backup.write_text(
+                json.dumps(cleaned, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8")
+        except OSError:
+            # 다시 쓰지 못하면 키가 든 사본이 남는다. 그것은 이 함수가 막으려던
+            # 바로 그 상태이므로 사본을 지우고 백업 없이 진행한다.
+            backup.unlink(missing_ok=True)
+            prune_backups(path)
+            return None
+    prune_backups(path)
     return backup
 
 
@@ -108,8 +237,16 @@ def write_config(path: Path, value: dict[str, Any]) -> Path | None:
     path.parent.mkdir(parents=True, exist_ok=True)
     backup = backup_file(path)
     temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    # 임시 파일에는 API 키가 들어 있다. `replace` 가 실패하면(권한, 파일 잠금,
+    # 다른 드라이브) 그 파일이 설정 폴더에 그대로 남는다. 실패한 설치가 키를
+    # 흘려 두고 가는 셈이라 반드시 치운다.
+    try:
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+                             encoding="utf-8")
+        temporary.replace(path)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        raise
     return backup
 
 
@@ -341,7 +478,12 @@ class CliClientTarget(ClientTarget):
             return subprocess.run([executable, *arguments], capture_output=True,
                                   text=True, timeout=60, env=environment)
         except (OSError, subprocess.TimeoutExpired) as error:
-            raise ConfigurationError(f"{self.label} 명령을 실행하지 못했다: {error}") from error
+            # `TimeoutExpired` 는 자기 문자열에 **명령줄 전체**를 담는다. 그 안에는
+            # `-e GEMINI_API_KEY=<키>` 가 들어 있다. 여기서 지우지 않으면 시간 초과
+            # 한 번에 키가 사용자 화면으로 나온다.
+            raise ConfigurationError(
+                f"{self.label} 명령을 실행하지 못했다: "
+                f"{mask_secrets(str(error), *_secrets_in(arguments))}") from error
 
     def install(self, bundle_root: Path, *, api_key: str | None,
                 server_command: str, server_args: list[str],
@@ -367,7 +509,8 @@ class CliClientTarget(ClientTarget):
                       "--bundle-root", str(bundle_root.resolve())]
         result = self._run(arguments, path)
 
-        self._confirm(path, server_command, bundle_root, result)
+        self._confirm(path, server_command, bundle_root, result,
+                      secrets=secrets_of(environment))
         return {"config": str(path), "bundle_root": str(bundle_root.resolve()),
                 "backup": str(backup) if backup else None,
                 "api_key_configured": bool(environment.get("GEMINI_API_KEY")),
@@ -380,7 +523,10 @@ class CliClientTarget(ClientTarget):
         backup = backup_file(path)
         result = self._run(["mcp", "remove", SERVER_KEY, *self.scope_args], path)
         if self._current_entry(path) is not None:
-            detail = (result.stderr or result.stdout or "").strip()[-300:]
+            # 제거 명령줄에는 키가 없다. 그래도 지운다 — 이 자리에 오는 것은
+            # 우리가 만들지 않은 CLI 의 출력이고, 거기에 무엇이 실릴지는 우리가
+            # 정하지 않는다.
+            detail = mask_secrets((result.stderr or result.stdout or "").strip())[-300:]
             raise ConfigurationError(f"{self.label} 에서 제거하지 못했다.\n{detail}")
         return {"changed": True, "config": str(path),
                 "backup": str(backup) if backup else None, "removed": [SERVER_KEY]}
@@ -403,7 +549,8 @@ class CliClientTarget(ClientTarget):
         return environment
 
     def _confirm(self, path: Path, server_command: str, bundle_root: Path,
-                 result: subprocess.CompletedProcess[str]) -> None:
+                 result: subprocess.CompletedProcess[str],
+                 secrets: tuple[str, ...] = ()) -> None:
         """정말 우리가 넣으려던 항목이 들어갔는지 설정을 다시 읽어 본다.
 
         항목이 있는지만 보면 모자란다. 지우기가 실패하고 넣기가 거절당하면
@@ -417,7 +564,10 @@ class CliClientTarget(ClientTarget):
         actual = _forward_slashes(str(entry.get("command", ""))).lower()
         if actual == expected and bundle_root_of(entry) == bundle_root.resolve():
             return
-        detail = (result.stderr or result.stdout or "").strip()[-300:]
+        # 이 경로에 오는 `result` 는 `-e GEMINI_API_KEY=<키>` 를 명령줄에 받은
+        # 실행의 결과다. 실패한 CLI 는 자기 명령줄을 되뱉는 일이 있다.
+        detail = mask_secrets((result.stderr or result.stdout or "").strip(),
+                              *secrets)[-300:]
         raise ConfigurationError(f"{self.label} 에 등록하지 못했다.\n{detail}")
 
 
@@ -501,7 +651,8 @@ class VsCodeTarget(CliClientTarget):
         # 같은 이름이면 덮어쓰고 다른 항목은 그대로 둔다(실측 확인).
         result = self._run(["--add-mcp", json.dumps(payload)], path)
 
-        self._confirm(path, server_command, bundle_root, result)
+        self._confirm(path, server_command, bundle_root, result,
+                      secrets=secrets_of(environment))
         return {"config": str(path), "bundle_root": str(bundle_root.resolve()),
                 "backup": str(backup) if backup else None,
                 "api_key_configured": bool(environment.get("GEMINI_API_KEY")),
