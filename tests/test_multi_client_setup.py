@@ -60,10 +60,14 @@ class ConnectClientsTest(unittest.TestCase):
             self.assertEqual(result["failed"], [])
             for target in targets:
                 entry = _read(target.locate_config())["mcpServers"]["cueprecise"]
-                self.assertNotIn("GEMINI_API_KEY", entry["env"])
-                self.assertEqual(entry["env"][credential_store.CREDENTIAL_ENV],
-                                 str((root / "key.dpapi").resolve()))
-            self.assertEqual(credential_store.load(root / "key.dpapi"), VALID_KEY)
+                if sys.platform == "win32":
+                    self.assertNotIn("GEMINI_API_KEY", entry["env"])
+                    self.assertEqual(entry["env"][credential_store.CREDENTIAL_ENV],
+                                     str((root / "key.dpapi").resolve()))
+                else:
+                    self.assertEqual(entry["env"]["GEMINI_API_KEY"], VALID_KEY)
+            if sys.platform == "win32":
+                self.assertEqual(credential_store.load(root / "key.dpapi"), VALID_KEY)
 
     def test_one_broken_app_does_not_stop_the_others(self) -> None:
         """앱마다 사정이 다르다. 하나가 막혔다고 멀쩡한 앱까지 포기하지 않는다."""
@@ -145,6 +149,7 @@ class ConnectClientsTest(unittest.TestCase):
             self.assertEqual(_read(config)["mcpServers"]["other"]["command"], "keep")
 
 
+@unittest.skipUnless(sys.platform == "win32", "Windows DPAPI 이관 전용")
 class MigrateClientsTest(unittest.TestCase):
     def _install(self, root: Path) -> Path:
         install = root / "app"

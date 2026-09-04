@@ -52,10 +52,13 @@ class ConnectTest(unittest.TestCase):
             self.assertEqual(saved["mcpServers"]["other"]["command"], "keep")
             entry = saved["mcpServers"]["cueprecise"]
             self.assertEqual(Path(entry["command"]), server.resolve())
-            self.assertNotIn("GEMINI_API_KEY", entry["env"])
-            self.assertEqual(entry["env"][credential_store.CREDENTIAL_ENV],
-                             str((root / "key.dpapi").resolve()))
-            self.assertEqual(credential_store.load(root / "key.dpapi"), VALID_KEY)
+            if sys.platform == "win32":
+                self.assertNotIn("GEMINI_API_KEY", entry["env"])
+                self.assertEqual(entry["env"][credential_store.CREDENTIAL_ENV],
+                                 str((root / "key.dpapi").resolve()))
+                self.assertEqual(credential_store.load(root / "key.dpapi"), VALID_KEY)
+            else:
+                self.assertEqual(entry["env"]["GEMINI_API_KEY"], VALID_KEY)
             self.assertTrue(entry["env"]["PATH"].startswith(str(ffmpeg_bin)))
             self.assertTrue(result["connection_tested"])
             self.assertTrue(Path(result["backup"]).is_file())

@@ -66,10 +66,13 @@ class ReinstallTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             saved = self._migrated(Path(tmp))
             environment = saved["mcpServers"]["cueprecise"]["env"]
-            self.assertNotIn("GEMINI_API_KEY", environment)
-            self.assertEqual(environment[credential_store.CREDENTIAL_ENV],
-                             str(self.credential.resolve()))
-            self.assertEqual(credential_store.load(self.credential), VALID_KEY)
+            if sys.platform == "win32":
+                self.assertNotIn("GEMINI_API_KEY", environment)
+                self.assertEqual(environment[credential_store.CREDENTIAL_ENV],
+                                 str(self.credential.resolve()))
+                self.assertEqual(credential_store.load(self.credential), VALID_KEY)
+            else:
+                self.assertEqual(environment["GEMINI_API_KEY"], VALID_KEY)
 
     def test_other_servers_and_settings_are_untouched(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
