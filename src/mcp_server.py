@@ -30,6 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import context
 import chapters
 import pipeline
+import configuration
+import credential_store
 import summary as summary_mod
 import visual
 
@@ -587,7 +589,8 @@ def handle(message: dict[str, Any], *, bundle_root: Path,
             result = {"content": [{"type": "text",
                                    "text": json.dumps(payload, ensure_ascii=False, indent=1)}]}
         except Exception as error:
-            result = {"content": [{"type": "text", "text": "실패: %s" % error}],
+            safe_error = configuration.mask_secrets(str(error), api_key)
+            result = {"content": [{"type": "text", "text": "실패: %s" % safe_error}],
                       "isError": True}
     elif method in {"notifications/initialized", "initialized"}:
         return None  # 알림에는 응답하지 않는다
@@ -653,8 +656,12 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bundle-root", type=Path, default=Path("data"))
     args = parser.parse_args()
-    serve(sys.stdin, sys.stdout, bundle_root=args.bundle_root,
-          api_key=os.environ.get("GEMINI_API_KEY"))
+    try:
+        api_key = credential_store.resolve()
+    except credential_store.CredentialError as error:
+        print(f"CuePrecise credential error: {error}", file=sys.stderr)
+        api_key = None
+    serve(sys.stdin, sys.stdout, bundle_root=args.bundle_root, api_key=api_key)
     return 0
 
 

@@ -10,6 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 import installer_support
+import credential_store
 import runtime
 
 
@@ -44,13 +45,20 @@ class ConnectTest(unittest.TestCase):
             with mock.patch("installer_support.ensure_ffmpeg", return_value=(ffmpeg_bin, None)), \
                     mock.patch("installer_support.probe_mcp", return_value=(True, None)):
                 result = installer_support.connect(
-                    VALID_KEY, install, config_path=config, bundle_root=root / "data")
+                    VALID_KEY, install, config_path=config, bundle_root=root / "data",
+                    credential_path=root / "key.dpapi")
 
             saved = json.loads(config.read_text(encoding="utf-8"))
             self.assertEqual(saved["mcpServers"]["other"]["command"], "keep")
             entry = saved["mcpServers"]["cueprecise"]
             self.assertEqual(Path(entry["command"]), server.resolve())
-            self.assertEqual(entry["env"]["GEMINI_API_KEY"], VALID_KEY)
+            if sys.platform == "win32":
+                self.assertNotIn("GEMINI_API_KEY", entry["env"])
+                self.assertEqual(entry["env"][credential_store.CREDENTIAL_ENV],
+                                 str((root / "key.dpapi").resolve()))
+                self.assertEqual(credential_store.load(root / "key.dpapi"), VALID_KEY)
+            else:
+                self.assertEqual(entry["env"]["GEMINI_API_KEY"], VALID_KEY)
             self.assertTrue(entry["env"]["PATH"].startswith(str(ffmpeg_bin)))
             self.assertTrue(result["connection_tested"])
             self.assertTrue(Path(result["backup"]).is_file())

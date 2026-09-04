@@ -13,7 +13,7 @@ CuePrecise는 영상에서 사람들이 한 말을 먼저 읽습니다. 그중 �
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![CI](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-477%20passing-brightgreen.svg)](#테스트)
+[![Tests](https://img.shields.io/badge/tests-487%20passing-brightgreen.svg)](#테스트)
 
 CuePrecise(큐프리사이스)는 Claude Desktop·Codex 등 AI 앱에 연결하는 오픈소스 도구입니다.
 YouTube 자막만 가져오는 것이 아니라 Gemini로 영상의 음성을 직접 전사합니다. 여기에
@@ -126,11 +126,12 @@ API 키 입력란은 민감 정보로 표시되며 Claude의 확장 프로그램
 5. “연결 완료”가 보이면 선택한 AI 앱을 완전히 껐다가 다시 켠다.
 
 Python이나 Git을 설치하거나 명령어를 입력할 필요가 없다. 필요한 영상 처리 도구도
-연결 과정에서 자동으로 준비한다. API 키는 선택한 AI 앱의 내 컴퓨터 설정에만 저장되며,
-기존 설정은 백업한 뒤 CuePrecise 항목만 추가한다. 이미 연결해 둔 적이 있으면
-API 키를 포함한 설정을 그대로 물려받는다.
+연결 과정에서 자동으로 준비한다. Windows에서는 API 키를 현재 사용자만 풀 수 있도록
+Windows DPAPI로 암호화하고, AI 앱 설정에는 암호화 파일의 위치만 남긴다. 기존 설정은
+백업한 뒤 CuePrecise 항목만 추가하며, 예전 버전이 설정에 평문으로 저장했던 키도
+업그레이드할 때 자동으로 암호화 저장소로 옮긴다.
 
-> `v0.2.1`은 아직 디지털 서명되지 않은 시험판이다. Windows에서 "알 수 없는 게시자"
+> `v0.2.2`는 아직 디지털 서명되지 않은 시험판이다. Windows에서 "알 수 없는 게시자"
 > 경고가 나타날 수 있으므로 반드시 이 저장소의 Releases에서 받은 파일만 사용한다.
 
 ### macOS·Linux 또는 명령어 설치
@@ -153,12 +154,11 @@ cueprecise setup
 cueprecise doctor
 ```
 
-[API 키](https://aistudio.google.com/api-keys)를 먼저 환경변수로 넣으면 `setup`이 MCP
-설정에 함께 등록한다. 키 없이 설치해도 조회 도구는 동작하며 나중에 다시 실행할 수 있다.
+[API 키](https://aistudio.google.com/api-keys)는 명령이나 셸 기록에 들어가지 않도록
+표준 입력으로 붙여넣는다. 키 없이 설치해도 조회 도구는 동작하며 나중에 다시 실행할 수 있다.
 
 ```bash
-export GEMINI_API_KEY="..."          # Windows PowerShell: $env:GEMINI_API_KEY="..."
-cueprecise setup
+cueprecise setup --api-key -         # 키를 붙여넣고 Enter
 cueprecise run "https://www.youtube.com/watch?v=VIDEO_ID" --language ko-KR
 cueprecise status VIDEO_ID
 ```
@@ -218,10 +218,16 @@ cueprecise doctor                   # 앱별 설치·연결 상태
 `cueprecise`라는 항목이 이미 있는데 CuePrecise가 만든 것이 아니면 그 앱은 건너뛴다.
 남의 설정을 덮어쓰지 않으며, 한 앱이 실패해도 나머지는 계속 붙인다.
 
+Windows의 `cueprecise setup`도 설치 화면과 같은 DPAPI 암호화 저장소를 쓴다. macOS와
+Linux에서는 현재 MCP 클라이언트의 로컬 설정으로 키를 전달하므로 해당 파일을 본인 계정만
+읽을 수 있게 관리해야 한다. 모든 운영체제에서 `--api-key 값`처럼 키를 명령줄에 직접
+적는 방식은 프로세스 목록과 셸 기록 노출을 막기 위해 거절한다.
+
 **ChatGPT 커넥터와 Claude.ai 웹에는 붙지 않는다.** 둘은 HTTPS 주소와 OAuth로 접속하는
 원격 MCP만 받는다. CuePrecise는 이 PC에서 도는 로컬 서버라 그 자리에 넣을 수 없다.
 
 다음 JSON은 소스 clone을 쓰거나 위 목록에 없는 MCP 호스트에 손으로 붙일 때만 필요하다.
+키가 평문으로 남으므로 가능하면 `setup` 명령을 사용한다.
 
 ```json
 {
@@ -418,7 +424,7 @@ python -m pip install -r requirements-optional.txt     # OCR, 시간대 (선택)
 python -m unittest discover -s tests
 ```
 
-477개. stdlib `unittest`만 쓴다. 테스트 의존성이 없고 네트워크와 Gemini API를
+487개. stdlib `unittest`만 쓴다. 테스트 의존성이 없고 네트워크와 Gemini API를
 호출하지 않는다. `google-genai`가 없으면 `test_transcribe`는 skip된다.
 
 ## API 사용량

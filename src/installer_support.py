@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import configuration
+import credential_store
 
 
 API_KEY_PATTERN = re.compile(r"^AIza[0-9A-Za-z_-]{30,}$")
@@ -112,7 +113,8 @@ def probe_mcp(server: Path, bundle_root: Path, environment: dict[str, str]) -> t
 def connect_clients(api_key: str, install_dir: Path, *,
                     targets: list[configuration.ClientTarget] | None = None,
                     config_path: Path | None = None,
-                    bundle_root: Path | None = None) -> dict[str, Any]:
+                    bundle_root: Path | None = None,
+                    credential_path: Path | None = None) -> dict[str, Any]:
     """이 PC에 있는 AI 앱을 찾아 하나씩 붙인다.
 
     한 앱이 실패해도 나머지를 계속 붙인다. 앱마다 사정이 다른데 하나가
@@ -147,12 +149,22 @@ def connect_clients(api_key: str, install_dir: Path, *,
     if not ok:
         raise RuntimeError(probe_error)
 
+    config_key: str | None = key
+    credential_state = None
+    protected_path = None
+    if credential_store.supported():
+        protected_path = credential_path or credential_store.default_path()
+        credential_state = credential_store.snapshot(protected_path)
+        protected_path = credential_store.store(key, protected_path)
+        server_environment[credential_store.CREDENTIAL_ENV] = str(protected_path)
+        config_key = None
+
     connected: list[dict[str, Any]] = []
     failed: list[dict[str, str]] = []
     for target in chosen:
         try:
             result = target.install(
-                destination, api_key=key, server_command=str(server), server_args=[],
+                destination, api_key=config_key, server_command=str(server), server_args=[],
                 extra_env=server_environment,
                 config_path=config_path if len(chosen) == 1 else None)
         except Exception as error:  # 한 앱의 실패가 나머지를 막지 않는다.
@@ -160,24 +172,33 @@ def connect_clients(api_key: str, install_dir: Path, *,
         else:
             connected.append({"key": target.key, "label": target.label, **result})
     if not connected:
+        if credential_state is not None:
+            credential_store.restore(credential_state, protected_path)
         raise RuntimeError("\n".join(
             f"{item['label']}: {item['reason']}" for item in failed))
+    for item in connected:
+        item["api_key_configured"] = True
+        item["credential_protected"] = protected_path is not None
     return {"connected": connected, "failed": failed,
             "ffmpeg_bin": str(ffmpeg_bin), "connection_tested": True,
-            "bundle_root": str(destination.resolve())}
+            "bundle_root": str(destination.resolve()),
+            "credential_protected": protected_path is not None}
 
 
 def connect(api_key: str, install_dir: Path, *,
             config_path: Path | None = None,
-            bundle_root: Path | None = None) -> dict[str, Any]:
+            bundle_root: Path | None = None,
+            credential_path: Path | None = None) -> dict[str, Any]:
     """Claude Desktop 하나에만 붙인다. `connect_clients` 의 얇은 이름이다."""
     result = connect_clients(api_key, install_dir, targets=[configuration.CLAUDE_DESKTOP],
-                             config_path=config_path, bundle_root=bundle_root)
+                             config_path=config_path, bundle_root=bundle_root,
+                             credential_path=credential_path)
     entry = result["connected"][0]
     return {**entry, "ffmpeg_bin": result["ffmpeg_bin"], "connection_tested": True}
 
 
-def migrate(install_dir: Path, config_path: Path | None = None) -> dict[str, Any]:
+def migrate(install_dir: Path, config_path: Path | None = None,
+            credential_path: Path | None = None) -> dict[str, Any]:
     """이미 연결돼 있던 설정을 이번에 설치한 실행 파일로 다시 가리킨다.
 
     설치 프로그램이 조용히 부른다. 네트워크를 쓰지 않고 사용자에게 아무것도
@@ -202,9 +223,133 @@ def migrate(install_dir: Path, config_path: Path | None = None) -> dict[str, Any
     except OSError:
         # 등록된 경로가 지금은 없는 드라이브일 수 있다. 그때는 기본 위치로 돌아간다.
         destination = configuration.default_bundle_root()
-    result = configuration.setup_claude(
-        config, destination, api_key=None, server_command=str(server), server_args=[])
-    return {**result, "changed": True, "previous_key": key}
+    environment: dict[str, str] = {}
+    credential_state = None
+    protected_path = None
+    saved_secrets = configuration.secrets_of(entry.get("env"))
+    old_key = saved_secrets[0] if saved_secrets else None
+    candidate = credential_path or credential_store.default_path()
+    if credential_store.supported() and (old_key or candidate.exists()):
+        protected_path = candidate
+        credential_state = credential_store.snapshot(protected_path)
+        if old_key:
+            protected_path = credential_store.store(old_key, protected_path)
+        environment[credential_store.CREDENTIAL_ENV] = str(protected_path.resolve())
+    try:
+        result = configuration.setup_claude(
+            config, destination, api_key=None, server_command=str(server), server_args=[],
+            extra_env=environment)
+    except Exception:
+        if credential_state is not None:
+            credential_store.restore(credential_state, protected_path)
+        raise
+    return {**result, "changed": True, "previous_key": key,
+            "api_key_configured": bool(old_key or protected_path),
+            "credential_protected": protected_path is not None}
+
+
+def migrate_clients(install_dir: Path, *,
+                    targets: list[configuration.ClientTarget] | None = None,
+                    credential_path: Path | None = None) -> dict[str, Any]:
+    """연결된 모든 Windows 클라이언트의 평문 키를 DPAPI 저장소로 옮긴다.
+
+    앱 설치 여부가 아니라 실제 설정 항목을 기준으로 찾는다. 업그레이드 사이에
+    앱을 지웠더라도 남은 설정을 새 실행 파일로 고쳐야 하기 때문이다. 서로 다른
+    키가 발견되면 임의로 하나를 고르지 않고 아무 설정도 바꾸지 않는다.
+    """
+    server = _bundled_server(install_dir)
+    if server is None:
+        return {"changed": False, "reason": "번들 서버 실행 파일을 찾지 못했다.",
+                "migrated": [], "failed": []}
+
+    found: list[tuple[configuration.ClientTarget, Path, dict[str, Any]]] = []
+    failed: list[dict[str, str]] = []
+    for target in (targets if targets is not None else list(configuration.CLIENTS)):
+        path = target.locate_config()
+        try:
+            loader = target.load_config if isinstance(target, configuration.CliClientTarget) \
+                else configuration.read_config
+            value = loader(path)
+            managed = configuration.find_managed_entry(value, target.servers_key)
+        except Exception as error:
+            failed.append({"key": target.key, "label": target.label,
+                           "reason": configuration.mask_secrets(str(error))})
+            continue
+        if managed is not None:
+            found.append((target, path, managed[1]))
+
+    if not found:
+        return {"changed": False, "reason": "연결된 항목이 없다.",
+                "migrated": [], "failed": failed}
+
+    plaintext_keys = {
+        entry.get("env", {}).get("GEMINI_API_KEY")
+        for _target, _path, entry in found
+        if isinstance(entry.get("env"), dict)
+        and isinstance(entry["env"].get("GEMINI_API_KEY"), str)
+        and entry["env"]["GEMINI_API_KEY"]
+    }
+    if len(plaintext_keys) > 1:
+        return {"changed": False,
+                "reason": "클라이언트마다 서로 다른 Gemini API 키가 있어 자동 이관하지 않았다.",
+                "migrated": [], "failed": failed}
+
+    state = None
+    protected_path: Path | None = None
+    if credential_store.supported():
+        try:
+            candidate = credential_path or credential_store.default_path()
+            if plaintext_keys or candidate.exists():
+                state = credential_store.snapshot(candidate)
+                protected_path = (credential_store.store(next(iter(plaintext_keys)), candidate)
+                                  if plaintext_keys else candidate.resolve())
+        except credential_store.CredentialError as error:
+            return {"changed": False, "reason": str(error), "migrated": [],
+                    "failed": failed}
+
+    migrated: list[dict[str, Any]] = []
+    for target, path, entry in found:
+        destination = (configuration.bundle_root_of(entry)
+                       or configuration.default_bundle_root())
+        environment: dict[str, str] = {}
+        if protected_path is not None:
+            environment[credential_store.CREDENTIAL_ENV] = str(protected_path)
+        existed = path.exists()
+        try:
+            original = path.read_bytes() if existed else b""
+        except OSError as error:
+            failed.append({"key": target.key, "label": target.label,
+                           "reason": configuration.mask_secrets(
+                               f"설정 복구용 사본을 메모리에 읽지 못했다: {error}",
+                               *plaintext_keys)})
+            continue
+        try:
+            result = target.install(
+                destination, api_key=None, server_command=str(server), server_args=[],
+                extra_env=environment, config_path=path)
+        except Exception as error:
+            # CLI 방식은 기존 항목을 지운 뒤 다시 추가한다. 추가가 실패하면
+            # 디스크 백업에 평문 키를 남기지 않고 메모리에 잡아 둔 원본으로
+            # 되돌린다.
+            try:
+                if existed:
+                    path.write_bytes(original)
+                else:
+                    path.unlink(missing_ok=True)
+            except OSError as restore_error:
+                error = RuntimeError(f"{error}; 원래 설정 복구도 실패했다: {restore_error}")
+            failed.append({"key": target.key, "label": target.label,
+                           "reason": configuration.mask_secrets(
+                               str(error), *plaintext_keys)})
+        else:
+            migrated.append({"key": target.key, "label": target.label, **result,
+                             "api_key_configured": bool(plaintext_keys or protected_path),
+                             "credential_protected": protected_path is not None})
+
+    if not migrated and state is not None:
+        credential_store.restore(state, protected_path)
+    return {"changed": bool(migrated), "migrated": migrated, "failed": failed,
+            "credential_protected": bool(migrated and protected_path)}
 
 
 def disconnect(config_path: Path | None = None) -> dict[str, Any]:
@@ -235,4 +380,12 @@ def disconnect_clients(targets: list[configuration.ClientTarget] | None = None) 
         else:
             if result.get("changed"):
                 removed.append({"key": target.key, "label": target.label, **result})
-    return {"removed": removed, "failed": failed, "changed": bool(removed)}
+    credential_removed = False
+    if not failed and credential_store.supported():
+        try:
+            credential_removed = credential_store.delete()
+        except OSError as error:
+            failed.append({"key": "credential", "label": "Windows credential",
+                           "reason": str(error)})
+    return {"removed": removed, "failed": failed, "changed": bool(removed),
+            "credential_removed": credential_removed}

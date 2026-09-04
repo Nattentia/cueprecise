@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import configuration
+import credential_store
 import runtime
 
 
@@ -90,11 +91,16 @@ def client_report() -> list[dict[str, Any]]:
 
 
 def doctor(config_path: Path) -> tuple[dict[str, Any], bool]:
+    try:
+        saved_key = credential_store.resolve()
+    except credential_store.CredentialError:
+        saved_key = None
     checks: dict[str, Any] = {
         "python": {"ok": sys.version_info >= (3, 11), "value": sys.version.split()[0]},
         "ffmpeg": {"ok": shutil.which(runtime.tool("ffmpeg")) is not None},
         "ffprobe": {"ok": shutil.which(runtime.tool("ffprobe")) is not None},
-        "gemini_api_key": {"ok": bool(os.environ.get("GEMINI_API_KEY")), "required_for": "transcribe"},
+        "gemini_api_key": {"ok": bool(saved_key), "required_for": "transcribe",
+                            "protected": bool(saved_key and not os.environ.get("GEMINI_API_KEY"))},
         "claude_config": {"ok": False, "path": str(config_path)},
     }
     try:
@@ -114,12 +120,7 @@ def doctor(config_path: Path) -> tuple[dict[str, Any], bool]:
 
 
 def _resolve_setup_key(api_key: str | None, api_key_file: Path | None) -> str | None:
-    """등록에 쓸 키를 정한다. 명령줄에 값을 적는 길은 남기되 값을 치른다.
-
-    `--api-key <값>` 은 그 값을 셸 기록 파일에 영구히 남긴다. 명령줄 노출은 그
-    프로세스가 사는 동안뿐이지만 기록 파일은 지울 때까지 남는다. 자동화가 이미
-    쓰고 있을 수 있으므로 없애지 않고, 대신 소리를 내고 대안을 알린다.
-    """
+    """등록에 쓸 키를 파일, 표준 입력 또는 환경변수에서만 읽는다."""
     if api_key_file is not None:
         # 빈 파일은 첫 줄이 없다. 키가 없는 것으로 보고 넘어간다 — 키 없이도
         # 조회 도구는 등록되고 동작한다.
@@ -128,10 +129,8 @@ def _resolve_setup_key(api_key: str | None, api_key_file: Path | None) -> str | 
     if api_key == "-":
         return sys.stdin.readline().strip() or None
     if api_key:
-        print("주의: `--api-key` 에 적은 키는 셸 기록에 남는다. "
-              "`--api-key-file <파일>` 이나 `--api-key -` (표준 입력)를 권한다.",
-              file=sys.stderr)
-        return api_key
+        raise ValueError("키를 명령줄에 직접 적을 수 없다. `--api-key-file <파일>` 또는 "
+                         "`--api-key -` (표준 입력)를 사용한다.")
     return os.environ.get("GEMINI_API_KEY")
 
 
@@ -146,8 +145,8 @@ def _setup_main(argv: list[str]) -> int:
                         help="앱 하나만 지정했을 때 그 앱의 설정 파일 경로를 직접 준다.")
     parser.add_argument("--bundle-root", type=Path, default=default_bundle_root())
     parser.add_argument("--api-key", default=None,
-                        help="키를 직접 적으면 셸 기록에 남는다. `-` 를 주면 표준 입력에서 "
-                             "읽고, `--api-key-file` 은 파일에서 읽는다. "
+                        help="`-` 를 주면 표준 입력에서 읽는다. 키 값 자체는 명령줄에 "
+                             "적을 수 없다. `--api-key-file` 은 파일에서 읽는다. "
                              "생략하면 현재 GEMINI_API_KEY를 사용한다. "
                              "키 없이도 조회 도구는 동작한다.")
     parser.add_argument("--api-key-file", type=Path, default=None,
@@ -161,6 +160,9 @@ def _setup_main(argv: list[str]) -> int:
     except OSError as error:
         print(f"키 파일을 읽지 못했다: {error}", file=sys.stderr)
         return 2
+    except ValueError as error:
+        print(f"API 키를 읽지 못했다: {error}", file=sys.stderr)
+        return 2
 
     targets = configuration.resolve_clients(args.client.split(","))
     if not targets:
@@ -172,23 +174,58 @@ def _setup_main(argv: list[str]) -> int:
         return 2
 
     command, arguments = sys.executable, ["-m", "mcp_server"]
+    config_key = key
+    extra_environment: dict[str, str] = {}
+    credential_state = None
+    protected_path = None
+    if credential_store.supported():
+        existing_keys: set[str] = set()
+        if key is None:
+            for target in targets:
+                path = args.config or target.locate_config()
+                try:
+                    loader = getattr(target, "load_config", configuration.read_config)
+                    entry = configuration.find_managed_entry(loader(path), target.servers_key)
+                except Exception:
+                    continue
+                if entry:
+                    existing_keys.update(configuration.secrets_of(entry[1].get("env")))
+        if len(existing_keys) > 1:
+            print("앱마다 서로 다른 Gemini API 키가 저장돼 있다. 새 키를 표준 입력이나 "
+                  "파일로 한 번 지정해 통합해야 한다.", file=sys.stderr)
+            return 2
+        key_to_store = key or (next(iter(existing_keys)) if existing_keys else None)
+        if key_to_store or credential_store.default_path().exists():
+            protected_path = credential_store.default_path()
+            credential_state = credential_store.snapshot(protected_path)
+            if key_to_store:
+                protected_path = credential_store.store(key_to_store, protected_path)
+            extra_environment[credential_store.CREDENTIAL_ENV] = str(protected_path.resolve())
+            config_key = None
     connected: list[dict[str, Any]] = []
     failed: list[dict[str, str]] = []
     for target in targets:
         try:
-            result = target.install(args.bundle_root, api_key=key, server_command=command,
-                                    server_args=arguments, config_path=args.config)
+            result = target.install(args.bundle_root, api_key=config_key, server_command=command,
+                                    server_args=arguments, config_path=args.config,
+                                    extra_env=extra_environment)
         except Exception as error:  # 한 앱의 실패가 나머지를 막지 않는다.
-            failed.append({"key": target.key, "label": target.label, "reason": str(error)})
+            failed.append({"key": target.key, "label": target.label,
+                           "reason": configuration.mask_secrets(str(error), key)})
         else:
+            if protected_path is not None:
+                result["api_key_configured"] = True
+                result["credential_protected"] = True
             connected.append({"key": target.key, "label": target.label, **result})
 
     print(json.dumps({"connected": connected, "failed": failed}, ensure_ascii=False, indent=2))
-    if not key:
+    if not key and protected_path is None:
         print("주의: GEMINI_API_KEY가 없어 전사 기능은 키를 설정할 때까지 동작하지 않는다.", file=sys.stderr)
     for item in failed:
         print(f"{item['label']}: {item['reason']}", file=sys.stderr)
     if not connected:
+        if credential_state is not None:
+            credential_store.restore(credential_state, protected_path)
         return 1
     names = ", ".join(item["label"] for item in connected)
     print(f"{names}을(를) 다시 시작한 뒤 CuePrecise 도구를 사용할 수 있다.", file=sys.stderr)
@@ -232,6 +269,14 @@ CuePrecise — Find the exact moment in any YouTube video.
         print(f"알 수 없는 명령: {argv[0]}", file=sys.stderr)
         return 2
     import pipeline
+    if not os.environ.get("GEMINI_API_KEY"):
+        try:
+            stored_key = credential_store.resolve()
+        except credential_store.CredentialError as error:
+            print(f"보호된 API 키를 읽지 못했다: {error}", file=sys.stderr)
+            stored_key = None
+        if stored_key:
+            os.environ["GEMINI_API_KEY"] = stored_key
     return pipeline.main()
 
 

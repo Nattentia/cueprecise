@@ -46,6 +46,7 @@ import speakers
 import transcribe as transcribe_mod
 import usage
 import visual
+import configuration
 import runtime
 
 # transcribe 임포트는 SDK 를 요구하지 않는다. google-genai 는 실제 호출 경로
@@ -962,14 +963,15 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
             try:
                 result = transcribe_mod.from_raw(stored)
             except Exception as error:
+                safe_error = configuration.mask_secrets(str(error), api_key)
                 chunk["status"] = "failed"
-                chunk["error"] = str(error)[:500]
+                chunk["error"] = safe_error[:500]
                 job["status"] = "partial"
                 _save_job(bundle, job)
                 raise StageError(
                     "청크 %d: 저장된 응답으로 복구하지 못했습니다. 다시 호출하려면 "
                     "%s 를 삭제하고 재실행하세요. 원인: %s"
-                    % (chunk["index"], raw_path, error)
+                    % (chunk["index"], raw_path, safe_error)
                 ) from error
             _log("  청크 %d: 저장된 응답 재사용 (Gemini 호출 없음)" % chunk["index"])
         else:
@@ -994,8 +996,9 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
                               str(chunk_mp3), langs, raw_path=raw_path,
                               meta=_raw_meta(job, chunk, langs)))
             except Exception as error:
+                safe_error = configuration.mask_secrets(str(error), api_key)
                 chunk["status"] = "failed"
-                chunk["error"] = str(error)[:500]
+                chunk["error"] = safe_error[:500]
                 job["status"] = "partial"
                 _save_job(bundle, job)
                 hint = ""
@@ -1005,7 +1008,7 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
                 raise StageError(
                     "청크 %d 전사 실패. 완료된 청크는 보존된다. 같은 명령을 다시 "
                     "실행하면 이어서 진행한다.%s 원인: %s"
-                    % (chunk["index"], hint, error)
+                    % (chunk["index"], hint, safe_error)
                 ) from error
 
         text = " ".join(str(word.get("text", "")) for word in result["words"])

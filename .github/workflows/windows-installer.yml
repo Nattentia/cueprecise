@@ -79,6 +79,7 @@ jobs:
           $key = "AIzaTESTTESTTESTTESTTESTTESTTESTTEST"
           $sandbox = Join-Path $env:RUNNER_TEMP "installcheck"
           $appdata = Join-Path $sandbox "Roaming"
+          $localappdata = Join-Path $sandbox "Local"
           $claude = Join-Path $appdata "Claude"
           $config = Join-Path $claude "claude_desktop_config.json"
           $installDir = Join-Path $sandbox "Programs\CuePrecise"
@@ -100,6 +101,7 @@ jobs:
           $existing | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $config -Encoding utf8
 
           $env:APPDATA = $appdata
+          $env:LOCALAPPDATA = $localappdata
           $setup = (Resolve-Path "dist/windows/cueprecise-setup.exe").Path
           Start-Process -FilePath $setup -Wait -ArgumentList @(
             "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
@@ -116,10 +118,21 @@ jobs:
           $saved = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
           $names = $saved.mcpServers.PSObject.Properties.Name
           if ($names -notcontains "cueprecise") { throw "cueprecise 항목이 만들어지지 않았다" }
-          if ($saved.mcpServers.cueprecise.env.GEMINI_API_KEY -ne $key) { throw "API 키가 보존되지 않았다" }
+          if ($saved.mcpServers.cueprecise.env.GEMINI_API_KEY) { throw "API 키가 설정에 평문으로 남았다" }
+          $credential = $saved.mcpServers.cueprecise.env.CUEPRECISE_GEMINI_CREDENTIAL
+          if (-not $credential) { throw "보호된 API 키 경로가 설정에 없다" }
+          if (-not (Test-Path -LiteralPath $credential)) { throw "보호된 API 키 파일이 없다" }
+          $credentialBytes = [System.IO.File]::ReadAllBytes($credential)
+          $credentialText = [System.Text.Encoding]::UTF8.GetString($credentialBytes)
+          if ($credentialText.Contains($key)) { throw "보호 파일에 API 키가 평문으로 남았다" }
           if ($saved.mcpServers.other.command -ne "keep-me") { throw "다른 MCP 설정이 훼손됐다" }
           if ($saved.theme -ne "dark") { throw "다른 설정이 훼손됐다" }
           if (@(Get-ChildItem -LiteralPath $claude -Filter "*.bak").Count -lt 1) { throw "백업이 만들어지지 않았다" }
+          foreach ($backup in Get-ChildItem -LiteralPath $claude -Filter "*.bak") {
+            if ((Get-Content -LiteralPath $backup.FullName -Raw).Contains($key)) {
+              throw "설정 백업에 API 키가 남았다"
+            }
+          }
 
           $uninstaller = Get-ChildItem -LiteralPath $installDir -Filter "unins*.exe" | Select-Object -First 1
           if (-not $uninstaller) { throw "제거 프로그램을 찾지 못했다" }
@@ -130,6 +143,7 @@ jobs:
           $left = $removed.mcpServers.PSObject.Properties.Name
           if ($left -contains "cueprecise") { throw "제거 후에도 cueprecise 항목이 남았다" }
           if ($removed.mcpServers.other.command -ne "keep-me") { throw "제거가 다른 MCP 설정을 지웠다" }
+          if (Test-Path -LiteralPath $credential) { throw "제거 후에도 보호된 API 키가 남았다" }
           Write-Output "조용한 설치, 설정 이관, 제거 확인 완료"
 
       - uses: actions/upload-artifact@v6

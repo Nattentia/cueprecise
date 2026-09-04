@@ -1031,6 +1031,32 @@ class BackupHygieneTest(unittest.TestCase):
             self.assertEqual(backup.read_text(encoding="utf-8"),
                              path.read_text(encoding="utf-8"))
 
+    def test_toml_backup_is_skipped_when_it_contains_a_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text(
+                '[mcp_servers.cueprecise.env]\nGEMINI_API_KEY = "' + self.KEY + '"\n',
+                encoding="utf-8")
+            backup = configuration.backup_file(path)
+            self.assertIsNone(backup)
+            self.assertEqual(list(path.parent.glob(f"{path.name}.*.bak")), [])
+
+    def test_old_json_and_toml_backups_are_scrubbed_on_next_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = self._config(root)
+            old_json = root / f"{path.name}.old-json.bak"
+            old_json.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+            old_toml = root / f"{path.name}.old-toml.bak"
+            old_toml.write_text(
+                f'GEMINI_API_KEY = "{self.KEY}"\n', encoding="utf-8")
+
+            configuration.backup_file(path)
+
+            self.assertTrue(old_json.exists())
+            self.assertNotIn(self.KEY, old_json.read_text(encoding="utf-8"))
+            self.assertFalse(old_toml.exists())
+
     def test_backups_do_not_pile_up(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

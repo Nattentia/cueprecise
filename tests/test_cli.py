@@ -67,14 +67,9 @@ class SetupKeySourceTest(unittest.TestCase):
         with mock.patch.object(cueprecise_cli.sys, "stdin", io.StringIO(self.KEY + "\n")):
             self.assertEqual(cueprecise_cli._resolve_setup_key("-", None), self.KEY)
 
-    def test_literal_key_still_works_but_says_why_not_to(self) -> None:
-        # 자동화가 이미 쓰고 있다. 없애면 남의 파이프라인이 깨진다.
-        stderr = io.StringIO()
-        with mock.patch.object(cueprecise_cli.sys, "stderr", stderr):
-            self.assertEqual(cueprecise_cli._resolve_setup_key(self.KEY, None), self.KEY)
-        self.assertIn("셸 기록", stderr.getvalue())
-        # 경고문이 키를 다시 흘리면 안 된다.
-        self.assertNotIn(self.KEY, stderr.getvalue())
+    def test_literal_key_is_refused_before_it_can_reach_a_child_process(self) -> None:
+        with self.assertRaisesRegex(ValueError, "명령줄"):
+            cueprecise_cli._resolve_setup_key(self.KEY, None)
 
     def test_environment_is_used_when_nothing_is_given(self) -> None:
         with mock.patch.dict("os.environ", {"GEMINI_API_KEY": self.KEY}):

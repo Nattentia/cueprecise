@@ -133,6 +133,23 @@ class TranscribeResumeTests(unittest.TestCase):
             json.loads((self.bundle / "job.json").read_text(encoding="utf-8"))["status"],
             "complete")
 
+    def test_failure_does_not_store_or_raise_the_api_key(self) -> None:
+        key = "AIza" + "r" * 36
+
+        def failing(_path, _langs):
+            raise RuntimeError(f"provider echoed {key}")
+
+        with self.assertRaises(pipeline.StageError) as caught:
+            pipeline.stage_transcribe(
+                self.bundle, self.job, ledger=self.ledger, api_key=key,
+                daily_limit=25, rpm_limit=None, request_interval=0.0,
+                transcriber=failing)
+
+        saved = (self.bundle / "job.json").read_text(encoding="utf-8")
+        self.assertNotIn(key, saved)
+        self.assertNotIn(key, str(caught.exception))
+        self.assertIn("***", saved)
+
     def test_failed_attempt_still_counts_in_ledger(self) -> None:
         failing = FakeTranscriber({"chunk-000.mp3": ["a"], "chunk-001.mp3": ["b"]},
                                   fail_on={"chunk-000.mp3"})

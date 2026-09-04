@@ -14,7 +14,7 @@ not have to start over.
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![CI](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-477%20passing-brightgreen.svg)](#tests)
+[![Tests](https://img.shields.io/badge/tests-487%20passing-brightgreen.svg)](#tests)
 
 ### What it feels like
 
@@ -122,10 +122,12 @@ prerequisites.
 6. Fully quit and reopen the connected apps.
 
 The installer prepares the bundled video tools, detects supported AI apps, backs up their existing
-configuration, and adds only the CuePrecise MCP entry. The API key is stored in the selected apps'
-local configuration; CuePrecise does not send it to a project-operated server.
+configuration, and adds only the CuePrecise MCP entry. On Windows, the API key is encrypted with
+Windows DPAPI for the current user; app configurations contain only the protected credential's
+path. CuePrecise does not send the key to a project-operated server. Upgrading automatically moves
+older plaintext CuePrecise keys into this protected store.
 
-> **Unsigned preview:** `v0.2.1` is not digitally signed, so Windows may display an
+> **Unsigned preview:** `v0.2.2` is not digitally signed, so Windows may display an
 > unknown-publisher warning. Download it only from this repository's Releases page.
 
 ### macOS, Linux, and command-line installation
@@ -143,17 +145,16 @@ Install `ffmpeg` and `ffprobe`, then check the environment:
 cueprecise doctor
 ```
 
-Create a key at [Google AI Studio](https://aistudio.google.com/api-keys), then run:
+Create a key at [Google AI Studio](https://aistudio.google.com/api-keys), then paste it through
+standard input so it does not become part of the command or shell history:
 
 ```bash
-export GEMINI_API_KEY="..."          # Windows PowerShell: $env:GEMINI_API_KEY="..."
-cueprecise setup
+cueprecise setup --api-key -         # paste the key, then press Enter
 cueprecise run "https://www.youtube.com/watch?v=VIDEO_ID" --language pl-PL
 cueprecise status VIDEO_ID
 ```
 
-The key can also come from a file or standard input, which keeps it out of your shell
-history:
+The key can also come from a file or a password manager:
 
 ```bash
 cueprecise setup --api-key-file ~/.gemini-key
@@ -209,11 +210,17 @@ If an entry called `cueprecise` already exists and CuePrecise did not create it,
 skipped. Someone else's configuration is never overwritten, and one failing app does not stop the
 others.
 
+On Windows, `cueprecise setup` uses the same DPAPI-protected credential as the installer. On macOS
+and Linux, MCP clients currently receive the key through their local configuration, so restrict
+that file to your user account. Literal `--api-key VALUE` is rejected on every platform to keep the
+key out of process listings and shell history.
+
 **ChatGPT connectors and Claude.ai on the web are not supported.** Both accept only remote MCP
 servers reached over HTTPS with OAuth. CuePrecise runs locally on your computer, so it cannot be
 registered there.
 
-The JSON below is needed only for a source checkout or an MCP host that is not listed above:
+The JSON below is needed only for a source checkout or an MCP host that is not listed above. It
+stores the key in plaintext, so prefer the setup command when possible:
 
 ```json
 {
@@ -331,7 +338,7 @@ shown above.
 python -m unittest discover -s tests
 ```
 
-The suite contains 477 tests and uses the standard-library `unittest` runner. Tests do not access
+The suite contains 487 tests and uses the standard-library `unittest` runner. Tests do not access
 the network or call the Gemini API. Tests requiring `google-genai` are skipped when the SDK is not
 installed.
 
