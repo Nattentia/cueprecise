@@ -45,9 +45,11 @@ class McpbPackagingTest(unittest.TestCase):
 
         for filename in ("cueprecise-mcp.exe", "yt-dlp.exe", "ffmpeg.exe", "ffprobe.exe"):
             self.assertIn(filename, script)
-        self.assertIn("FFmpeg-COPYING.GPLv3.txt", script)
+        self.assertIn("FFmpeg-LICENSE.txt", script)
+        self.assertIn("3C3DD10B1F4E3663F38A1FB574D7734F7606DBB758EAEC2E4F7D398B9ACDF78A", script)
+        self.assertIn('$_.Name -ne "ffplay.exe"', script)
         self.assertIn("github.com/yt-dlp/yt-dlp", notices)
-        self.assertIn("gyan.dev/ffmpeg/builds/#sources", notices)
+        self.assertIn("github.com/BtbN/FFmpeg-Builds", notices)
 
 
 if __name__ == "__main__":

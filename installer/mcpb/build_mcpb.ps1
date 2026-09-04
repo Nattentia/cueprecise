@@ -19,16 +19,31 @@ if (-not (Test-Path -LiteralPath (Join-Path $windows "yt-dlp.exe"))) {
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed: yt-dlp" }
 }
 
-$ffmpeg = (Get-Command "ffmpeg.exe" -ErrorAction Stop).Source
-$ffprobe = (Get-Command "ffprobe.exe" -ErrorAction Stop).Source
-$ffmpegVersion = (& $ffmpeg -version 2>&1 | Select-Object -First 1) -join ""
-if ($ffmpegVersion -notmatch "gyan\.dev") {
-    throw "The Claude bundle currently accepts only the documented Gyan FFmpeg build: $ffmpegVersion"
+$ffmpegTag = "autobuild-2026-09-03-13-17"
+$ffmpegAsset = "ffmpeg-N-126390-g9fc8c785e2-win64-lgpl-shared.zip"
+$ffmpegSha256 = "3C3DD10B1F4E3663F38A1FB574D7734F7606DBB758EAEC2E4F7D398B9ACDF78A"
+$ffmpegCache = Join-Path $repo "build\mcpb\ffmpeg"
+$ffmpegArchive = Join-Path $ffmpegCache $ffmpegAsset
+$ffmpegExtract = Join-Path $ffmpegCache "unpacked"
+New-Item -ItemType Directory -Force -Path $ffmpegCache | Out-Null
+if (-not (Test-Path -LiteralPath $ffmpegArchive -PathType Leaf)) {
+    $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$ffmpegTag/$ffmpegAsset"
+    Invoke-WebRequest -Uri $url -OutFile $ffmpegArchive
 }
-$ffmpegRoot = Split-Path -Parent (Split-Path -Parent $ffmpeg)
-$ffmpegLicense = Join-Path $ffmpegRoot "LICENSE"
-if (-not (Test-Path -LiteralPath $ffmpegLicense -PathType Leaf)) {
-    throw "The FFmpeg distribution license was not found beside the selected build: $ffmpegLicense"
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $ffmpegArchive).Hash -ne $ffmpegSha256) {
+    throw "The pinned FFmpeg archive failed SHA-256 verification"
+}
+if (Test-Path -LiteralPath $ffmpegExtract) {
+    Remove-Item -LiteralPath $ffmpegExtract -Recurse -Force
+}
+Expand-Archive -LiteralPath $ffmpegArchive -DestinationPath $ffmpegExtract
+$ffmpegRoot = (Get-ChildItem -LiteralPath $ffmpegExtract -Directory | Select-Object -First 1).FullName
+$ffmpegBin = Join-Path $ffmpegRoot "bin"
+$ffmpegLicense = Join-Path $ffmpegRoot "LICENSE.txt"
+foreach ($required in @("ffmpeg.exe", "ffprobe.exe", "avcodec-63.dll", "avformat-63.dll")) {
+    if (-not (Test-Path -LiteralPath (Join-Path $ffmpegBin $required) -PathType Leaf)) {
+        throw "The pinned FFmpeg archive is missing $required"
+    }
 }
 
 if (Test-Path -LiteralPath $stage) {
@@ -38,9 +53,8 @@ New-Item -ItemType Directory -Force -Path $server, $licenses, $dist | Out-Null
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "manifest.json") -Destination (Join-Path $stage "manifest.json")
 Copy-Item -LiteralPath (Join-Path $windows "cueprecise-mcp.exe") -Destination $server
 Copy-Item -LiteralPath (Join-Path $windows "yt-dlp.exe") -Destination $server
-Copy-Item -LiteralPath $ffmpeg -Destination $server
-Copy-Item -LiteralPath $ffprobe -Destination $server
-Copy-Item -LiteralPath $ffmpegLicense -Destination (Join-Path $licenses "FFmpeg-COPYING.GPLv3.txt")
+Get-ChildItem -LiteralPath $ffmpegBin -File | Where-Object { $_.Name -ne "ffplay.exe" } | Copy-Item -Destination $server
+Copy-Item -LiteralPath $ffmpegLicense -Destination (Join-Path $licenses "FFmpeg-LICENSE.txt")
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "THIRD_PARTY_NOTICES.md") -Destination $licenses
 
 $archive = Join-Path $dist "cueprecise-windows.zip"

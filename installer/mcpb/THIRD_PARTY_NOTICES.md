@@ -12,8 +12,11 @@ media. They remain under their own licenses.
 ## FFmpeg
 
 - Project: https://ffmpeg.org/
-- Windows build provider: https://www.gyan.dev/ffmpeg/builds/
-- License for the included build: GNU General Public License version 3
-- Corresponding source and build information: https://www.gyan.dev/ffmpeg/builds/#sources
+- Windows build provider: https://github.com/BtbN/FFmpeg-Builds
+- Included build: https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-09-03-13-17
+- License for the included build: GNU Lesser General Public License version 2.1 or later
+- Corresponding FFmpeg source revision: https://github.com/FFmpeg/FFmpeg/commit/9fc8c785e2
+- Build scripts: https://github.com/BtbN/FFmpeg-Builds
 
-The complete GPLv3 license text is included as `FFmpeg-COPYING.GPLv3.txt`.
+The distribution's license text is included as `FFmpeg-LICENSE.txt`. CuePrecise ships the
+shared libraries unchanged and invokes the separate `ffmpeg.exe` and `ffprobe.exe` programs.

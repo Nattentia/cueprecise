@@ -24,8 +24,9 @@ For the complete Claude Desktop bundle, run:
 pwsh -File installer/mcpb/build_mcpb.ps1
 ```
 
-This creates `dist/mcpb/cueprecise-windows.mcpb`. The build uses the FFmpeg distribution
-already installed on the build machine and includes its license and source/build links.
+This creates `dist/mcpb/cueprecise-windows.mcpb`. The build downloads a pinned BtbN LGPL
+shared FFmpeg archive, verifies its SHA-256 hash, omits `ffplay`, and includes the applicable
+license and source/build links.
 
 ## Manual acceptance test
 
