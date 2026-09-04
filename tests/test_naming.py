@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 import configuration
+import credential_store
 import installer_support
 import mcp_server
 
@@ -48,7 +49,9 @@ class ReinstallTest(unittest.TestCase):
         install = tmp / "app"
         install.mkdir()
         (install / "cueprecise-mcp.exe").write_bytes(b"")
-        installer_support.migrate(install, config_path=config)
+        self.credential = tmp / "key.dpapi"
+        installer_support.migrate(install, config_path=config,
+                                  credential_path=self.credential)
         return _read(config)
 
     def test_entry_points_at_the_newly_installed_server(self) -> None:
@@ -62,7 +65,11 @@ class ReinstallTest(unittest.TestCase):
     def test_api_key_is_preserved_without_being_supplied_again(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             saved = self._migrated(Path(tmp))
-            self.assertEqual(saved["mcpServers"]["cueprecise"]["env"]["GEMINI_API_KEY"], VALID_KEY)
+            environment = saved["mcpServers"]["cueprecise"]["env"]
+            self.assertNotIn("GEMINI_API_KEY", environment)
+            self.assertEqual(environment[credential_store.CREDENTIAL_ENV],
+                             str(self.credential.resolve()))
+            self.assertEqual(credential_store.load(self.credential), VALID_KEY)
 
     def test_other_servers_and_settings_are_untouched(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

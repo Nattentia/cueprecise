@@ -20,6 +20,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+import credential_store
+
 
 class ConfigurationError(SystemExit, Exception):
     """설정을 고치지 못했다.
@@ -179,6 +181,42 @@ def prune_backups(path: Path, keep: int = BACKUP_KEEP) -> list[Path]:
     return removed
 
 
+def scrub_secret_backups(path: Path) -> list[Path]:
+    """이전 버전이 남긴 백업에서도 비밀값을 제거한다.
+
+    JSON은 구조를 보존한 채 비밀 환경변수만 지운다. TOML처럼 안전하게 다시
+    쓸 수 없는 형식은 비밀 변수명이 들어 있을 때 백업 자체를 지운다. 원본
+    설정은 건드리지 않는다.
+    """
+    removed: list[Path] = []
+    for backup in path.parent.glob(f"{path.name}.*.bak"):
+        try:
+            text = backup.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if not any(name in text for name in SECRET_ENV_NAMES):
+            continue
+        try:
+            value = json.loads(text)
+        except ValueError:
+            backup.unlink(missing_ok=True)
+            removed.append(backup)
+            continue
+        cleaned, _changed = _without_secrets(value)
+        rewritten = json.dumps(cleaned, ensure_ascii=False, indent=2) + "\n"
+        # 예상 밖 위치에 키 이름이 있으면 내용을 추측해 고치지 않는다.
+        if any(name in rewritten for name in SECRET_ENV_NAMES):
+            backup.unlink(missing_ok=True)
+            removed.append(backup)
+            continue
+        try:
+            backup.write_text(rewritten, encoding="utf-8")
+        except OSError:
+            backup.unlink(missing_ok=True)
+            removed.append(backup)
+    return removed
+
+
 def backup_file(path: Path) -> Path | None:
     """고치기 전 사본을 남긴다. 없는 파일은 남길 것도 없다.
 
@@ -192,14 +230,24 @@ def backup_file(path: Path) -> Path | None:
     """
     if not path.exists():
         return None
+    scrub_secret_backups(path)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     backup = path.with_name(f"{path.name}.{stamp}.bak")
     shutil.copy2(path, backup)
     try:
         original = json.loads(backup.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        # 읽어내지 못하는 서식이다. 원본 사본을 그대로 둔다 — 복구 수단을
-        # 없애느니 개수 제한에 맡긴다.
+        # JSON 이 아닌 설정(Codex TOML 등)은 안전하게 다시 쓸 수 없다. 키가
+        # 든 원본 사본을 남기는 것보다 이 한 번의 백업을 생략하는 편이 낫다.
+        try:
+            contains_secret = any(name in backup.read_text(encoding="utf-8")
+                                  for name in SECRET_ENV_NAMES)
+        except OSError:
+            contains_secret = True
+        if contains_secret:
+            backup.unlink(missing_ok=True)
+            prune_backups(path)
+            return None
         prune_backups(path)
         return backup
     cleaned, removed = _without_secrets(original)
@@ -337,6 +385,8 @@ def setup_file_client(config_path: Path, bundle_root: Path, *, api_key: str | No
     # GEMINI_API_KEY 가 사라지면 안 된다.
     environment = _inherited_environment(existing)
     environment.update(extra_env or {})
+    if credential_store.CREDENTIAL_ENV in environment:
+        environment.pop("GEMINI_API_KEY", None)
     if api_key:
         environment["GEMINI_API_KEY"] = api_key
     if environment:
@@ -544,6 +594,8 @@ class CliClientTarget(ClientTarget):
                      api_key: str | None) -> dict[str, str]:
         environment = _inherited_environment(existing)
         environment.update(extra_env or {})
+        if credential_store.CREDENTIAL_ENV in environment:
+            environment.pop("GEMINI_API_KEY", None)
         if api_key:
             environment["GEMINI_API_KEY"] = api_key
         return environment

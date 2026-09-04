@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 import context
@@ -158,6 +159,18 @@ class ModernEraTests(unittest.TestCase):
              "params": {"name": "cueprecise_outline", "arguments": {"video_id": "없음"}}},
             bundle_root=Path("data"))
         self.assertTrue(reply["result"]["isError"])
+
+    def test_tool_failure_never_returns_the_api_key(self) -> None:
+        key = "AIza" + "q" * 36
+        with mock.patch("mcp_server.dispatch",
+                        side_effect=RuntimeError(f"provider rejected {key}")):
+            reply = mcp_server.handle(
+                {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                 "params": {"name": "cueprecise_status", "arguments": {}}},
+                bundle_root=Path("data"), api_key=key)
+        text = reply["result"]["content"][0]["text"]
+        self.assertNotIn(key, text)
+        self.assertIn("***", text)
 
     def test_serve_reads_and_writes_json_lines(self) -> None:
         stream_in = io.StringIO(

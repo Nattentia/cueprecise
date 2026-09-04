@@ -56,7 +56,7 @@ class OnboardingApp:
         self.show_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(root, text="입력한 키 보기", variable=self.show_var,
                         command=self.toggle_key).pack(anchor="w")
-        ttk.Label(root, text="키는 AI 앱이 CuePrecise를 사용할 수 있도록 이 PC의 앱 설정에만 저장됩니다.",
+        ttk.Label(root, text="키는 Windows가 현재 사용자만 풀 수 있도록 암호화해 저장합니다.",
                   style="Body.TLabel", foreground="#666666", wraplength=540).pack(anchor="w", pady=(5, 20))
 
         ttk.Label(root, text="3. 연결할 앱 고르기", style="Step.TLabel").pack(anchor="w")
@@ -138,7 +138,9 @@ class OnboardingApp:
         except tk.TclError:
             self.status_var.set("클립보드에 복사된 글자가 없습니다. API 키를 먼저 복사해 주세요.")
             return
-        self.key_var.set(installer_support.normalize_api_key(value))
+        normalized = installer_support.normalize_api_key(value)
+        self.key_var.set(normalized)
+        self.pasted_key = normalized
         self.status_var.set("키를 붙여넣었습니다. 아래 연결 버튼을 눌러 주세요.")
 
     def toggle_key(self) -> None:
@@ -176,6 +178,17 @@ class OnboardingApp:
 
     def _succeeded(self, result: dict) -> None:
         self.progress.stop()
+        # 성공한 뒤에는 입력 위젯과 클립보드에 키를 남기지 않는다. 사용자가
+        # 그 사이 다른 내용을 복사했다면 그것은 건드리지 않는다.
+        key = self.key_var.get()
+        self.key_var.set("")
+        self.show_var.set(False)
+        self.key_entry.configure(show="●")
+        try:
+            if self.root.clipboard_get() == getattr(self, "pasted_key", key):
+                self.root.clipboard_clear()
+        except tk.TclError:
+            pass
         self.action.configure(text="연결 완료", state="disabled")
         names = "、".join(item["label"] for item in result["connected"])
         self.status_var.set(f"✓ {names}에 연결했습니다. 각 앱을 완전히 종료한 뒤 다시 실행하세요.")
@@ -198,7 +211,7 @@ def main() -> None:
     if sys.argv[1:] == ["--migrate"]:
         # 설치 프로그램이 조용히 부른다. 실패해도 설치를 막지 않는다.
         try:
-            installer_support.migrate(install_directory())
+            installer_support.migrate_clients(install_directory())
         except Exception:
             pass
         return
