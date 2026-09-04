@@ -1,0 +1,68 @@
+{
+  "manifest_version": "0.3",
+  "name": "cueprecise",
+  "display_name": "CuePrecise",
+  "version": "0.2.0",
+  "description": "Find and revisit exact moments in YouTube videos with transcript and visual evidence.",
+  "long_description": "CuePrecise transcribes the original speech in a YouTube video, aligns it to the timeline, and retrieves matching passages and frames for Claude.",
+  "author": {
+    "name": "Nattentia",
+    "url": "https://github.com/Nattentia"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Nattentia/cueprecise"
+  },
+  "homepage": "https://github.com/Nattentia/cueprecise",
+  "documentation": "https://github.com/Nattentia/cueprecise#readme",
+  "support": "https://github.com/Nattentia/cueprecise/issues",
+  "license": "MIT",
+  "keywords": [
+    "youtube",
+    "transcription",
+    "timestamps",
+    "video",
+    "gemini"
+  ],
+  "privacy_policies": [
+    "https://github.com/Nattentia/cueprecise/blob/main/PRIVACY.md",
+    "https://policies.google.com/privacy"
+  ],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/cueprecise-mcp.exe",
+    "mcp_config": {
+      "command": "${__dirname}/server/cueprecise-mcp.exe",
+      "args": [
+        "--bundle-root",
+        "${user_config.data_directory}"
+      ],
+      "env": {
+        "GEMINI_API_KEY": "${user_config.gemini_api_key}"
+      }
+    }
+  },
+  "tools_generated": true,
+  "user_config": {
+    "gemini_api_key": {
+      "type": "string",
+      "title": "Gemini API key",
+      "description": "Create a key at https://aistudio.google.com/app/apikey and paste it here.",
+      "sensitive": true,
+      "required": true
+    },
+    "data_directory": {
+      "type": "directory",
+      "title": "Local video context folder",
+      "description": "CuePrecise keeps transcripts, indexes, and selected frames in this folder for later conversations.",
+      "default": "${HOME}/.cueprecise/data",
+      "required": true
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=1.0.0",
+    "platforms": [
+      "win32"
+    ]
+  }
+}
