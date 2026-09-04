@@ -134,6 +134,18 @@ cueprecise run "https://www.youtube.com/watch?v=VIDEO_ID" --language pl-PL
 cueprecise status VIDEO_ID
 ```
 
+The key can also come from a file or standard input, which keeps it out of your shell
+history:
+
+```bash
+cueprecise setup --api-key-file ~/.gemini-key
+pass show gemini/api-key | cueprecise setup --api-key -
+```
+
+If a key is exposed, delete it at [Google AI Studio](https://aistudio.google.com/api-keys)
+and create a new one. See [the privacy policy](PRIVACY.md#api-키를-폐기하는-방법) for the
+full procedure.
+
 For source development only:
 
 ```bash
