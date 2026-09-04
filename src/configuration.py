@@ -143,13 +143,78 @@ def read_config(path: Path) -> dict[str, Any]:
     return value
 
 
+# 설정 파일 하나당 남겨 둘 백업 개수. 백업은 되돌리기 위한 것이지 이력을 쌓기
+# 위한 것이 아니다. 무한히 쌓이면 폐기한 옛 키가 디스크에 영원히 남는다.
+BACKUP_KEEP = 3
+
+
+def _without_secrets(value: Any) -> tuple[Any, bool]:
+    """설정 사본에서 비밀 환경변수만 지운다. 지웠는지도 함께 알린다."""
+    if not isinstance(value, dict):
+        return value, False
+    removed = False
+    cleaned: dict[str, Any] = {}
+    for name, item in value.items():
+        if name == "env" and isinstance(item, dict):
+            kept = {k: v for k, v in item.items() if k not in SECRET_ENV_NAMES}
+            removed = removed or len(kept) != len(item)
+            cleaned[name] = kept
+            continue
+        cleaned[name], child_removed = _without_secrets(item)
+        removed = removed or child_removed
+    return cleaned, removed
+
+
+def prune_backups(path: Path, keep: int = BACKUP_KEEP) -> list[Path]:
+    """이 설정 파일의 옛 백업을 오래된 것부터 지운다. 지운 목록을 돌려준다."""
+    existing = sorted(path.parent.glob(f"{path.name}.*.bak"))
+    removed: list[Path] = []
+    for stale in existing[:max(0, len(existing) - keep)]:
+        try:
+            stale.unlink()
+        except OSError:
+            # 지우지 못해도 설치를 막지 않는다. 백업 정리는 부수 작업이다.
+            continue
+        removed.append(stale)
+    return removed
+
+
 def backup_file(path: Path) -> Path | None:
-    """고치기 전 사본을 남긴다. 없는 파일은 남길 것도 없다."""
+    """고치기 전 사본을 남긴다. 없는 파일은 남길 것도 없다.
+
+    **사본에서 API 키를 지운다.** 백업은 되돌리기 위한 것이고, 되돌릴 때 필요한
+    것은 어떤 항목이 어떤 실행 파일을 가리켰는가지 비밀값이 아니다. 지우지 않으면
+    사용자가 키를 폐기해도 옛 키를 담은 사본이 설정 폴더에 영원히 남는다.
+
+    JSON 으로 읽히지 않는 파일(Codex 의 TOML)은 손대지 않고 그대로 복사한다.
+    설정 파일을 우리가 해석해 다시 쓰는 것보다, 원본을 그대로 두고 개수를 줄이는
+    쪽이 안전하다.
+    """
     if not path.exists():
         return None
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     backup = path.with_name(f"{path.name}.{stamp}.bak")
     shutil.copy2(path, backup)
+    try:
+        original = json.loads(backup.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # 읽어내지 못하는 서식이다. 원본 사본을 그대로 둔다 — 복구 수단을
+        # 없애느니 개수 제한에 맡긴다.
+        prune_backups(path)
+        return backup
+    cleaned, removed = _without_secrets(original)
+    if removed:
+        try:
+            backup.write_text(
+                json.dumps(cleaned, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8")
+        except OSError:
+            # 다시 쓰지 못하면 키가 든 사본이 남는다. 그것은 이 함수가 막으려던
+            # 바로 그 상태이므로 사본을 지우고 백업 없이 진행한다.
+            backup.unlink(missing_ok=True)
+            prune_backups(path)
+            return None
+    prune_backups(path)
     return backup
 
 
@@ -172,8 +237,16 @@ def write_config(path: Path, value: dict[str, Any]) -> Path | None:
     path.parent.mkdir(parents=True, exist_ok=True)
     backup = backup_file(path)
     temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    # 임시 파일에는 API 키가 들어 있다. `replace` 가 실패하면(권한, 파일 잠금,
+    # 다른 드라이브) 그 파일이 설정 폴더에 그대로 남는다. 실패한 설치가 키를
+    # 흘려 두고 가는 셈이라 반드시 치운다.
+    try:
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+                             encoding="utf-8")
+        temporary.replace(path)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        raise
     return backup
 
 

@@ -988,5 +988,90 @@ class SecretsDoNotReachTheUserTest(PretendsCommandsExist):
             self.assertNotIn(self.KEY, error)
 
 
+class BackupHygieneTest(unittest.TestCase):
+    """백업은 되돌리기 위한 것이다. 폐기한 키를 보관하는 곳이 아니다."""
+
+    KEY = "AIza" + "b" * 36
+
+    def _config(self, root: Path) -> Path:
+        path = root / "claude_desktop_config.json"
+        path.write_text(json.dumps({"mcpServers": {
+            "cueprecise": {"command": "cueprecise-mcp.exe",
+                           "args": ["--bundle-root", "d"],
+                           "env": {"GEMINI_API_KEY": self.KEY, "PATH": "C:/ffmpeg"}},
+            "someone-else": {"command": "other.exe",
+                             "env": {"GEMINI_API_KEY": self.KEY}},
+        }}, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def test_backup_drops_the_key_but_keeps_everything_else(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._config(Path(tmp))
+            backup = configuration.backup_file(path)
+            self.assertIsNotNone(backup)
+            text = backup.read_text(encoding="utf-8")
+            self.assertNotIn(self.KEY, text)
+            saved = json.loads(text)
+            # 되돌릴 때 필요한 것은 남아 있어야 한다.
+            entry = saved["mcpServers"]["cueprecise"]
+            self.assertEqual(entry["command"], "cueprecise-mcp.exe")
+            self.assertEqual(entry["args"], ["--bundle-root", "d"])
+            self.assertEqual(entry["env"]["PATH"], "C:/ffmpeg")
+            # 남의 항목에 든 키도 우리 백업에 실려서는 안 된다.
+            self.assertNotIn("GEMINI_API_KEY", saved["mcpServers"]["someone-else"]["env"])
+            # 원본은 그대로다. 백업은 원본을 건드리지 않는다.
+            self.assertIn(self.KEY, path.read_text(encoding="utf-8"))
+
+    def test_unreadable_format_is_copied_untouched(self) -> None:
+        """Codex 의 TOML 은 우리가 해석하지 않는다. 복구 수단을 없애지 않는다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text('[mcp_servers.cueprecise]\ncommand = "x"\n', encoding="utf-8")
+            backup = configuration.backup_file(path)
+            self.assertEqual(backup.read_text(encoding="utf-8"),
+                             path.read_text(encoding="utf-8"))
+
+    def test_backups_do_not_pile_up(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = self._config(root)
+            for _ in range(6):
+                configuration.backup_file(path)
+            remaining = sorted(root.glob(f"{path.name}.*.bak"))
+            self.assertEqual(len(remaining), configuration.BACKUP_KEEP)
+            # 남는 것은 가장 최근 것들이다.
+            self.assertEqual(remaining, sorted(remaining)[-configuration.BACKUP_KEEP:])
+
+    def test_pruning_leaves_other_files_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = self._config(root)
+            bystander = root / "other.json.20200101-000000-000000.bak"
+            bystander.write_text("{}", encoding="utf-8")
+            for _ in range(6):
+                configuration.backup_file(path)
+            self.assertTrue(bystander.exists())
+
+    def test_failed_write_leaves_no_temporary_holding_the_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "config.json"
+            payload = {"mcpServers": {"cueprecise": {
+                "command": "cueprecise-mcp.exe",
+                "env": {"GEMINI_API_KEY": self.KEY}}}}
+
+            original = Path.replace
+
+            def refuses(self_path, target):
+                raise OSError("파일이 잠겨 있다")
+
+            with mock.patch.object(Path, "replace", refuses):
+                with self.assertRaises(OSError):
+                    configuration.write_config(path, payload)
+            self.assertEqual(list(root.glob("*.tmp")), [])
+            self.assertEqual(list(root.glob(".*.tmp")), [])
+            self.assertIs(Path.replace, original)
+
+
 if __name__ == "__main__":
     unittest.main()
