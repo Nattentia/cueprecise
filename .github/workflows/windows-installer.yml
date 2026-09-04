@@ -44,14 +44,6 @@ jobs:
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLower()
           "sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Write-Output $hash
-      - name: Prepare FFmpeg for the Claude bundle
-        shell: pwsh
-        run: |
-          choco install ffmpeg --yes --no-progress
-          $ffmpeg = Get-ChildItem "C:\ProgramData\chocolatey\lib\ffmpeg\tools" `
-            -Filter ffmpeg.exe -Recurse -File | Select-Object -First 1
-          if (-not $ffmpeg) { throw "Chocolatey installed FFmpeg but ffmpeg.exe was not found" }
-          $ffmpeg.Directory.FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Build Claude Desktop MCPB
         shell: pwsh
         run: ./installer/mcpb/build_mcpb.ps1
