@@ -6,8 +6,9 @@ This package answers three questions before CuePrecise adopts MCPB as a release 
 2. Which tools work before `ffmpeg` and `yt-dlp` are bundled?
 3. Does Claude Desktop mask, store, pass, and remove a `sensitive` Gemini API key safely?
 
-It is deliberately not a release artifact. It contains `cueprecise-mcp.exe` only and does
-not contain `ffmpeg`, `yt-dlp`, the onboarding program, or a Windows installer.
+The PoC contains `cueprecise-mcp.exe` only. The Claude release bundle additionally contains
+`yt-dlp`, `ffmpeg`, and `ffprobe`, so a Claude Desktop user does not need Python or a separate
+media-tool installation.
 
 ## Build
 
@@ -16,6 +17,15 @@ pwsh -File installer/mcpb/build_mcpb_poc.ps1
 ```
 
 The result is `dist/mcpb/cueprecise-windows-poc.mcpb`.
+
+For the complete Claude Desktop bundle, run:
+
+```powershell
+pwsh -File installer/mcpb/build_mcpb.ps1
+```
+
+This creates `dist/mcpb/cueprecise-windows.mcpb`. The build uses the FFmpeg distribution
+already installed on the build machine and includes its license and source/build links.
 
 ## Manual acceptance test
 

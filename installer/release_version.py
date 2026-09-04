@@ -1,4 +1,4 @@
-"""릴리스 후보의 버전이 저장소 네 곳에서 같은지 확인한다.
+"""릴리스 후보의 버전이 저장소 다섯 곳에서 같은지 확인한다.
 
 0.2.0 을 낼 때 버전이 박힌 곳을 손으로 고치다 어긋난 적이 있다. 릴리스
 워크플로가 빌드를 시작하기 전에 이 검사를 먼저 통과해야 한다.
@@ -27,6 +27,10 @@ DECLARATIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
     ("README.md", re.compile(r"`v(\d+\.\d+\.\d+)`")),
     ("README.ko.md", re.compile(r"`v(\d+\.\d+\.\d+)`")),
+    (
+        "installer/mcpb/manifest.json",
+        re.compile(r'"version"\s*:\s*"(\d+\.\d+\.\d+)"'),
+    ),
 )
 
 
@@ -62,14 +66,14 @@ def declared_versions(repo_root: Path = REPO_ROOT) -> dict[str, str]:
 
 
 def check(version: str, repo_root: Path = REPO_ROOT) -> str:
-    """요청한 버전이 네 곳과 모두 같으면 태그 이름을 돌려준다."""
+    """요청한 버전이 다섯 곳과 모두 같으면 태그 이름을 돌려준다."""
     wanted = normalize(version)
     found = declared_versions(repo_root)
     wrong = {name: value for name, value in found.items() if value != wanted}
     if wrong:
         lines = [f"요청한 버전은 {wanted} 인데 다음이 다르다:"]
         lines += [f"  {name}: {value}" for name, value in sorted(wrong.items())]
-        lines.append("네 곳을 모두 같은 값으로 고친 뒤 다시 실행한다.")
+        lines.append("다섯 곳을 모두 같은 값으로 고친 뒤 다시 실행한다.")
         raise VersionMismatch("\n".join(lines))
     return f"v{wanted}"
 
@@ -89,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     except VersionMismatch as error:
         print(str(error), file=sys.stderr)
         return 1
-    print(f"버전이 네 곳에서 모두 {tag} 로 일치한다.", file=sys.stderr)
+    print(f"버전이 다섯 곳에서 모두 {tag} 로 일치한다.", file=sys.stderr)
     print(tag)
     return 0
 

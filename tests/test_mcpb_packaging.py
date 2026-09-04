@@ -35,6 +35,20 @@ class McpbPackagingTest(unittest.TestCase):
         self.assertNotIn('Copy-Item -LiteralPath $ffmpeg', script)
         self.assertNotIn('Copy-Item -LiteralPath $ytDlp', script)
 
+    def test_claude_release_bundle_contains_runtime_tools_and_licenses(self):
+        script = (ROOT / "installer" / "mcpb" / "build_mcpb.ps1").read_text(
+            encoding="utf-8"
+        )
+        notices = (ROOT / "installer" / "mcpb" / "THIRD_PARTY_NOTICES.md").read_text(
+            encoding="utf-8"
+        )
+
+        for filename in ("cueprecise-mcp.exe", "yt-dlp.exe", "ffmpeg.exe", "ffprobe.exe"):
+            self.assertIn(filename, script)
+        self.assertIn("FFmpeg-COPYING.GPLv3.txt", script)
+        self.assertIn("github.com/yt-dlp/yt-dlp", notices)
+        self.assertIn("gyan.dev/ffmpeg/builds/#sources", notices)
+
 
 if __name__ == "__main__":
     unittest.main()

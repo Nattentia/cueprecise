@@ -1,6 +1,6 @@
 """릴리스 버전 검사 테스트.
 
-문자열을 맞추는 테스트가 아니다. **버전이 박힌 네 곳이 지금 서로 맞는지**를
+문자열을 맞추는 테스트가 아니다. **버전이 박힌 다섯 곳이 지금 서로 맞는지**를
 평소 CI 에서 미리 걸러내고, 어긋났을 때 릴리스가 실제로 멈추는지를 본다.
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _fake_repo(root: Path, pyproject: str, iss: str, readme: str, readme_ko: str) -> None:
-    (root / "installer").mkdir(parents=True, exist_ok=True)
+    (root / "installer" / "mcpb").mkdir(parents=True, exist_ok=True)
     (root / "pyproject.toml").write_text(
         f'[project]\nname = "cueprecise-mcp"\nversion = "{pyproject}"\n', encoding="utf-8"
     )
@@ -26,6 +26,9 @@ def _fake_repo(root: Path, pyproject: str, iss: str, readme: str, readme_ko: str
     )
     (root / "README.md").write_text(f"> `v{readme}` is a prerelease.\n", encoding="utf-8")
     (root / "README.ko.md").write_text(f"> `v{readme_ko}`은 시험판이다.\n", encoding="utf-8")
+    (root / "installer" / "mcpb" / "manifest.json").write_text(
+        f'{{"version": "{pyproject}"}}\n', encoding="utf-8"
+    )
 
 
 class RepositoryConsistencyTest(unittest.TestCase):
@@ -33,7 +36,7 @@ class RepositoryConsistencyTest(unittest.TestCase):
 
     def test_all_declared_versions_agree(self) -> None:
         found = release_version.declared_versions(REPO_ROOT)
-        self.assertEqual(len(found), 4)
+        self.assertEqual(len(found), 5)
         self.assertEqual(
             len(set(found.values())),
             1,
