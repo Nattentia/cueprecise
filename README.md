@@ -14,7 +14,7 @@ not have to start over.
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![CI](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-432%20passing-brightgreen.svg)](#tests)
+[![Tests](https://img.shields.io/badge/tests-477%20passing-brightgreen.svg)](#tests)
 
 ### What it feels like
 
@@ -39,18 +39,23 @@ https://github.com/user-attachments/assets/ce7d595b-871f-469a-bcb8-798713751ffd
 | 💾 **Continue in a later chat** | Leave a local reference your AI can consult without starting over. |
 | 🔐 **No CuePrecise account or server** | No advertising, tracking, or project-operated backend. |
 
-### Start on Windows
+### Start in Claude Desktop on Windows
 
-[**Download CuePrecise for Windows →**](https://github.com/Nattentia/cueprecise/releases)
+[**Download CuePrecise →**](https://github.com/Nattentia/cueprecise/releases)
 
-1. Run `cueprecise-setup.exe`.
-2. Click **Create API key**, copy the key from Google AI Studio, and paste it into CuePrecise.
-3. Select the AI apps found on your computer and click **Connect**.
-4. Restart the connected apps when setup is complete.
+1. Download `cueprecise-windows.mcpb` from the newest release.
+2. In Claude Desktop, open **Settings → Extensions → Advanced settings → Install Extension**.
+3. Select the downloaded file, then paste your [Gemini API key](https://aistudio.google.com/api-keys)
+   when Claude asks for it.
+4. Enable CuePrecise and ask Claude about a YouTube link.
 
-No Python, Git, or terminal commands are required. The current release is an unsigned preview
-submitted for SignPath review, so Windows may display an unknown-publisher warning. Until signing
-is complete, download it only from this repository's Releases page.
+That one file contains CuePrecise and its video tools. It is about 86 MiB and requires no Python,
+Git, FFmpeg installation, terminal commands, or manual configuration. The extension is currently
+available for Claude Desktop on Windows. For Codex, Claude Code, Cursor, Windsurf, VS Code, or
+Gemini CLI, use `cueprecise-setup.exe` from the same release.
+
+Both downloads contain unsigned executables. Download them only from this repository's Releases
+page and verify `SHA256SUMS.txt` if you want to check the file before installing it.
 
 **[Full installation guide](#quick-start)** · **[MCP tools](#tools)** ·
 **[How it works](#how-it-works)** · **[Known limitations](#known-limitations)**
@@ -93,7 +98,20 @@ the exact merge rules and validation criteria.
 
 ## Quick start
 
-### Windows installer
+### Claude Desktop on Windows — one-file extension
+
+1. Open [Releases](https://github.com/Nattentia/cueprecise/releases) and download
+   `cueprecise-windows.mcpb`.
+2. In Claude Desktop, open **Settings → Extensions → Advanced settings → Install Extension**.
+3. Select the file. Claude will ask for a Gemini API key and a folder for local video context.
+4. Enable CuePrecise. Restart Claude Desktop if it asks you to.
+
+The API key field is marked as sensitive and is managed through Claude's extension settings. The
+default context folder is `~/.cueprecise/data`. The approximately 86 MiB bundle includes the
+CuePrecise server, `yt-dlp`, FFmpeg, and FFprobe, so there are no other runtime downloads or
+prerequisites.
+
+### Other supported AI apps on Windows
 
 1. Open [Releases](https://github.com/Nattentia/cueprecise/releases) and download
    `cueprecise-setup.exe`.
@@ -107,8 +125,8 @@ The installer prepares the bundled video tools, detects supported AI apps, backs
 configuration, and adds only the CuePrecise MCP entry. The API key is stored in the selected apps'
 local configuration; CuePrecise does not send it to a project-operated server.
 
-> **Unsigned preview:** `v0.2.0` is a prerelease for SignPath Foundation review. Windows may
-> display an unknown-publisher warning until code signing is approved.
+> **Unsigned preview:** `v0.2.1` is not digitally signed, so Windows may display an
+> unknown-publisher warning. Download it only from this repository's Releases page.
 
 ### macOS, Linux, and command-line installation
 
@@ -313,7 +331,7 @@ shown above.
 python -m unittest discover -s tests
 ```
 
-The suite contains 432 tests and uses the standard-library `unittest` runner. Tests do not access
+The suite contains 477 tests and uses the standard-library `unittest` runner. Tests do not access
 the network or call the Gemini API. Tests requiring `google-genai` are skipped when the SDK is not
 installed.
 
@@ -362,8 +380,6 @@ MIT. See [`LICENSE`](LICENSE).
 The initial transcription flow was informed by the MIT-licensed
 [`gemini-transcribe-wrapper`](https://pypi.org/project/gemini-transcribe-wrapper/0.0.13/).
 CuePrecise is an independently written project.
-
-Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
 CuePrecise is not affiliated with or endorsed by YouTube or Google. YouTube is a supported service,
 not part of the product name.

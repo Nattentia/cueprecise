@@ -13,7 +13,7 @@ CuePrecise는 영상에서 사람들이 한 말을 먼저 읽습니다. 그중 �
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![CI](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-432%20passing-brightgreen.svg)](#테스트)
+[![Tests](https://img.shields.io/badge/tests-477%20passing-brightgreen.svg)](#테스트)
 
 CuePrecise(큐프리사이스)는 Claude Desktop·Codex 등 AI 앱에 연결하는 오픈소스 도구입니다.
 YouTube 자막만 가져오는 것이 아니라 Gemini로 영상의 음성을 직접 전사합니다. 여기에
@@ -41,18 +41,24 @@ https://github.com/user-attachments/assets/20499d73-e24f-4a40-aa30-77e42a34a9ef
 | 💾 **대화가 끝나도 유지** | 분석 결과가 내 컴퓨터에 남아 다음 대화에서도 검색됩니다. |
 | 🔐 **운영자 서버 없음** | 계정·광고·추적 없이 사용자의 컴퓨터에서 동작합니다. |
 
-### Windows에서 시작하기
+### Windows용 Claude Desktop에서 시작하기
 
-[**Windows 설치 파일 내려받기 →**](https://github.com/Nattentia/cueprecise/releases)
+[**CuePrecise 내려받기 →**](https://github.com/Nattentia/cueprecise/releases)
 
-1. `cueprecise-setup.exe`를 실행합니다.
-2. 안내 화면에서 **API 키 만들기**를 누르고, Google에서 만든 키를 붙여넣습니다.
-3. 컴퓨터에서 발견된 AI 앱을 선택하고 **연결하기**를 누릅니다.
-4. 연결이 끝나면 선택한 AI 앱을 다시 시작합니다.
+1. 최신 릴리스에서 `cueprecise-windows.mcpb`를 내려받습니다.
+2. Claude Desktop에서 **설정 → 확장 프로그램 → 고급 설정 → 확장 프로그램 설치**를
+   차례로 누릅니다.
+3. 내려받은 파일을 선택하고, Claude가 물으면
+   [Gemini API 키](https://aistudio.google.com/api-keys)를 붙여넣습니다.
+4. CuePrecise를 켜고 Claude에게 YouTube 링크에 관해 질문합니다.
 
-Python이나 Git을 설치할 필요가 없습니다. 현재 공개 파일은 SignPath 심사용 미서명
-시험판이므로 Windows 경고가 나타날 수 있습니다. 서명 완료 전에는 반드시 이 저장소의
-Releases에서 받은 파일만 사용하세요.
+파일 하나에 CuePrecise와 영상 처리 도구가 모두 들어 있습니다. 약 86MiB이며 Python,
+Git, FFmpeg, 명령어 입력, 설정 파일 수정이 필요 없습니다. 이 확장 프로그램은 현재
+Windows용 Claude Desktop에서 사용할 수 있습니다. Codex·Claude Code·Cursor·Windsurf·
+VS Code·Gemini CLI에는 같은 릴리스의 `cueprecise-setup.exe`를 사용합니다.
+
+두 파일 모두 아직 디지털 서명되지 않은 실행 파일을 포함합니다. 반드시 이 저장소의
+Releases에서 내려받고, 필요하면 `SHA256SUMS.txt`로 파일을 확인하세요.
 
 **[자세한 설치 방법](#빠른-시작)** · **[지원하는 도구](#도구)** ·
 **[작동 원리](#동작-방식)** · **[알려진 제한](#알려진-제한)**
@@ -97,7 +103,21 @@ Gemini는 4회 실행에서 모두 그 용어를 놓쳤다. CuePrecise는 시간
 
 ## 빠른 시작
 
-### Windows — 설치 파일로 시작하기
+### Windows용 Claude Desktop — 파일 하나로 설치
+
+1. [Releases](https://github.com/Nattentia/cueprecise/releases)에서
+   `cueprecise-windows.mcpb`를 내려받는다.
+2. Claude Desktop에서 **설정 → 확장 프로그램 → 고급 설정 → 확장 프로그램 설치**를
+   차례로 누른다.
+3. 파일을 선택한다. Claude가 Gemini API 키와 영상 자료를 둘 폴더를 물어본다.
+4. CuePrecise를 켠다. Claude가 요청하면 앱을 다시 시작한다.
+
+API 키 입력란은 민감 정보로 표시되며 Claude의 확장 프로그램 설정에서 관리된다. 영상
+자료 폴더의 기본값은 `~/.cueprecise/data`다. 약 86MiB인 파일 안에 CuePrecise 서버,
+`yt-dlp`, FFmpeg, FFprobe가 모두 들어 있어 다른 프로그램을 먼저 설치하거나 추가로
+내려받을 필요가 없다.
+
+### Windows의 다른 AI 앱
 
 1. [Releases](https://github.com/Nattentia/cueprecise/releases)에서 `cueprecise-setup.exe`를 내려받아 실행한다.
 2. 설치가 끝나면 자동으로 열리는 화면에서 **API 키 만들기**를 누른다.
@@ -110,9 +130,8 @@ Python이나 Git을 설치하거나 명령어를 입력할 필요가 없다. 필
 기존 설정은 백업한 뒤 CuePrecise 항목만 추가한다. 이미 연결해 둔 적이 있으면
 API 키를 포함한 설정을 그대로 물려받는다.
 
-> `v0.2.0`은 SignPath Foundation 코드 서명 심사를 위한 시험판이다. 아직 디지털
-> 서명이 없어 Windows에서 "알 수 없는 게시자" 경고가 나타날 수 있다. 반드시 이
-> 저장소의 Releases에서 받은 파일만 사용한다.
+> `v0.2.1`은 아직 디지털 서명되지 않은 시험판이다. Windows에서 "알 수 없는 게시자"
+> 경고가 나타날 수 있으므로 반드시 이 저장소의 Releases에서 받은 파일만 사용한다.
 
 ### macOS·Linux 또는 명령어 설치
 
@@ -399,7 +418,7 @@ python -m pip install -r requirements-optional.txt     # OCR, 시간대 (선택)
 python -m unittest discover -s tests
 ```
 
-432개. stdlib `unittest`만 쓴다. 테스트 의존성이 없고 네트워크와 Gemini API를
+477개. stdlib `unittest`만 쓴다. 테스트 의존성이 없고 네트워크와 Gemini API를
 호출하지 않는다. `google-genai`가 없으면 `test_transcribe`는 skip된다.
 
 ## API 사용량
@@ -451,8 +470,6 @@ MIT. [`LICENSE`](LICENSE) 참고.
 초기 전사 흐름을 설계할 때 MIT 라이선스의
 [`gemini-transcribe-wrapper`](https://pypi.org/project/gemini-transcribe-wrapper/0.0.13/)
 구현을 참고했다. CuePrecise는 별도로 작성된 프로젝트다.
-
-Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
 CuePrecise는 YouTube 및 Google과 아무런 제휴 관계가 없고 두 회사의 공식 제품도
 아니다. YouTube는 지원 대상 서비스일 뿐이다.
