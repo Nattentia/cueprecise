@@ -14,6 +14,9 @@ on:
       sha256:
         description: "설치 프로그램의 SHA-256 해시"
         value: ${{ jobs.build.outputs.sha256 }}
+      mcpb_sha256:
+        description: "Claude Desktop MCPB의 SHA-256 해시"
+        value: ${{ jobs.build.outputs.mcpb_sha256 }}
 
 permissions:
   contents: read
@@ -23,6 +26,7 @@ jobs:
     runs-on: windows-latest
     outputs:
       sha256: ${{ steps.hash.outputs.sha256 }}
+      mcpb_sha256: ${{ steps.mcpb_hash.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
@@ -40,6 +44,24 @@ jobs:
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLower()
           "sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Write-Output $hash
+      - name: Build Claude Desktop MCPB
+        shell: pwsh
+        run: ./installer/mcpb/build_mcpb.ps1
+      - name: Record Claude Desktop MCPB hash
+        id: mcpb_hash
+        shell: pwsh
+        run: |
+          $bundle = "dist/mcpb/cueprecise-windows.mcpb"
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $bundle).Hash.ToLower()
+          "sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Output $hash
+      - name: Assemble release artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/release | Out-Null
+          Copy-Item dist/windows/cueprecise-setup.exe dist/release/
+          Copy-Item dist/windows/cueprecise-mcp.exe dist/release/
+          Copy-Item dist/mcpb/cueprecise-windows.mcpb dist/release/
       - name: Smoke-test bundled commands
         shell: pwsh
         run: |
@@ -110,7 +132,5 @@ jobs:
       - uses: actions/upload-artifact@v6
         with:
           name: cueprecise-windows-installer
-          path: |
-            dist/windows/cueprecise-setup.exe
-            dist/windows/cueprecise-mcp.exe
+          path: dist/release/*
           if-no-files-found: error

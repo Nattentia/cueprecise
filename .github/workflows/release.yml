@@ -83,7 +83,12 @@ jobs:
             echo "::error::설치 프로그램 해시가 빌드 결과와 다르다 (빌드 $EXPECTED, 받은 파일 $actual)"
             exit 1
           fi
-          printf '%s  cueprecise-setup.exe\n' "$actual" > SHA256SUMS.txt
+          mcpb_actual="$(sha256sum cueprecise-windows.mcpb | cut -d ' ' -f 1)"
+          if [ "$mcpb_actual" != "${{ needs.build.outputs.mcpb_sha256 }}" ]; then
+            echo "::error::Claude MCPB 해시가 빌드 결과와 다르다"
+            exit 1
+          fi
+          printf '%s  cueprecise-setup.exe\n%s  cueprecise-windows.mcpb\n' "$actual" "$mcpb_actual" > SHA256SUMS.txt
           cat SHA256SUMS.txt
       # --draft: 확인하고 Publish 를 누르기 전까지 태그도, 공개도 없다.
       # --prerelease: 코드 서명 심사가 끝나면 이 줄을 뺀다.
@@ -99,6 +104,7 @@ jobs:
             --title "CuePrecise $TAG" \
             --generate-notes \
             artifacts/cueprecise-setup.exe \
+            artifacts/cueprecise-windows.mcpb \
             artifacts/SHA256SUMS.txt
           echo "### 초안 릴리스를 만들었다: $TAG" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
