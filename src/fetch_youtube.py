@@ -98,16 +98,31 @@ def _download_subs(url: str, directory: Path, langs: tuple[str, ...], *,
     return sorted(directory.glob("*.srt"))
 
 
-def _pick(candidates: list[Path], langs: tuple[str, ...]) -> Path:
+def _language_tag(path: Path) -> str:
+    return _split_name(path)[1].removesuffix("-orig").lower()
+
+
+def _pick(candidates: list[Path], langs: tuple[str, ...], *,
+          preferred_language: str | None = None) -> Path:
     """원어 트랙 우선, 그다음 요청한 순서대로 고른다.
 
     파일 이름 순서로 고르면 `ko,en` 을 요청했을 때 알파벳이 앞선 `en` 이
     뽑힌다. 한국어 영상에서 영어 번역 자막을 고르면 `merge` 가 거기서 라틴
     토큰을 캐다가 한국어 조사 공백에 꽂는다 — 없는 근거를 만들어낸다.
     """
-    for path in candidates:
-        if "-orig." in path.name:
-            return path
+    originals = [path for path in candidates if "-orig." in path.name]
+    if originals and preferred_language:
+        preferred = preferred_language.removesuffix("-orig").lower()
+        exact = [path for path in originals if _language_tag(path) == preferred]
+        if exact:
+            return exact[0]
+        preferred_base = preferred.split("-", 1)[0]
+        same_base = [path for path in originals
+                     if _language_tag(path).split("-", 1)[0] == preferred_base]
+        if same_base:
+            return same_base[0]
+    if originals:
+        return originals[0]
     for lang in langs:
         for path in candidates:
             if _split_name(path)[1] == lang:
@@ -142,7 +157,8 @@ def write_payload(payload: dict[str, object], output: Path) -> dict[str, object]
     return payload
 
 
-def fetch(url: str, output: Path, *, langs: list[str] | None = None) -> dict[str, object]:
+def fetch(url: str, output: Path, *, langs: list[str] | None = None,
+          preferred_language: str | None = None) -> dict[str, object]:
     # (요청 언어, 자동자막까지 받을지)
     attempts = ([(tuple(langs), True)] if langs
                 else [(ORIGINAL_LANGS, True), (FALLBACK_LANGS, False)])
@@ -159,7 +175,8 @@ def fetch(url: str, output: Path, *, langs: list[str] | None = None) -> dict[str
             raise FileNotFoundError(
                 "자막을 내려받지 못했습니다 (시도: %s)."
                 % "; ".join(",".join(a) for a, _ in attempts))
-        payload = payload_from_srt(_pick(candidates, chosen_langs))
+        payload = payload_from_srt(_pick(
+            candidates, chosen_langs, preferred_language=preferred_language))
     return write_payload(payload, output)
 
 

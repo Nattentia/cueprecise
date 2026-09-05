@@ -1476,6 +1476,7 @@ class SingleFetchCallTests(unittest.TestCase):
         self.commands: list[list[str]] = []
         self.original_run = pipeline.subprocess.run
         self.produce = {"audio": True, "video": True, "captions": True}
+        self.caption_languages = ["ko-orig"]
 
         def run(command, capture_output=True, text=True, **kwargs):
             self.commands.append(list(command))
@@ -1491,14 +1492,17 @@ class SingleFetchCallTests(unittest.TestCase):
             if self.produce["video"] and "," in command[command.index("-f") + 1]:
                 (out / "media.f134.video.mp4").write_bytes(b"video-bytes")
             if self.produce["captions"] and "--sub-langs" in command:
-                (out / "media.ko-orig.srt").write_text(self.SRT, encoding="utf-8")
+                for language in self.caption_languages:
+                    (out / ("media.%s.srt" % language)).write_text(
+                        self.SRT, encoding="utf-8")
             if "--write-info-json" in command:
                 # 실물 yt-dlp 처럼 미디어와 같은 디렉터리에 떨군다. 크기가 커서
                 # "가장 큰 파일" 규칙에 걸리면 오디오로 오인된다.
                 (out / "media.f251.info.json").write_text(
                     json.dumps({"id": "abcdefghijk", "title": "제목",
                                 "channel": "채널", "language": "ko",
-                                "automatic_captions": {"ko-orig": [], "en": []},
+                                "automatic_captions": {
+                                    language: [] for language in self.caption_languages},
                                 "subtitles": {}, "thumbnails": ["x"] * 400}),
                     encoding="utf-8")
             return pipeline.subprocess.CompletedProcess(command, 0, "", "")
@@ -1551,6 +1555,14 @@ class SingleFetchCallTests(unittest.TestCase):
         payload = json.loads((self.bundle / "raw/captions.json").read_text(encoding="utf-8"))
         self.assertEqual(payload["language"], "ko-orig")
         self.assertTrue(payload["original"])
+
+    def test_declared_language_selects_the_right_track_from_multiple_originals(self) -> None:
+        """더빙 트랙마다 -orig가 있어도 영상 언어와 맞는 자막을 고른다."""
+        self.caption_languages = ["en-US-orig", "id-orig", "ko-orig"]
+        pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk")
+        payload = json.loads((self.bundle / "raw/captions.json").read_text(
+            encoding="utf-8"))
+        self.assertEqual(payload["language"], "ko-orig")
 
     def test_skip_video_asks_for_audio_only(self) -> None:
         pipeline.stage_fetch(self.bundle, "https://youtu.be/abcdefghijk", video=False)
