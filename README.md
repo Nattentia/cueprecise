@@ -127,7 +127,7 @@ Windows DPAPI for the current user; app configurations contain only the protecte
 path. CuePrecise does not send the key to a project-operated server. Upgrading automatically moves
 older plaintext CuePrecise keys into this protected store.
 
-> **Unsigned preview:** `v0.2.2` is not digitally signed, so Windows may display an
+> **Unsigned preview:** `v0.2.3` is not digitally signed, so Windows may display an
 > unknown-publisher warning. Download it only from this repository's Releases page.
 
 ### macOS, Linux, and command-line installation

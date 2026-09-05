@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "cueprecise",
   "display_name": "CuePrecise",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Find and revisit exact moments in YouTube videos with transcript and visual evidence.",
   "long_description": "CuePrecise transcribes the original speech in a YouTube video, aligns it to the timeline, and retrieves matching passages and frames for Claude.",
   "author": {
