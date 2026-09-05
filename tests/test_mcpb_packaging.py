@@ -21,6 +21,10 @@ class McpbPackagingTest(unittest.TestCase):
             "${user_config.gemini_api_key}",
         )
         self.assertTrue(payload["user_config"]["gemini_api_key"]["sensitive"])
+        key_description = payload["user_config"]["gemini_api_key"]["description"]
+        self.assertIn("https://aistudio.google.com/api-keys", key_description)
+        self.assertIn("Keep this key private", key_description)
+        self.assertIn("delete it anytime", key_description)
         self.assertEqual(
             payload["user_config"]["data_directory"]["default"],
             "${HOME}/.cueprecise/data",

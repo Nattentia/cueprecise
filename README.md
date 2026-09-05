@@ -49,6 +49,9 @@ https://github.com/user-attachments/assets/ce7d595b-871f-469a-bcb8-798713751ffd
    when Claude asks for it.
 4. Enable CuePrecise and ask Claude about a YouTube link.
 
+Keep your API key private. You can delete it anytime in
+[Google AI Studio](https://aistudio.google.com/api-keys).
+
 That one file contains CuePrecise and its video tools. It is about 86 MiB and requires no Python,
 Git, FFmpeg installation, terminal commands, or manual configuration. The extension is currently
 available for Claude Desktop on Windows. For Codex, Claude Code, Cursor, Windsurf, VS Code, or
@@ -127,7 +130,7 @@ Windows DPAPI for the current user; app configurations contain only the protecte
 path. CuePrecise does not send the key to a project-operated server. Upgrading automatically moves
 older plaintext CuePrecise keys into this protected store.
 
-> **Unsigned preview:** `v0.2.3` is not digitally signed, so Windows may display an
+> **Unsigned preview:** `v0.2.4` is not digitally signed, so Windows may display an
 > unknown-publisher warning. Download it only from this repository's Releases page.
 
 ### macOS, Linux, and command-line installation
