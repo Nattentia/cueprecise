@@ -2,69 +2,40 @@
 
 # CuePrecise
 
-> **YouTube 영상에서 원하는 대목을 찾고, 그 장면으로 바로 이동하세요.**
+> **YouTube 영상을 내 언어로 이해하고, 답이 나온 원문과 화면까지 확인하세요.**
 
-CuePrecise는 찾고 싶은 내용이나 화면이 나오는 시점을 찾아 그 자리부터 재생되는 링크로
-돌려주는 로컬 MCP 서버입니다. Claude나 Codex에서 한국어로 질문하면 원문 대본과 화면
-프레임도 함께 보여주므로 답이 나온 장면을 바로 확인할 수 있습니다.
-
-외국어 영상도 한국어로 검색할 수 있습니다. 전사와 프레임, 검색 색인은 컴퓨터에 남아
-다음 대화에서도 이어서 찾습니다.
-
-## 할 수 있는 일
-
-| 하고 싶은 일 | 결과 |
-|---|---|
-| 원하는 내용을 말로 검색 | 질문과 맞는 대본 구간, 타임스탬프, 근거 |
-| 찾은 대목으로 바로 이동 | 해당 시간부터 재생되는 YouTube 하이퍼링크 |
-| 특정 화면이 나온 시점 검색 | 조건과 일치하는 후보 프레임, 타임스탬프, 재생 링크 |
-| 외국어 영상에 한국어로 질문 | 한국어 설명과 원어 대본·화면 근거 |
-| 이름·기술 용어가 빠진 대본 보완 | Gemini 전사와 YouTube 자막을 맞춘 원문 |
-| 나중에 다시 검색 | 컴퓨터에 저장된 전사, 프레임, 검색 색인 |
-
-### 응답 예시
-
-**질문**
-
-> self-supervised learning 설명이 시작되는 곳과 그 문구가 적힌 화면을 찾아줘.
-
-**CuePrecise 응답**
-
-- [03:28부터 재생](https://www.youtube.com/watch?v=jcBDSLSeud4&t=208s)
-- 원문 대본과 일치하는 화면 프레임
-- 대본과 자막에서 가져온 단어별 출처
-
-타임스탬프를 누르면 YouTube가 해당 시점에서 열립니다.
-
-### 설치
-
-[**CuePrecise 내려받기 →**](https://github.com/Nattentia/cueprecise/releases)
-
-Windows용 Claude Desktop에서는 `cueprecise-windows.mcpb` 파일을 확장 프로그램으로
-설치합니다. Codex, Claude Code, Cursor, Windsurf, VS Code, Gemini CLI에는
-`cueprecise-setup.exe`를 사용하세요. 자세한 과정은 [빠른 시작](#빠른-시작)에 있습니다.
-
-두 설치 파일에는 아직 디지털 서명되지 않은 실행 파일이 들어 있습니다. 이 저장소의
-Releases 페이지에서 내려받고, 필요하면 `SHA256SUMS.txt`와 체크섬을 비교하세요.
+CuePrecise는 Claude·Codex 같은 AI 앱에 연결해 YouTube 영상을 질문 가능한 자료로 바꾸는
+로컬 MCP 서버입니다. Gemini가 원래 음성을 전사하고, 시간에 맞춘 YouTube 자막과 관련
+화면 프레임을 함께 묶습니다. AI 앱은 이 근거를 바탕으로 영상 내용을 질문한 언어로
+설명하고, 답이 나온 대목을 확인할 수 있게 해줍니다.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![CI](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/tests-491%20passing-brightgreen.svg)](#테스트)
 
-### 실제 사용 화면
+### 이렇게 사용합니다
 
-```text
-나: 폴란드어를 모르는데, 이 인터뷰는 무슨 내용이야?
+**질문**
 
-AI 앱 + CuePrecise:
-한국어로 설명하고 관련 구간의 재생 링크,
-원문 대본, 화면 프레임을 근거로 보여줍니다.
-```
+> 폴란드어를 모르는데, 이 인터뷰는 무슨 내용이야? 중요한 대목의 원문과 화면도 보여줘.
+
+**AI 앱 + CuePrecise**
+
+> 한국어로 설명하고, 답이 나온 시점의 원문 대본과 화면 프레임을 근거로 보여줍니다.
 
 https://github.com/user-attachments/assets/ce7d595b-871f-469a-bcb8-798713751ffd
 
 <sub>데모 영상: Daniel Bartosiewicz | Content i Automatyzacja의 [「Czym jest prompt injection i jak chronić firmę przed złośliwą instrukcją dla AI? Gośc. Tomasz Bartel」](https://www.youtube.com/watch?v=W5C3FdUO0vs), CC BY 라이선스</sub>
+
+| | |
+|---|---|
+| 🌍 **외국어 영상 이해** | 질문한 언어로 설명하되, 근거는 원문 영상에 연결합니다. |
+| 🧩 **놓친 이름·기술 용어 보완** | Gemini 전사와 시간에 맞춘 YouTube 자막을 함께 사용합니다. |
+| 🔎 **답이 나온 순간 확인** | 관련 대본 구간과 해당 시점부터 재생되는 링크를 찾습니다. |
+| 👁️ **화면에만 있는 정보 찾기** | 자막에 없는 정보도 관련 프레임으로 확인합니다. |
+| 💾 **다음 대화에서 이어서 검색** | 전사·프레임·검색 색인을 컴퓨터에 남깁니다. |
+| 🔐 **CuePrecise 계정·운영 서버 없음** | 프로젝트가 운영하는 계정, 광고, 추적 서버가 없습니다. |
 
 **[전체 설치 방법](#빠른-시작)** · **[MCP 도구](#도구)** ·
 **[처리 과정](#처리-과정)** · **[현재 제한](#현재-제한)**
