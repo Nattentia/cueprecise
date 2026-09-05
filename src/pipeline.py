@@ -346,6 +346,7 @@ def _fetch_sources(url: str, raw: Path, *, want_video: bool,
         result = subprocess.run(command, capture_output=True, text=True)
 
         media: list[Path] = []
+        caption_candidates: list[Path] = []
         info: Path | None = None
         for path in sorted(staging.iterdir()):
             if not path.is_file():
@@ -357,13 +358,20 @@ def _fetch_sources(url: str, raw: Path, *, want_video: bool,
                 if info is None:
                     info = path
             elif path.suffix.lower() == ".srt":
-                if found["captions"] is None:
-                    # 포맷마다 한 벌씩 나온다. 내용이 같으므로 하나만 쓴다.
-                    found["captions"] = path
+                caption_candidates.append(path)
             elif path.suffix.lower() != ".part":
                 media.append(path)
+        preferred_language = None
         if info is not None:
             _write_metadata_from_info(info, raw)
+            try:
+                preferred_language = _read_json(info).get("language")
+            except (OSError, json.JSONDecodeError, AttributeError):
+                preferred_language = None
+        if caption_candidates:
+            found["captions"] = fetch_youtube._pick(
+                caption_candidates, fetch_youtube.ORIGINAL_LANGS,
+                preferred_language=preferred_language)
 
         for path in sorted(media, key=lambda item: item.stat().st_size, reverse=True):
             kind = "video" if want_video and _has_video_stream(path) else "audio"
@@ -471,7 +479,15 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False,
             _fetch_metadata(url, raw)
         # 원어 자동자막이 같이 안 왔을 때만 한 번 더 시도한다 (사람이 올린 자막).
         try:
-            fetch_youtube.fetch(url, captions)
+            metadata = raw / METADATA_NAME
+            preferred_language = None
+            if metadata.exists():
+                try:
+                    preferred_language = _read_json(metadata).get("language")
+                except (OSError, json.JSONDecodeError, AttributeError):
+                    preferred_language = None
+            fetch_youtube.fetch(url, captions,
+                                preferred_language=preferred_language)
             _pin_captions_video_id(captions, bundle.name)
         except Exception as error:  # 자막은 선택 자료다. 없어도 파이프라인은 진행한다.
             _log("  경고: 자막 취득 실패, 영어 용어 복원을 건너뛴다 (%s)" % error)

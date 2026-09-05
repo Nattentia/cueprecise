@@ -234,3 +234,26 @@ class PickOrderTests(SubtitleLanguageTests):
         self._fake_yt_dlp({fetch_youtube.ORIGINAL_LANGS[0]: "en-orig", "ko": "ko"})
         result = fetch_youtube.fetch("u", self.out)
         self.assertEqual(result["language"], "en-orig")
+
+    def test_declared_video_language_selects_matching_original_track(self) -> None:
+        """다중 더빙 영상에서는 알파벳순이 아니라 영상 언어를 따른다."""
+        root = Path(self.tmp.name)
+        candidates = []
+        for language in ("en-US-orig", "id-orig", "ko-orig"):
+            path = root / ("vid.%s.srt" % language)
+            path.write_text(self.SRT, encoding="utf-8")
+            candidates.append(path)
+        chosen = fetch_youtube._pick(
+            candidates, fetch_youtube.ORIGINAL_LANGS, preferred_language="ko")
+        self.assertEqual(fetch_youtube._split_name(chosen)[1], "ko-orig")
+
+    def test_region_specific_declared_language_wins_before_base_match(self) -> None:
+        root = Path(self.tmp.name)
+        candidates = []
+        for language in ("en-orig", "en-US-orig"):
+            path = root / ("vid.%s.srt" % language)
+            path.write_text(self.SRT, encoding="utf-8")
+            candidates.append(path)
+        chosen = fetch_youtube._pick(
+            candidates, fetch_youtube.ORIGINAL_LANGS, preferred_language="en-US")
+        self.assertEqual(fetch_youtube._split_name(chosen)[1], "en-US-orig")
