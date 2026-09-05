@@ -56,8 +56,19 @@ class OnboardingApp:
         self.show_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(root, text="입력한 키 보기", variable=self.show_var,
                         command=self.toggle_key).pack(anchor="w")
-        ttk.Label(root, text="키는 Windows가 현재 사용자만 풀 수 있도록 암호화해 저장합니다.",
-                  style="Body.TLabel", foreground="#666666", wraplength=540).pack(anchor="w", pady=(5, 20))
+        security_row = ttk.Frame(root)
+        security_row.pack(fill="x", pady=(5, 20))
+        ttk.Label(security_row, text="API 키를 다른 사람에게 공개하지 마세요. 필요하면 ",
+                  style="Body.TLabel", foreground="#666666").pack(side="left")
+        delete_link = tk.Label(
+            security_row,
+            text="Google AI Studio에서 언제든 삭제할 수 있습니다.",
+            fg="#1769aa",
+            cursor="hand2",
+            font=("Malgun Gothic", 10, "underline"),
+        )
+        delete_link.pack(side="left")
+        delete_link.bind("<Button-1>", lambda _event: webbrowser.open(API_KEY_URL))
 
         ttk.Label(root, text="3. 연결할 앱 고르기", style="Step.TLabel").pack(anchor="w")
         self.client_vars = self._build_client_choices(root)

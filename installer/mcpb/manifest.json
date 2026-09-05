@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "cueprecise",
   "display_name": "CuePrecise",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Find and revisit exact moments in YouTube videos with transcript and visual evidence.",
   "long_description": "CuePrecise transcribes the original speech in a YouTube video, aligns it to the timeline, and retrieves matching passages and frames for Claude.",
   "author": {
@@ -47,7 +47,7 @@
     "gemini_api_key": {
       "type": "string",
       "title": "Gemini API key",
-      "description": "Create a key at https://aistudio.google.com/app/apikey and paste it here.",
+      "description": "Create a key at https://aistudio.google.com/api-keys and paste it here. Keep this key private. You can delete it anytime in Google AI Studio.",
       "sensitive": true,
       "required": true
     },

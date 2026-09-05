@@ -19,6 +19,15 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "installer"))
 
 
+class ApiKeyGuidanceTest(unittest.TestCase):
+    def test_key_field_has_short_privacy_and_deletion_guidance(self) -> None:
+        source = (ROOT / "installer" / "cueprecise_onboarding.py").read_text(
+            encoding="utf-8")
+        self.assertIn("API 키를 다른 사람에게 공개하지 마세요", source)
+        self.assertIn("Google AI Studio에서 언제든 삭제할 수 있습니다", source)
+        self.assertIn('API_KEY_URL = "https://aistudio.google.com/api-keys"', source)
+
+
 def _tk_or_skip(case: unittest.TestCase):
     try:
         import tkinter as tk

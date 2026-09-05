@@ -52,6 +52,9 @@ https://github.com/user-attachments/assets/20499d73-e24f-4a40-aa30-77e42a34a9ef
    [Gemini API 키](https://aistudio.google.com/api-keys)를 붙여넣습니다.
 4. CuePrecise를 켜고 Claude에게 YouTube 링크에 관해 질문합니다.
 
+API 키를 다른 사람에게 공개하지 마세요. 필요하면
+[Google AI Studio](https://aistudio.google.com/api-keys)에서 언제든 삭제할 수 있습니다.
+
 파일 하나에 CuePrecise와 영상 처리 도구가 모두 들어 있습니다. 약 86MiB이며 Python,
 Git, FFmpeg, 명령어 입력, 설정 파일 수정이 필요 없습니다. 이 확장 프로그램은 현재
 Windows용 Claude Desktop에서 사용할 수 있습니다. Codex·Claude Code·Cursor·Windsurf·
@@ -131,7 +134,7 @@ Windows DPAPI로 암호화하고, AI 앱 설정에는 암호화 파일의 위치
 백업한 뒤 CuePrecise 항목만 추가하며, 예전 버전이 설정에 평문으로 저장했던 키도
 업그레이드할 때 자동으로 암호화 저장소로 옮긴다.
 
-> `v0.2.3`는 아직 디지털 서명되지 않은 시험판이다. Windows에서 "알 수 없는 게시자"
+> `v0.2.4`는 아직 디지털 서명되지 않은 시험판이다. Windows에서 "알 수 없는 게시자"
 > 경고가 나타날 수 있으므로 반드시 이 저장소의 Releases에서 받은 파일만 사용한다.
 
 ### macOS·Linux 또는 명령어 설치
