@@ -71,27 +71,36 @@ def transcript_fingerprint(bundle: Path) -> str:
 
 
 def _youtube_metadata(bundle: Path, url: str | None) -> dict[str, Any]:
-    path = bundle / "raw" / "youtube.json"
-    if path.exists():
+    raw_dir = bundle / "raw"
+    path = raw_dir / "youtube.json"
+    cached: dict[str, Any] = {}
+    for cached_path in (path, raw_dir / "metadata.json"):
+        if not cached_path.exists():
+            continue
         try:
-            return _read(path)
+            payload = _read(cached_path)
         except (OSError, json.JSONDecodeError):
-            pass
+            continue
+        if not isinstance(payload, dict):
+            continue
+        cached.update(payload)
+        if payload.get("chapters"):
+            return payload
     if not url:
-        return {}
+        return cached
     try:
         result = subprocess.run(
             [runtime.tool("yt-dlp"), "--dump-single-json", "--skip-download", url],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return {}
+    except (OSError, subprocess.TimeoutExpired):
+        return cached
     if result.returncode != 0:
-        return {}
+        return cached
     try:
         raw = json.loads(result.stdout)
     except json.JSONDecodeError:
-        return {}
+        return cached
     # 거대한 포맷 목록 등은 버리고 chapter 생성에 필요한 불변 메타데이터만 둔다.
     metadata = {
         "video_id": raw.get("id"),

@@ -277,6 +277,7 @@ def _trim_metadata(info: dict[str, Any]) -> dict[str, Any]:
         "language": info.get("language"),
         "auto_caption_langs": sorted(k for k in automatic if k.endswith("-orig")),
         "subtitle_langs": sorted(subtitles)[:20],
+        "chapters": info.get("chapters") or [],
     }
 
 
@@ -1264,7 +1265,7 @@ def run(url: str, *, bundle_root: Path = Path("data"),
         video: bool = True, keep_video: bool = False,
         at: list[float] | None = None,
         max_frames: int = visual.DEFAULT_MAX_FRAMES,
-        transcriber=None) -> dict[str, Any]:
+        transcriber=None, api_key: str | None = None) -> dict[str, Any]:
     video_id = video_id_from_url(url)
     bundle = bundle_path(bundle_root, video_id)
     bundle.mkdir(parents=True, exist_ok=True)
@@ -1283,10 +1284,10 @@ def run(url: str, *, bundle_root: Path = Path("data"),
             summary["stages"][stage] = {"chunks": len(job["chunks"])}
         elif stage == "transcribe":
             job = job if job is not None else _load_job(bundle)
-            api_key = os.environ.get("GEMINI_API_KEY")
-            if not api_key:
+            resolved_api_key = api_key or os.environ.get("GEMINI_API_KEY")
+            if not resolved_api_key:
                 raise StageError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
-            job = stage_transcribe(bundle, job, ledger=ledger, api_key=api_key,
+            job = stage_transcribe(bundle, job, ledger=ledger, api_key=resolved_api_key,
                                    daily_limit=daily_limit, rpm_limit=rpm_limit,
                                    request_interval=request_interval,
                                    transcriber=transcriber, force=force)

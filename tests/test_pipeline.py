@@ -1501,6 +1501,8 @@ class SingleFetchCallTests(unittest.TestCase):
                 (out / "media.f251.info.json").write_text(
                     json.dumps({"id": "abcdefghijk", "title": "제목",
                                 "channel": "채널", "language": "ko",
+                                "chapters": [{"start_time": 0, "end_time": 60,
+                                              "title": "도입"}],
                                 "automatic_captions": {
                                     language: [] for language in self.caption_languages},
                                 "subtitles": {}, "thumbnails": ["x"] * 400}),
@@ -1523,6 +1525,7 @@ class SingleFetchCallTests(unittest.TestCase):
             (self.bundle / "raw" / pipeline.METADATA_NAME).read_text(encoding="utf-8"))
         self.assertEqual(saved["language"], "ko")
         self.assertEqual(saved["auto_caption_langs"], ["ko-orig"])
+        self.assertEqual(saved["chapters"][0]["title"], "도입")
         self.assertNotIn("thumbnails", saved)
         self.assertEqual(pipeline._metadata_script(self.bundle), "hangul")
 

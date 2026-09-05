@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 import chapters
@@ -51,6 +52,28 @@ class ChapterTests(unittest.TestCase):
             self.assertEqual(result["chapters"][0]["title_source"], "youtube")
             self.assertGreater(len(result["chapters"]), 2)
             self.assertTrue(all(item["title"] != "Q&A" for item in result["chapters"][1:]))
+
+    def test_fetch_metadata_is_reused_for_native_chapters(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle(Path(directory), 300)
+            (bundle / "raw" / "metadata.json").write_text(json.dumps({"chapters": [
+                {"start_time": 0, "end_time": 300, "title": "Cached title"},
+            ]}), encoding="utf-8")
+            with mock.patch.object(chapters.subprocess, "run") as run:
+                result = chapters.build(bundle, url="https://example.com/watch?v=vid")
+            run.assert_not_called()
+            self.assertEqual(result["chapters"][0]["title"], "Cached title")
+            self.assertEqual(result["chapters"][0]["title_source"], "youtube")
+
+    def test_blocked_metadata_command_falls_back_to_local_chapters(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle(Path(directory), 300)
+            with mock.patch.object(chapters.subprocess, "run",
+                                   side_effect=OSError(4551, "blocked")):
+                result = chapters.build(bundle, url="https://example.com/watch?v=vid")
+            self.assertTrue(result["chapters"])
+            self.assertTrue(all(item["title_source"] == "local-keywords"
+                                for item in result["chapters"]))
 
     def test_host_title_commit_validates_fingerprint_and_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

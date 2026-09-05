@@ -88,10 +88,12 @@ def _fmt(seconds: float) -> str:
 # ------------------------------------------------------------------------ tools
 
 def tool_register(bundle_root: Path, *, url: str, stages: list[str] | None = None,
-                  language: str | None = None) -> dict[str, Any]:
+                  language: str | None = None,
+                  api_key: str | None = None) -> dict[str, Any]:
     codes = [s.strip() for s in language.split(",") if s.strip()] if language else None
     selected = pipeline.resolve_stages(stages)
-    return pipeline.run(url, bundle_root=bundle_root, stages=selected, language_codes=codes)
+    return pipeline.run(url, bundle_root=bundle_root, stages=selected,
+                        language_codes=codes, api_key=api_key)
 
 
 def tool_status(bundle_root: Path, *, video_id: str, api_key: str | None = None,
@@ -497,7 +499,7 @@ def dispatch(name: str, arguments: dict[str, Any], *, bundle_root: Path,
     if name == "cueprecise_register":
         return tool_register(bundle_root, url=arguments["url"],
                              stages=arguments.get("stages"),
-                             language=arguments.get("language"))
+                             language=arguments.get("language"), api_key=api_key)
     if name == "cueprecise_status":
         return tool_status(bundle_root, video_id=arguments["video_id"], api_key=api_key)
     if name == "cueprecise_outline":

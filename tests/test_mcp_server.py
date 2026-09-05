@@ -64,6 +64,17 @@ class ToolSurfaceTests(unittest.TestCase):
             self.assertIn("required", tool["inputSchema"])
             self.assertTrue(tool["description"].strip())
 
+    def test_register_passes_the_resolved_api_key_to_the_pipeline(self) -> None:
+        key = "protected-key"
+        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                   "params": {"name": "cueprecise_register",
+                              "arguments": {"url": "abcdefghijk",
+                                            "stages": ["transcribe"]}}}
+        with mock.patch("mcp_server.pipeline.run", return_value={"ok": True}) as run:
+            reply = mcp_server.handle(message, bundle_root=Path("data"), api_key=key)
+        self.assertNotIn("isError", reply["result"])
+        self.assertEqual(run.call_args.kwargs["api_key"], key)
+
 
 MODERN_META = {"_meta": {mcp_server.PROTOCOL_VERSION_KEY:
                          mcp_server.MODERN_PROTOCOL_VERSION}}
