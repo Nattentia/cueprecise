@@ -2,43 +2,34 @@
 
 # CuePrecise
 
-> **YouTube 영상에 관해 물어보세요. CuePrecise는 누가 언제 무엇을 말했고 그때 화면에 무엇이 있었는지 찾아줍니다.**
+> **긴 YouTube 영상에서 필요한 말과 화면이 나온 순간을 찾아주는 MCP.**
 
-CuePrecise는 Claude Desktop·Codex 같은 AI 앱에 연결하는 오픈소스 MCP 서버다. 영상의
-음성·자막·화자·화면을 같은 시간축에 묶어 검색 가능한 자료로 저장한다. 외국어 영상도
-한국어로 질문할 수 있다. 답이 나온 대목은 원문과 장면으로 확인할 수 있다.
+CuePrecise는 영상의 음성·자막·화자·화면을 같은 시간축에 묶어 Claude Desktop·Codex
+같은 AI 앱에서 검색할 수 있게 한다. 외국어 영상도 한국어로 묻고, 답이 나온 대목은
+원문과 장면으로 확인할 수 있다. 긴 영상을 다시 돌려보며 근거를 찾는 일이 번거로워서
+만들었다.
+
+## 영상에서 바로 찾는 것
+
+| 찾는 것 | 돌아오는 결과 |
+|---|---|
+| 원하는 관점의 요약 | 관련 대목과 타임스탬프가 붙은 정리 |
+| 특정 발언을 한 사람 | 화자별로 묶은 실제 발언과 관점 |
+| 기억나는 그림이나 화면 | 조건에 맞는 프레임, 나온 시점, 당시 설명 |
+| 답을 확인할 원본 | 해당 시점부터 재생되는 YouTube 링크 |
+
+https://github.com/user-attachments/assets/aeec6d01-aff2-477c-9e91-2edcc6b31183
+
+<sub>1시간 48분짜리 강연에서 관점별 요약, 화자별 발언 비교, 장면 검색과 타임스탬프
+이동을 차례로 확인한다. [데모에 사용한 영상](https://www.youtube.com/watch?v=F9I7llmuhAk)</sub>
+
+Claude에서는 응답의 타임스탬프를 누르면 해당 시점부터 YouTube 영상이 재생된다. 링크를
+표시하는 방식은 AI 앱마다 다르다.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![CI](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/tests-491%20passing-brightgreen.svg)](#테스트)
-
-## 영상으로 할 수 있는 일
-
-| 하고 싶은 일 | 돌아오는 결과 |
-|---|---|
-| 영상 내용 묻기 | 관련 대본과 화면을 근거로 한 답변 |
-| 원하는 내용이 나온 때 찾기 | 원문과 타임스탬프 |
-| 특정 그림이나 화면 찾기 | 조건에 맞는 프레임과 해당 시점 |
-| 인물별 주장 비교하기 | 화자마다 묶은 발언과 관점 |
-| 영상 전체 파악하기 | 요약과 타임스탬프 목차 |
-| 새 쟁점으로 가상 토론 열기 | 영상 속 인물들의 실제 발언을 근거로 구성한 토론 |
-| 나중에 다시 질문하기 | 컴퓨터에 저장된 전사·프레임·검색 색인 |
-
-Claude에서는 응답의 타임스탬프를 누르면 해당 시점부터 YouTube 영상이 재생된다. 링크를
-표시하는 방식은 AI 앱마다 다르다.
-
-### 이렇게 써볼 수 있다
-
-```text
-이 영상에서 self-supervised learning을 설명하는 부분을 찾아줘.
-그 문구가 적힌 화면은 언제 나와?
-
-출연자별로 기본소득에 관한 주장을 정리해줘.
-
-이 토크쇼의 출연자들이 최근 이슈를 두고 다시 토론한다면 어떤 이야기를 할까?
-영상에서 실제로 했던 발언을 근거로 구성해줘.
-```
 
 ### Windows용 Claude Desktop에서 시작하기
 
@@ -119,6 +110,18 @@ CuePrecise는 발화를 화자별로 나누고 긴 영상을 여러 청크로 �
 이 정보로 인물별 주장과 논거를 모아 비교할 수 있다. 영상에 없던 새 쟁점을 던지고
 각 인물의 기존 발언을 근거로 가상 토론을 구성하는 것도 가능하다. 가상 토론은 AI가 만든
 시뮬레이션이며 영상 속 인물이 실제로 새 주제에 관해 한 발언은 아니다.
+
+### 이렇게 써볼 수 있다
+
+```text
+이 영상에서 self-supervised learning을 설명하는 부분을 찾아줘.
+그 문구가 적힌 화면은 언제 나와?
+
+출연자별로 기본소득에 관한 주장을 정리해줘.
+
+이 토크쇼의 출연자들이 최근 이슈를 두고 다시 토론한다면 어떤 이야기를 할까?
+영상에서 실제로 했던 발언을 근거로 구성해줘.
+```
 
 ---
 
