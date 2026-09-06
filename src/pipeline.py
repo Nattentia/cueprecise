@@ -1011,7 +1011,7 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
                 result = (transcriber(str(chunk_mp3), langs) if transcriber is not None
                           else transcribe_mod.transcribe(
                               str(chunk_mp3), langs, raw_path=raw_path,
-                              meta=_raw_meta(job, chunk, langs)))
+                              meta=_raw_meta(job, chunk, langs), api_key=api_key))
             except Exception as error:
                 safe_error = configuration.mask_secrets(str(error), api_key)
                 chunk["status"] = "failed"
