@@ -183,6 +183,14 @@ class ModernEraTests(unittest.TestCase):
         self.assertNotIn(key, text)
         self.assertIn("***", text)
 
+    def test_register_forwards_the_protected_server_api_key(self) -> None:
+        key = "AIza" + "q" * 36
+        with mock.patch.object(mcp_server.pipeline, "run", return_value={"ok": True}) as run:
+            mcp_server.dispatch(
+                "cueprecise_register", {"url": "abcdefghijk"},
+                bundle_root=Path("data"), api_key=key)
+        self.assertEqual(run.call_args.kwargs["api_key"], key)
+
     def test_serve_reads_and_writes_json_lines(self) -> None:
         stream_in = io.StringIO(
             json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}) + "\n"

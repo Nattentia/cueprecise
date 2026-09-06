@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 import pipeline
@@ -54,6 +55,18 @@ class PipelineHelperTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             pipeline.run("jcBDSLSeud4", stages=("nope",))
 
+    def test_explicit_api_key_drives_transcription_without_environment_key(self) -> None:
+        job = {"status": "planned", "chunks": []}
+        completed = {"status": "complete", "chunks": []}
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(pipeline.os.environ, {}, clear=True), \
+                mock.patch.object(pipeline, "_load_job", return_value=job), \
+                mock.patch.object(pipeline, "stage_transcribe",
+                                  return_value=completed) as transcribe:
+            pipeline.run("abcdefghijk", bundle_root=Path(tmp),
+                         stages=("transcribe",), api_key="protected-key")
+        self.assertEqual(transcribe.call_args.kwargs["api_key"], "protected-key")
+
 
 class TranscribeResumeTests(unittest.TestCase):
     """완료 청크를 재호출하지 않는지, 실패 후 이어서 가는지 확인한다."""
@@ -85,6 +98,17 @@ class TranscribeResumeTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
+
+    def test_default_transcriber_receives_the_protected_api_key(self) -> None:
+        result = {"words": _words(["안녕하세요."], 0.0)}
+        with mock.patch.object(pipeline.transcribe_mod, "transcribe",
+                               return_value=result) as transcribe:
+            pipeline.stage_transcribe(
+                self.bundle, self.job, ledger=self.ledger, api_key="protected-key",
+                daily_limit=25, rpm_limit=None, request_interval=0.0)
+        self.assertEqual(transcribe.call_count, 2)
+        self.assertTrue(all(call.kwargs["api_key"] == "protected-key"
+                            for call in transcribe.call_args_list))
 
     def _run(self, transcriber) -> dict:
         return pipeline.stage_transcribe(
