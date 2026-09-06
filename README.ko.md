@@ -31,24 +31,25 @@ Claude에서는 응답의 타임스탬프를 누르면 해당 시점부터 YouTu
 [![CI](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/tests-491%20passing-brightgreen.svg)](#테스트)
 
-### Windows용 Claude Desktop에서 시작하기
+### Windows에서 시작하기
 
 [**CuePrecise 내려받기 →**](https://github.com/Nattentia/cueprecise/releases)
 
-1. 최신 릴리스에서 `cueprecise-windows.mcpb`를 내려받습니다.
-2. Claude Desktop에서 **설정 → 확장 프로그램 → 고급 설정 → 확장 프로그램 설치**를
-   차례로 누릅니다.
-3. 내려받은 파일을 선택하고, Claude가 물으면
-   [Gemini API 키](https://aistudio.google.com/api-keys)를 붙여넣습니다.
-4. CuePrecise를 켜고 Claude에게 YouTube 링크에 관해 질문합니다.
+| 사용하는 AI 앱 | 받을 파일 | 연결 방법 |
+|---|---|---|
+| Codex·Claude Code·Cursor·Windsurf·VS Code·Gemini CLI | `cueprecise-setup.exe` | 실행한 뒤 API 키를 넣고, 발견된 앱에서 연결할 곳을 고릅니다. |
+| Claude Desktop | `cueprecise-windows.mcpb` | **설정 → 확장 프로그램 → 고급 설정 → 확장 프로그램 설치**에서 파일을 고릅니다. |
+
+설치가 끝나면 연결한 앱을 완전히 껐다가 다시 켭니다. Claude Desktop은 확장 프로그램을
+설치할 때, 다른 앱은 설치 프로그램에서 [Gemini API 키](https://aistudio.google.com/api-keys)를
+입력합니다.
 
 API 키를 다른 사람에게 공개하지 마세요. 필요하면
 [Google AI Studio](https://aistudio.google.com/api-keys)에서 언제든 삭제할 수 있습니다.
 
-파일 하나에 CuePrecise와 영상 처리 도구가 모두 들어 있습니다. 약 86MiB이며 Python,
-Git, FFmpeg, 명령어 입력, 설정 파일 수정이 필요 없습니다. 이 확장 프로그램은 현재
-Windows용 Claude Desktop에서 사용할 수 있습니다. Codex·Claude Code·Cursor·Windsurf·
-VS Code·Gemini CLI에는 같은 릴리스의 `cueprecise-setup.exe`를 사용합니다.
+두 파일 모두 CuePrecise와 영상 처리 도구를 함께 설치합니다. Python, Git, FFmpeg를 따로
+설치하거나 명령어와 설정 파일을 직접 다룰 필요가 없습니다. Claude Desktop 확장 프로그램은
+약 86MiB입니다.
 
 두 파일 모두 아직 디지털 서명되지 않은 실행 파일을 포함합니다. 반드시 이 저장소의
 Releases에서 내려받으세요. 필요하면 `SHA256SUMS.txt`로 파일을 확인하세요.
