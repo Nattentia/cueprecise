@@ -252,7 +252,7 @@ def main() -> int:
     if not argv or argv[0] in {"-h", "--help"}:
         print("""usage: cueprecise {setup,doctor,run,status,purge} ...
 
-CuePrecise — Find the exact moment in any YouTube video.
+CuePrecise — Find relevant moments in YouTube videos with evidence.
 
 설치와 MCP 등록:
   setup             Claude Desktop에 CuePrecise MCP 등록

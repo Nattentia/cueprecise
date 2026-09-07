@@ -3,7 +3,7 @@
   "name": "cueprecise",
   "display_name": "CuePrecise",
   "version": "0.2.5",
-  "description": "Find and revisit exact moments in YouTube videos with transcript and visual evidence.",
+  "description": "Find and revisit relevant moments in YouTube videos with transcript and visual evidence.",
   "long_description": "CuePrecise transcribes the original speech in a YouTube video, aligns it to the timeline, and retrieves matching passages and frames for Claude.",
   "author": {
     "name": "Nattentia",

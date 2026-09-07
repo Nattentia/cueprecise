@@ -122,8 +122,14 @@ def merge_payloads(
     output: list[dict[str, Any]] = []
     inserted_count = 0
     consumed_caption_tokens: set[tuple[int, int]] = set()
+    # A translated or failed caption track is metadata, not evidence for
+    # restoring terms. Older hand-written fixtures omit the field, so absence
+    # remains compatible with the historical original-caption shape.
+    captions_are_original = captions.get("original", True) is not False
     for index, word in enumerate(words):
         output.append({**word, "origin": "gemini"})
+        if not captions_are_original:
+            continue
         if index + 1 >= len(words):
             continue
         following = words[index + 1]

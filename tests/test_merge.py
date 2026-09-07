@@ -61,6 +61,16 @@ class InsertionPolicyTests(unittest.TestCase):
         )
         self.assertEqual([w for w in result["words"] if w["origin"] == "youtube"], [])
 
+    def test_non_original_captions_are_not_merged(self) -> None:
+        result = merge.merge_payloads(
+            {"source": "gemini", "video_id": "v",
+             "words": [word("했을까요?", 207.6, 208.0), word("라는", 210.8, 211.0)]},
+            {"source": "youtube", "video_id": "v", "original": False,
+             "cues": [cue("했을까요? self supervised", 207.68, 210.2)]},
+        )
+        self.assertEqual([w for w in result["words"] if w["origin"] == "youtube"], [])
+        self.assertEqual([w["text"] for w in result["words"]], ["했을까요?", "라는"])
+
     def test_cue_outside_gap_is_not_pulled_in(self) -> None:
         """CAPTION_LOOKAHEAD 회귀 방지. 공백과 겹치지 않는 cue 는 쓰지 않는다."""
         result = run(
