@@ -9,7 +9,7 @@ open-source MCP server for Claude Desktop, Codex, Cursor, and other AI clients. 
 YouTube video's original speech, captions, speakers, and relevant frames into a searchable
 local reference.
 
-CuePrecise analyzes videos longer than an hour in about three minutes and thirty seconds.
+CuePrecise analyzes videos longer than an hour in about three minutes.
 It does not send the whole video to your AI client for every question. It transcribes the
 original audio in chunks, indexes the evidence, and retrieves only the passages and frames
 related to your question.
@@ -449,8 +449,8 @@ installed.
 - The caption-merge threshold was tuned on a limited set of real videos and needs broader validation.
 - Across three or more chunks, a speaker absent from the overlap can remain `unresolved`.
   CuePrecise avoids assigning a potentially wrong identity.
-- Real-video validation currently covers videos up to 58 minutes. The full real-API
-  interruption/resume path still needs end-to-end validation.
+- The interruption/resume path for a long-running job on the real API still needs end-to-end
+  validation.
 - Visual-reference phrase matching currently focuses on Korean and English.
 - Visual search is candidate-based: it prioritizes transcript screen references and requested
   timestamps rather than inspecting every frame semantically.
