@@ -2,23 +2,25 @@
 
 # CuePrecise
 
-> **Find the exact moment in a long YouTube video—and see the evidence behind the answer.**
+> **Find the relevant moment in a long YouTube video—and see the evidence behind the answer.**
 
-A long video in a language you do not speak should still be searchable. CuePrecise is an
+A long video in a language you do not speak can still become searchable. CuePrecise is an
 open-source MCP server for Claude Desktop, Codex, Cursor, and other AI clients. It turns a
-YouTube video's original speech, captions, speakers, and relevant frames into a searchable
-local reference.
+YouTube video's original speech, available captions, speaker labels, and selected frames into
+a searchable local reference. The index stays in the video's original language; your AI client
+may translate a question into search terms, but cross-language retrieval is not guaranteed.
 
-CuePrecise analyzes videos longer than an hour in about three minutes.
+On a tested setup, CuePrecise analyzes videos longer than an hour in about three minutes.
 It does not send the whole video to your AI client for every question. It transcribes the
 original audio in chunks, indexes the evidence, and retrieves only the passages and frames
 related to your question.
 
-The transcription starts with the original audio. YouTube captions are used to recover
-names and technical terms that the transcription missed. You can ask about a video in your
-own language and still get the original words, speaker information, relevant frames, and a
-timestamp that takes you back to YouTube. Actual processing time depends on the video,
-network, and API response time.
+The transcription starts with the original audio. When an original-language YouTube caption
+track is available, CuePrecise uses it to recover matching Latin-script terms and phrases that
+the transcription missed. You can ask your AI client in your own language, but reliable
+retrieval may require the original wording. Results still include the original words, speaker
+information, relevant frames, and a timestamp that takes you back to YouTube. Actual processing
+time depends on the video, network, and API response time.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
@@ -26,12 +28,20 @@ network, and API response time.
 
 ## See it in action
 
-The attached demo uses a lecture that runs for 1 hour 48 minutes. It shows a summary with
-timestamps, speaker-by-speaker comparison, frame search, and links back to the source video.
+The attached demo uses a Polish-language interview. Ask what it is about in your own language;
+CuePrecise returns relevant moments, the original transcript, and matching frames as evidence.
 
-https://github.com/user-attachments/assets/aeec6d01-aff2-477c-9e91-2edcc6b31183
+~~~text
+You: I do not speak Polish. What is this interview about?
 
-<sub><a href="https://www.youtube.com/watch?v=F9I7llmuhAk">Demo source video</a></sub>
+Your AI + CuePrecise:
+Explains the interview in your language, points to relevant moments,
+and provides the original transcript and matching frames as evidence.
+~~~
+
+https://github.com/user-attachments/assets/ce7d595b-871f-469a-bcb8-798713751ffd
+
+<sub>Demo source: <a href="https://www.youtube.com/watch?v=W5C3FdUO0vs">“Czym jest prompt injection i jak chronić firmę przed złośliwą instrukcją dla AI? Gośc. Tomasz Bartel”</a> by Daniel Bartosiewicz | Content i Automatyzacja, licensed under CC BY.</sub>
 
 [**Download CuePrecise → GitHub Releases**](https://github.com/Nattentia/cueprecise/releases)
 
@@ -63,13 +73,14 @@ CuePrecise is not just a summarizer. It gives your AI client the material it nee
 a question and lets you check where the answer came from:
 
 - Gemini's word-level transcription of the original speech.
-- Original-language YouTube captions aligned to the same timeline.
-- Frames from moments that were referred to on screen or requested explicitly.
-- Speaker labels, confidence, and provenance for retrieved words.
+- Original-language YouTube captions, when available, aligned to the same timeline.
+- Frames from transcript screen-reference phrases, restored terms, or requested timestamps.
+- Speaker labels, evidence confidence, and provenance for retrieved spans.
 
 When the search finds no supporting passage, CuePrecise reports that there is no evidence in
-the indexed material instead of inventing a source. The analysis stays on your computer, so a
-later conversation can search the same video without starting over.
+the indexed material instead of inventing a source. The resulting evidence bundle stays on your
+computer, so a later conversation can search the same video without starting over. Audio chunks
+used for transcription are sent to Gemini; see [PRIVACY.md](PRIVACY.md) for the network boundary.
 
 ### Recovering a term the transcription missed
 
@@ -136,10 +147,11 @@ available for Claude Desktop on Windows.
 3. Select the AI clients found on your computer and click **Connect**.
 4. Fully quit and reopen the connected clients.
 
-The installer prepares the bundled video tools, backs up existing configuration, and adds
-only the CuePrecise entry. On Windows, the API key is encrypted with Windows DPAPI for the
-current user. Older plaintext CuePrecise keys are moved into the protected store during an
-upgrade.
+The installer checks for FFmpeg and FFprobe and installs FFmpeg through WinGet when it is
+missing. It adds only the CuePrecise entry and backs up existing configuration when it can do
+so safely; a secret-bearing Codex TOML may be left without a backup to avoid copying the key.
+On Windows, the API key is encrypted with Windows DPAPI for the current user. Older plaintext
+CuePrecise keys are moved into the protected store during an upgrade.
 
 > **Unsigned preview:** `v0.2.5` is not digitally signed, so Windows may show an
 > unknown-publisher warning. Download it only from this repository's Releases page and
@@ -154,9 +166,10 @@ uv tool install git+https://github.com/Nattentia/cueprecise
 cueprecise setup
 ~~~
 
-The setup command configures Claude Desktop and creates the default data directory
-`~/.cueprecise/data`. It keeps a timestamped `.bak` file when it changes an existing
-configuration.
+The setup command configures detected supported AI clients, including Claude Desktop, and
+creates the default data directory `~/.cueprecise/data`. It keeps a timestamped `.bak` file when
+it changes an existing configuration, unless a secret-bearing configuration format cannot be
+backed up safely.
 
 Install `ffmpeg` and `ffprobe`, then check the environment:
 
@@ -190,7 +203,7 @@ python src/pipeline.py --help
 
 ## Supported AI clients
 
-`cueprecise setup` can detect and configure:
+`cueprecise setup` can detect and configure these clients:
 
 - Claude Desktop
 - Codex
@@ -199,6 +212,9 @@ python src/pipeline.py --help
 - Cursor
 - Windsurf
 - Gemini CLI
+
+The Cursor, Windsurf, and Gemini CLI configuration paths are automatic setup targets, but they
+have not been end-to-end tested on the current development machine.
 
 Run it for every detected client, for one named client, or to inspect the result:
 
@@ -216,8 +232,8 @@ CuePrecise skips an existing `cueprecise` entry if CuePrecise did not create it.
 overwrite another MCP server's settings, and a failure for one client does not stop the
 others.
 
-ChatGPT connectors and Claude.ai on the web are not supported. They accept remote MCP
-servers over HTTPS with OAuth, while CuePrecise runs as a local stdio server on your computer.
+ChatGPT connectors and Claude.ai on the web are not currently supported by CuePrecise's local
+stdio transport. Web clients that require a remote HTTP MCP server cannot use this setup.
 
 ## Connect another MCP host
 
@@ -275,10 +291,12 @@ Saved results:
 
 Cleanup:
 
-- `cueprecise_purge` — explicitly remove chunks, source video, derived results, or all data.
+- `cueprecise_purge` — explicitly remove chunks, source video, derived results, raw data, or
+  all data.
 
-Every stage other than transcription runs locally. Chapter titles and summaries are written
-by the host AI from retrieved evidence; they do not create another Gemini call.
+After YouTube fetching and Gemini transcription, assembly, caption merge, chapters, rendering,
+visual extraction, and indexing run locally. Chapter titles and summaries are written by the
+host AI from retrieved evidence; CuePrecise does not create another Gemini transcription call.
 
 ## Local evidence bundle
 
@@ -289,7 +307,7 @@ The installer and `cueprecise setup` use `~/.cueprecise/data`. A source checkout
 data/<video_id>/
   job.json                  chunk plan and progress
   raw/
-    captions.json           original-language YouTube captions
+    captions.json           YouTube caption track (original preferred)
     metadata.json            metadata used for language checks
     audio/                  audio chunks used for transcription
     transcripts/             per-chunk transcripts and raw responses
@@ -303,7 +321,8 @@ data/<video_id>/
   index.sqlite3              transcript, chapter, frame index, and summary
 ~~~
 
-Each word keeps its timestamp, speaker status, confidence, and origin.
+Each indexed evidence span keeps its timestamp, speaker status, evidence confidence, and origin.
+The merged word data also keeps per-word timestamps and origin:
 
 ~~~json
 {
@@ -328,26 +347,30 @@ A query result includes the time range, text, source, confidence, and any relate
   "source_kind": "transcript",
   "speaker": "speaker:3",
   "speaker_status": "inferred",
-  "speaker_confidence": 0.75
+  "speaker_confidence": 0.75,
+  "confidence": 1.0
 }
 ~~~
 
-Frames are not sampled uniformly across the whole video. CuePrecise prioritizes screen
-references in the transcript, code/table/diagram candidates, and timestamps requested by
-the user. If OCR is installed, recognized text is stored as separate provenance instead of
-silently replacing the transcript.
+Frames are not sampled uniformly across the whole video. CuePrecise prioritizes screen-reference
+phrases in the transcript, terms restored from captions, and timestamps requested by the user.
+It does not semantically classify every code, table, or diagram frame. If OCR is installed,
+recognized text is stored as separate provenance instead of silently replacing the transcript.
 
 ## How it works
 
 CuePrecise does not try to make your AI client watch the entire video in one pass. It builds
 a knowledge bundle that can be searched again:
 
-1. Fetch audio, a low-resolution video stream when needed, original-language captions, and
-   metadata from YouTube.
+1. Fetch audio, original-language captions when available, metadata, and a low-resolution video
+   stream for the visual stage from YouTube. With `--skip-video`, the video download is deferred
+   until frames are requested.
 2. Split the audio into chunks and request word-level transcription and speaker information
    from Gemini.
-3. Assemble completed chunks and use captions only to fill matching gaps for missed terms.
-4. Extract frames at screen-reference moments and timestamps requested by the user.
+3. Assemble completed chunks and, when an original-language caption track exists, use matching
+   Latin-script terms to fill gaps in the transcription.
+4. Extract frames at transcript screen-reference moments, restored-term moments, and timestamps
+   requested by the user.
 5. Index transcript, chapters, speakers, and frames in SQLite.
 6. Let the AI client retrieve the relevant evidence and write the answer with timestamps.
 
@@ -366,9 +389,10 @@ Pass the video's original language when possible, for example `--language en-US`
 ko-KR`, or another BCP-47 code. Without it, Gemini can occasionally return a translation
 instead of a verbatim transcript.
 
-CuePrecise checks each chunk against original-language captions, the requested language, and
-video metadata. If it detects a translation, it stops before spending calls on the remaining
-chunks. The check uses material already fetched and does not make an extra API call.
+CuePrecise checks each chunk against whichever of the original-language captions, requested
+language, and video metadata is available. If it detects a translation, it stops before spending
+calls on the remaining chunks. If there is no usable basis, the guard is skipped and recorded as
+such. The check uses material already fetched and does not make an extra API call.
 
 ## Command-line reference
 
@@ -391,7 +415,7 @@ Common `run` options:
 - `--chunk-max-secs` — maximum chunk length; default 1790 seconds
 - `--overlap-secs` — overlap between chunks; default 10 seconds
 - `--daily-limit`, `--rpm-limit` — local Gemini usage limits
-- `--width` — subtitle line width; default 20 for Korean and 42 for English
+- `--width` — subtitle line width; default 20. Use 42 when rendering English subtitles.
 
 Rebuild selected derived output or clean up source material:
 
@@ -409,9 +433,9 @@ The pipeline is designed to resume. Completed chunks are reused when the input a
 are unchanged, and local post-processing such as merge, visual extraction, and indexing
 does not call Gemini.
 
-Measured bundle sizes were approximately 55.8 MB for a 23-minute video and 110.3 MB for a
-58-minute video. The source video can be removed after frame extraction; use `--keep-video`
-to retain it. Transcription audio can be removed with `purge --scope chunks`.
+Bundle size depends on the video's audio, transcript, and selected frames. The source video is
+normally removed after frame extraction; use `--keep-video` to retain it. Transcription audio
+can be removed with `purge --scope chunks`.
 
 A local usage ledger records attempts by an API-key hash and Pacific date, never the original
 key. CuePrecise shows the expected calls before a job starts and stops if a configured limit
@@ -421,7 +445,7 @@ would be exceeded. Google AI Studio remains authoritative for server-side usage.
 
 - Python 3.11+
 - `ffmpeg` and `ffprobe` for audio chunking and frame extraction
-- Optional `tesseract` for frame OCR
+- Optional Python packages `pytesseract` and `Pillow`, plus the `tesseract` binary, for frame OCR
 
 ~~~bash
 python -m pip install -r requirements.txt
@@ -444,8 +468,8 @@ installed.
 
 ## Known limitations
 
-- YouTube caption spelling errors can remain in recovered terms.
-- OCR requires both `pytesseract` and the Tesseract binary.
+- YouTube caption spelling errors can remain in recovered terms, and captions may be unavailable.
+- OCR requires the optional `pytesseract` and `Pillow` packages and the Tesseract binary.
 - The caption-merge threshold was tuned on a limited set of real videos and needs broader validation.
 - Across three or more chunks, a speaker absent from the overlap can remain `unresolved`.
   CuePrecise avoids assigning a potentially wrong identity.
@@ -454,6 +478,10 @@ installed.
 - Visual-reference phrase matching currently focuses on Korean and English.
 - Visual search is candidate-based: it prioritizes transcript screen references and requested
   timestamps rather than inspecting every frame semantically.
+- Cross-language retrieval is lexical rather than translation- or embedding-based; original terms
+  may be needed when the host AI does not translate the query.
+- Timestamps assigned to caption-recovered words are placed inside the missing transcription gap
+  and should be treated as approximate within that interval.
 
 ## Documentation
 

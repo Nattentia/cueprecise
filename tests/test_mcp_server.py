@@ -64,6 +64,11 @@ class ToolSurfaceTests(unittest.TestCase):
             self.assertIn("required", tool["inputSchema"])
             self.assertTrue(tool["description"].strip())
 
+    def test_purge_schema_advertises_video_scope(self) -> None:
+        purge = next(tool for tool in mcp_server.TOOLS
+                     if tool["name"] == "cueprecise_purge")
+        self.assertIn("video", purge["inputSchema"]["properties"]["scope"]["enum"])
+
     def test_register_passes_the_resolved_api_key_to_the_pipeline(self) -> None:
         key = "protected-key"
         message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
