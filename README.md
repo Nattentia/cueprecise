@@ -25,6 +25,8 @@ time depends on the video, network, and API response time.
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![CI](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml/badge.svg)](https://github.com/Nattentia/cueprecise/actions/workflows/ci.yml)
+[![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/nattentia/cueprecise)
+[![Glama](https://glama.ai/mcp/servers/Nattentia/cueprecise/badges/score.svg)](https://glama.ai/mcp/servers/Nattentia/cueprecise)
 
 ## See it in action
 
