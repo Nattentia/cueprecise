@@ -252,7 +252,8 @@ def main() -> int:
     if not argv or argv[0] in {"-h", "--help"}:
         print("""usage: cueprecise {setup,doctor,run,status,purge} ...
 
-CuePrecise — Find relevant moments in YouTube videos with evidence.
+CuePrecise — Analyze an hour-long YouTube video sentence by sentence in three minutes,
+and extract the information you need from the screen.
 
 설치와 MCP 등록:
   setup             Claude Desktop에 CuePrecise MCP 등록
