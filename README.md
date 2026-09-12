@@ -2,7 +2,7 @@
 
 # CuePrecise
 
-> **Find the relevant moment in a long YouTube video—and see the evidence behind the answer.**
+> **Analyze an hour-long YouTube video sentence by sentence in three minutes, and extract the information you need from the screen.**
 
 A long video in a language you do not speak can still become searchable. CuePrecise is an
 open-source MCP server for Claude Desktop, Codex, Cursor, and other AI clients. It turns a
