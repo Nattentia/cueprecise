@@ -23,9 +23,11 @@ if (-not (Test-Path -LiteralPath $csc -PathType Leaf)) { throw "C# compiler not 
     "/out:$(Join-Path $mcpbBin 'yt-dlp.exe')" (Join-Path $PSScriptRoot "yt_dlp_shim.cs")
 if ($LASTEXITCODE -ne 0) { throw "C# compiler failed: yt-dlp shim" }
 
-$ffmpegTag = "autobuild-2026-09-03-13-17"
-$ffmpegAsset = "ffmpeg-N-126390-g9fc8c785e2-win64-lgpl-shared.zip"
-$ffmpegSha256 = "3C3DD10B1F4E3663F38A1FB574D7734F7606DBB758EAEC2E4F7D398B9ACDF78A"
+# BtbN deletes daily autobuilds after about two weeks but keeps month-end builds.
+# Pin a month-end build so the download keeps working.
+$ffmpegTag = "autobuild-2026-08-31-13-27"
+$ffmpegAsset = "ffmpeg-N-126342-gf88b741dbf-win64-lgpl-shared.zip"
+$ffmpegSha256 = "46EA6521ED3877689D2FF0BD03640AC2637104415F6237D42625D13408767146"
 $ffmpegCache = Join-Path $repo "build\mcpb\ffmpeg"
 $ffmpegArchive = Join-Path $ffmpegCache $ffmpegAsset
 $ffmpegExtract = Join-Path $ffmpegCache "unpacked"
