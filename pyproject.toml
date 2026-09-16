@@ -46,6 +46,7 @@ py-modules = [
   "cueprecise_cli",
   "fetch_youtube",
   "installer_support",
+  "locking",
   "mcp_server",
   "merge",
   "pipeline",

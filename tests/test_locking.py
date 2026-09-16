@@ -8,11 +8,26 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 import locking
+
+
+class PackagingTests(unittest.TestCase):
+    """설치본은 pyproject 의 py-modules 목록만 담는다. 빠진 모듈은 import 에서 죽는다.
+
+    저장소 테스트는 src/ 를 경로에 넣고 돌아 이 누락을 잡지 못한다 (locking 이 그랬다).
+    """
+
+    def test_every_source_module_is_packaged(self) -> None:
+        root = Path(__file__).parents[1]
+        with (root / "pyproject.toml").open("rb") as stream:
+            packaged = set(tomllib.load(stream)["tool"]["setuptools"]["py-modules"])
+        modules = {path.stem for path in (root / "src").glob("*.py")}
+        self.assertEqual(sorted(modules - packaged), [], "pyproject py-modules 에 빠진 모듈")
 
 
 class BundleLockTests(unittest.TestCase):
