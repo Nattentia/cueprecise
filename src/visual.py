@@ -5,7 +5,7 @@ owner: claude
 균일 전체 프레임 추출은 하지 않는다. 다음만 후보로 삼는다.
 
   1. transcript 의 화면 참조 표현 ("보시면", "이 그림", "표에서" 등)
-  2. 영어 용어가 복원된 시각 (origin="youtube") — 슬라이드에 원문이 있을 확률이 높다
+  2. 라틴 문자 용어가 복원된 시각 (origin="youtube") — 슬라이드에 원문이 있을 확률이 높다
   3. 호출자가 지정한 시각
 
 OCR 은 선택이다. `pytesseract` 가 없으면 프레임만 뽑고 `ocr_text` 는 null 로
@@ -96,7 +96,7 @@ def screen_reference_times(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def restored_term_times(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """영어 용어가 복원된 시각. 슬라이드에 원문 표기가 있을 가능성이 높다."""
+    """라틴 문자 용어가 복원된 시각. 슬라이드에 원문 표기가 있을 가능성이 높다."""
     return [
         {"timestamp": max(0.0, round(float(w["start"]) - 0.5, 3)),
          "reason": "restored-term"}

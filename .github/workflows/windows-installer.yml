@@ -146,7 +146,7 @@ jobs:
           if (Test-Path -LiteralPath $credential) { throw "제거 후에도 보호된 API 키가 남았다" }
           Write-Output "조용한 설치, 설정 이관, 제거 확인 완료"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: cueprecise-windows-installer
           path: dist/release/*

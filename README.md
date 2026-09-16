@@ -136,10 +136,11 @@ available for Claude Desktop on Windows.
 3. Select the AI clients found on your computer and click **Connect**.
 4. Fully quit and reopen the connected clients.
 
-The installer prepares the bundled video tools, backs up existing configuration, and adds
-only the CuePrecise entry. On Windows, the API key is encrypted with Windows DPAPI for the
-current user. Older plaintext CuePrecise keys are moved into the protected store during an
-upgrade.
+The installer checks for FFmpeg and FFprobe and installs FFmpeg through WinGet when it is
+missing. It adds only the CuePrecise entry and backs up existing configuration when it can do
+so safely; a secret-bearing Codex TOML may be left without a backup to avoid copying the key.
+On Windows, the API key is encrypted with Windows DPAPI for the current user. Older plaintext
+CuePrecise keys are moved into the protected store during an upgrade.
 
 > **Unsigned preview:** `v0.2.5` is not digitally signed, so Windows may show an
 > unknown-publisher warning. Download it only from this repository's Releases page and
@@ -303,7 +304,8 @@ data/<video_id>/
   index.sqlite3              transcript, chapter, frame index, and summary
 ~~~
 
-Each word keeps its timestamp, speaker status, confidence, and origin.
+Each indexed evidence span keeps its timestamp, speaker status, evidence confidence, and origin.
+The merged word data also keeps per-word timestamps and origin:
 
 ~~~json
 {
@@ -421,7 +423,7 @@ would be exceeded. Google AI Studio remains authoritative for server-side usage.
 
 - Python 3.11+
 - `ffmpeg` and `ffprobe` for audio chunking and frame extraction
-- Optional `tesseract` for frame OCR
+- Optional Python packages `pytesseract` and `Pillow`, plus the `tesseract` binary, for frame OCR
 
 ~~~bash
 python -m pip install -r requirements.txt
@@ -444,8 +446,8 @@ installed.
 
 ## Known limitations
 
-- YouTube caption spelling errors can remain in recovered terms.
-- OCR requires both `pytesseract` and the Tesseract binary.
+- YouTube caption spelling errors can remain in recovered terms, and captions may be unavailable.
+- OCR requires the optional `pytesseract` and `Pillow` packages and the Tesseract binary.
 - The caption-merge threshold was tuned on a limited set of real videos and needs broader validation.
 - Across three or more chunks, a speaker absent from the overlap can remain `unresolved`.
   CuePrecise avoids assigning a potentially wrong identity.
@@ -454,6 +456,10 @@ installed.
 - Visual-reference phrase matching currently focuses on Korean and English.
 - Visual search is candidate-based: it prioritizes transcript screen references and requested
   timestamps rather than inspecting every frame semantically.
+- Cross-language retrieval is lexical rather than translation- or embedding-based; original terms
+  may be needed when the host AI does not translate the query.
+- Timestamps assigned to caption-recovered words are placed inside the missing transcription gap
+  and should be treated as approximate within that interval.
 
 ## Documentation
 

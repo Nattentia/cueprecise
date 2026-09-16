@@ -67,8 +67,7 @@ STAGES = ("fetch", "plan", "transcribe", "assemble", "merge", "chapters",
 # 만들 수 있고 단어 보존율 100% 도 그대로다.
 #
 # visual 은 기본에 남긴다. 이 도구의 목적이 "오디오에 안 잡히는 화면 정보를
-# 캡처로 가져오는 것" 이라 프레임이 없으면 목적의 절반이 빠진다. 실측(58분):
-# 360p 영상 14.5MB < 지금 받는 소리 42.6MB. 줄일 곳은 영상이 아니라 소리다.
+# 캡처로 가져오는 것" 이라 프레임이 없으면 목적의 절반이 빠진다.
 OPTIONAL_STAGES: tuple[str, ...] = ("render",)
 
 DEFAULT_STAGES = tuple(s for s in STAGES if s not in OPTIONAL_STAGES)
@@ -116,9 +115,8 @@ DEFAULT_RPM_LIMIT = 2
 DEFAULT_REQUEST_INTERVAL = 30.0
 DEFAULT_WIDTH = 20
 
-# 프레임용 영상. 슬라이드 글자를 읽을 만한 최소 화질이면 된다. 360p mp4 는
-# 23분 영상 기준 16MB 로, 이미 받는 오디오(58분 61MB)보다 작다. m3u8 은
-# 구간 추출이 느려 직접 https 포맷을 먼저 고른다.
+# 프레임용 영상. 슬라이드 글자를 읽을 만한 저해상도면 된다. m3u8 은 구간 추출이
+# 느려 직접 https 포맷을 먼저 고른다.
 VIDEO_FORMAT = ("bv*[height<=480][ext=mp4][protocol^=http]/"
                 "bv*[height<=480][protocol^=http]/bv*[height<=480]/wv*")
 
@@ -491,7 +489,7 @@ def stage_fetch(bundle: Path, url: str, *, force: bool = False,
                                 preferred_language=preferred_language)
             _pin_captions_video_id(captions, bundle.name)
         except Exception as error:  # 자막은 선택 자료다. 없어도 파이프라인은 진행한다.
-            _log("  경고: 자막 취득 실패, 영어 용어 복원을 건너뛴다 (%s)" % error)
+            _log("  경고: 자막 취득 실패, 라틴 문자 용어 복원을 건너뛴다 (%s)" % error)
             # 자막이 원래 없는 영상과 취득이 고장난 것은 사람이 할 일이 다르다.
             # 0 cue 만 남기면 구분할 수 없으므로 이유를 함께 적는다.
             _write_json(captions, {"source": "youtube", "language": None,
@@ -1106,7 +1104,7 @@ def stage_assemble(bundle: Path, job: dict[str, Any]) -> dict[str, Any]:
 
 
 def stage_merge(bundle: Path) -> dict[str, Any]:
-    """YouTube 자막으로 누락 영어 용어를 복원한다. Gemini 호출 없음."""
+    """원어 YouTube 자막으로 누락 라틴 문자 용어를 복원한다. Gemini 호출 없음."""
     transcript = bundle / "derived" / "transcript.json"
     captions = bundle / "raw" / "captions.json"
     output = bundle / "derived" / "merged.json"
@@ -1149,7 +1147,8 @@ def stage_chapters(bundle: Path, *, url: str | None = None) -> dict[str, Any]:
 def ensure_video(bundle: Path, *, url: str | None = None) -> Path | None:
     """프레임을 뽑기 직전에만 영상을 확보한다. Gemini 호출 없음.
 
-    기본 분석은 영상을 받지 않으므로 프레임 요청 시점에 없는 것이 정상이다.
+    기본 분석도 visual 단계가 포함되면 영상을 받는다. `--skip-video`를 사용했거나
+    영상을 정리한 경우에는 프레임 요청 시점에 없는 것이 정상이다.
     URL 은 `job.json` 의 `input.source` 에 이미 있다 — 새 영속 설정을 만들지
     않는다. 이미 받아둔 영상은 그대로 쓰고 절대 지우지 않는다.
     """
@@ -1193,7 +1192,7 @@ def stage_visual(bundle: Path, *, at: list[float] | None = None,
 
     프레임을 뽑고 나면 영상은 쓸 데가 없으므로 놓아준다 (`keep_video` 로 끈다).
     남는 것은 프레임 jpg 이고, 나중에 다른 시각이 필요하면 `ensure_video` 가
-    `job.json` 의 원본 URL 로 다시 받는다. 실측 14.5~16MB 를 회수한다.
+    `job.json` 의 원본 URL 로 다시 받는다.
     """
     # 전사가 없으면 visual.build 가 어차피 실패한다. 쓰지도 못할 영상을 먼저
     # 받아 버리지 않는다.

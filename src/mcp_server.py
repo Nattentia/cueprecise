@@ -271,8 +271,8 @@ def tool_purge(bundle_root: Path, *, video_id: str,
 def tool_frames(bundle_root: Path, *, video_id: str,
                 at: list[float] | None = None,
                 max_frames: int = visual.DEFAULT_MAX_FRAMES) -> dict[str, Any]:
-    # visual.build 를 직접 부르지 않는다. 기본 분석이 영상을 받지 않으므로
-    # 프레임 요청 시점에 영상을 확보하는 일까지 pipeline 이 맡는다.
+    # visual.build 를 직접 부르지 않는다. 영상이 없거나 --skip-video 로
+    # 미뤄진 경우 프레임 요청 시점에 영상을 확보하는 일까지 pipeline 이 맡는다.
     bundle = pipeline.bundle_path(bundle_root, video_id)
     return pipeline.stage_visual(bundle, at=at, max_frames=max_frames)
 
@@ -402,8 +402,8 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "cueprecise_frames",
         "description": "화면 참조 시각의 프레임을 추출하고 frames.json 을 갱신한다. "
-                       "기본 분석은 영상을 받지 않으므로 이 도구가 필요할 때 "
-                       "원본 URL 로 360p 영상을 받아온다. Gemini 호출 없음.",
+                       "영상이 없거나 --skip-video를 사용한 경우 원본 URL로 저해상도 영상을 "
+                       "받아온다. Gemini 호출 없음.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -420,14 +420,14 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "cueprecise_purge",
         "description": "영상 자료를 명시적으로 삭제한다. "
-                       "scope: derived(기본) | chunks | raw | all. "
+                       "scope: derived(기본) | chunks | video | raw | all. "
                        "chunks 는 전사용 청크 오디오만 지우며 원본 오디오에서 다시 만들 수 있다.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "video_id": {"type": "string"},
                 "scope": {"type": "string",
-                          "enum": ["derived", "chunks", "raw", "all"]},
+                          "enum": ["derived", "chunks", "video", "raw", "all"]},
             },
             "required": ["video_id"],
         },
