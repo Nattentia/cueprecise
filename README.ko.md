@@ -344,8 +344,7 @@ evidence 부족을 반환합니다.
 
 프레임은 영상 전체를 일정한 간격으로 모두 저장하지 않습니다. 전사의 화면 참조,
 복원된 용어, 사용자가 요청한 시점을 우선합니다. 모든 코드·표·도식을 의미적으로
-분류하는 기능은 아닙니다. OCR을 설치한 경우 인식된 문자도 전사와 별도의 출처로
-보관합니다.
+분류하는 기능은 아닙니다. 프레임에서 인식한 문자는 전사와 별도의 출처로 보관합니다.
 
 ## 명령줄 참고
 
@@ -389,7 +388,8 @@ python src/pipeline.py purge <id> --scope chunks
 
 번들 크기는 영상의 오디오, 전사 결과와 선택한 프레임 수에 따라 달라집니다. 원본
 영상은 프레임 추출 뒤 기본적으로 삭제되며, --keep-video를 사용하면 보관합니다.
-전사에 사용한 청크 오디오는 purge --scope chunks로 정리할 수 있습니다.
+전사가 모두 끝나면 청크 오디오도 지우고 원본 오디오는 남깁니다. 두 앱이 같은 영상을
+동시에 요청하면 나중 요청은 사용 중이라고 알리고 멈춥니다.
 
 로컬 사용량 원장은 API 키 자체가 아닌 키의 해시와 Pacific 날짜별 시도 횟수를
 기록합니다. 작업 전 예상 호출 수를 보여주며, 설정한 한도를 넘으면 시작 전에
@@ -399,7 +399,8 @@ python src/pipeline.py purge <id> --scope chunks
 
 - Python 3.11+
 - ffmpeg / ffprobe — 청크 분할과 프레임 추출
-- 선택 사항: Python 패키지 pytesseract, Pillow와 시스템 tesseract 바이너리 — 프레임 OCR
+- 프레임 OCR — Windows에는 내장돼 있습니다. macOS·Linux는 pytesseract, Pillow와 tesseract
+  바이너리를 설치합니다 (선택)
 
 ~~~bash
 python -m pip install -r requirements.txt
@@ -423,8 +424,6 @@ google-genai가 없으면 전사 관련 테스트는 건너뜁니다.
 
 - YouTube 자막의 표기 오류는 그대로 들어올 수 있습니다. 별도의 표기 정규화 단계는
   아직 없습니다.
-- OCR은 Python 패키지 pytesseract·Pillow와 tesseract 바이너리가 모두 있을 때만 동작합니다. 없으면 프레임은
-  시각과 위치로만 조회됩니다.
 - 자막 병합 임계값은 제한된 실제 영상으로 조정되어 다른 영상의 추가 검증이 필요합니다.
 - 청크가 3개 이상이고 겹치는 구간에 근거가 없으면 서로 다른 청크의 화자를 같은
   사람인지 확정하지 못하고 unresolved로 남길 수 있습니다.

@@ -40,6 +40,7 @@ import audio
 import chapters
 import context
 import fetch_youtube
+import locking
 import merge as merge_mod
 import render as render_mod
 import speakers
@@ -536,7 +537,11 @@ def stage_plan(bundle: Path, url: str, *, chunk_max_secs: float, overlap_secs: f
         job = _read_json(job_path)
         if (job.get("input", {}).get("fingerprint") == audio.file_fingerprint(source)
                 and _plan_config(job) == config):
-            missing = [c for c in job["chunks"] if not (bundle / c["path"]).exists()]
+            # 전사가 끝난 청크는 오디오가 없는 것이 정상이다 (_release_chunks).
+            # 아직 전사할 청크만 다시 뽑는다. 전부 뽑으면 재등록할 때마다 ffmpeg 로
+            # 청크를 다시 만들었다가 전사 뒤에 또 지우게 된다.
+            missing = [c for c in _pending_chunks(job, bundle)
+                       if not (bundle / c["path"]).exists()]
             if missing:
                 audio.extract_chunks(source, bundle, missing)
             _log("  기존 계획 재사용: 청크 %d개" % len(job["chunks"]))
@@ -935,6 +940,7 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
         _log("  전사 완료된 청크만 있음, 호출 없음")
         job["status"] = "complete"
         _save_job(bundle, job)
+        _release_chunks(bundle, job)
         return job
 
     caption_cues, captions_language = _captions_evidence(bundle)
@@ -1076,7 +1082,32 @@ def stage_transcribe(bundle: Path, job: dict[str, Any], *, ledger: Path, api_key
 
     job["status"] = "complete"
     _save_job(bundle, job)
+    _release_chunks(bundle, job)
     return job
+
+
+def _release_chunks(bundle: Path, job: dict[str, Any]) -> None:
+    """모든 청크 전사가 끝나면 청크 오디오를 지운다.
+
+    청크 오디오는 아직 전사하지 않은 청크를 Gemini 에 보낼 때만 쓴다. 저장된
+    응답 원문을 다시 읽을 때도, assemble 이후 단계도 쓰지 않는다. 번들 용량의
+    20~25% 를 차지한다.
+
+    하나라도 남았으면 두고 본다 — 실패 후 이어 전사할 때 필요하다. 원본 오디오가
+    없으면 청크가 유일한 오디오라 지우지 않는다 (`purge chunks` 와 같은 규칙).
+    나중에 설정이 바뀌어 다시 전사해야 하면 `stage_plan` 이 원본에서 다시 뽑는다.
+    """
+    if _pending_chunks(job, bundle):
+        return
+    if audio.source_audio(bundle) is None:
+        return
+    folder = bundle / "raw" / "audio"
+    if not folder.is_dir():
+        return
+    size_mb = sum(p.stat().st_size for p in folder.rglob("*") if p.is_file()) / 1048576
+    shutil.rmtree(folder, ignore_errors=True)
+    _log("  전사가 끝나 청크 오디오를 지웠다 (%.1fMB 회수). 원본 오디오에서 다시 만들 수 있다"
+         % size_mb)
 
 
 def stage_assemble(bundle: Path, job: dict[str, Any]) -> dict[str, Any]:
@@ -1272,53 +1303,58 @@ def run(url: str, *, bundle_root: Path = Path("data"),
     summary: dict[str, Any] = {"video_id": video_id, "bundle": str(bundle), "stages": {}}
     job: dict[str, Any] | None = None
 
-    for stage in resolve_stages(stages):
-        _log("[%s]" % stage)
-        if stage == "fetch":
-            summary["stages"][stage] = stage_fetch(bundle, url, force=force, video=video)
-        elif stage == "plan":
-            job = stage_plan(bundle, url, chunk_max_secs=chunk_max_secs,
-                             overlap_secs=overlap_secs, language_codes=language_codes,
-                             force=force)
-            summary["stages"][stage] = {"chunks": len(job["chunks"])}
-        elif stage == "transcribe":
-            job = job if job is not None else _load_job(bundle)
-            resolved_api_key = api_key or os.environ.get("GEMINI_API_KEY")
-            if not resolved_api_key:
-                raise StageError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
-            job = stage_transcribe(bundle, job, ledger=ledger, api_key=resolved_api_key,
-                                   daily_limit=daily_limit, rpm_limit=rpm_limit,
-                                   request_interval=request_interval,
-                                   transcriber=transcriber, force=force)
-            summary["stages"][stage] = {"status": job["status"]}
-        elif stage == "assemble":
-            job = job if job is not None else _load_job(bundle)
-            payload = stage_assemble(bundle, job)
-            summary["stages"][stage] = {"words": len(payload["words"])}
-        elif stage == "merge":
-            merged = stage_merge(bundle)
-            summary["stages"][stage] = {
-                "words": len(merged["words"]),
-                "inserted": sum(1 for w in merged["words"] if w.get("origin") == "youtube"),
-            }
-        elif stage == "chapters":
-            result = stage_chapters(bundle, url=url)
-            summary["stages"][stage] = {
-                "chapters": len(result["chapters"]),
-                "needs_titles": sum(1 for item in result["chapters"] if item["needs_title"]),
-            }
-        elif stage == "render":
-            srt, txt = stage_render(bundle, width=width)
-            summary["stages"][stage] = {"srt": str(srt), "txt": str(txt)}
-        elif stage == "visual":
-            frames = stage_visual(bundle, at=at, max_frames=max_frames, url=url,
-                                  acquire=video, keep_video=keep_video)
-            summary["stages"][stage] = {
-                "frames": len(frames["frames"]),
-                "candidates": frames["candidates_considered"],
-            }
-        elif stage == "index":
-            summary["stages"][stage] = {"index": str(stage_index(bundle))}
+    # 번들 하나는 한 프로세스만 다룬다. 클라이언트가 여러 개 붙을 수 있어
+    # (Claude Desktop, Gemini CLI, ...) 같은 영상을 동시에 등록하면 job.json 과
+    # derived 산출물이 서로를 덮는다. 다른 작업이 쥐고 있으면 기다리지 않고
+    # locking.BundleBusy 를 올린다 — 무엇이 도는 중인지 사람이 알아야 한다.
+    with locking.bundle_lock(bundle, activity="register"):
+        for stage in resolve_stages(stages):
+            _log("[%s]" % stage)
+            if stage == "fetch":
+                summary["stages"][stage] = stage_fetch(bundle, url, force=force, video=video)
+            elif stage == "plan":
+                job = stage_plan(bundle, url, chunk_max_secs=chunk_max_secs,
+                                 overlap_secs=overlap_secs, language_codes=language_codes,
+                                 force=force)
+                summary["stages"][stage] = {"chunks": len(job["chunks"])}
+            elif stage == "transcribe":
+                job = job if job is not None else _load_job(bundle)
+                resolved_api_key = api_key or os.environ.get("GEMINI_API_KEY")
+                if not resolved_api_key:
+                    raise StageError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
+                job = stage_transcribe(bundle, job, ledger=ledger, api_key=resolved_api_key,
+                                       daily_limit=daily_limit, rpm_limit=rpm_limit,
+                                       request_interval=request_interval,
+                                       transcriber=transcriber, force=force)
+                summary["stages"][stage] = {"status": job["status"]}
+            elif stage == "assemble":
+                job = job if job is not None else _load_job(bundle)
+                payload = stage_assemble(bundle, job)
+                summary["stages"][stage] = {"words": len(payload["words"])}
+            elif stage == "merge":
+                merged = stage_merge(bundle)
+                summary["stages"][stage] = {
+                    "words": len(merged["words"]),
+                    "inserted": sum(1 for w in merged["words"] if w.get("origin") == "youtube"),
+                }
+            elif stage == "chapters":
+                result = stage_chapters(bundle, url=url)
+                summary["stages"][stage] = {
+                    "chapters": len(result["chapters"]),
+                    "needs_titles": sum(1 for item in result["chapters"] if item["needs_title"]),
+                }
+            elif stage == "render":
+                srt, txt = stage_render(bundle, width=width)
+                summary["stages"][stage] = {"srt": str(srt), "txt": str(txt)}
+            elif stage == "visual":
+                frames = stage_visual(bundle, at=at, max_frames=max_frames, url=url,
+                                      acquire=video, keep_video=keep_video)
+                summary["stages"][stage] = {
+                    "frames": len(frames["frames"]),
+                    "candidates": frames["candidates_considered"],
+                }
+            elif stage == "index":
+                summary["stages"][stage] = {"index": str(stage_index(bundle))}
     return summary
 
 
@@ -1419,7 +1455,7 @@ def status(bundle: Path, *, ledger: Path | None = None, api_key: str | None = No
 PURGE_SCOPES = ("chunks", "video", "derived", "raw", "all")
 
 
-def purge(bundle: Path, *, scope: str = "derived") -> list[str]:
+def purge(bundle: Path, *, scope: str = "derived", force: bool = False) -> list[str]:
     """raw 자료 삭제와 derived 재생성을 위한 명시적 삭제 (CONTRACT 12절).
 
     `chunks` 는 전사용 청크 오디오만 지운다. 청크는 원본 오디오에서 언제든
@@ -1429,9 +1465,26 @@ def purge(bundle: Path, *, scope: str = "derived") -> list[str]:
     `video` 는 프레임용 영상만 지운다. `visual` 이 끝나면 자동으로 지우지만,
     옛 bundle 이나 `keep_video` 로 남긴 것을 정리할 때 쓴다. 필요해지면
     `job.json` 의 원본 URL 로 다시 받는다.
+
+    돌고 있는 작업이 있으면 지우지 않는다. 전사 중에 청크나 derived 가 사라지면
+    그 실행이 죽고, 저장된 응답까지 지워졌다면 이미 쓴 할당량을 다시 써야 한다.
+    `force` 는 그 판단을 사람이 뒤집을 때만 쓴다.
     """
     if scope not in PURGE_SCOPES:
         raise ValueError("scope 는 %s 여야 합니다." % " | ".join(PURGE_SCOPES))
+
+    if force:
+        owner = locking.owner_of(bundle)
+        if owner is not None:
+            _log("  경고: 작업이 도는 중인데 force 로 지운다 (%s, pid %s)"
+                 % (owner.get("activity", "?"), owner.get("pid", "?")))
+        return _purge_targets(bundle, scope)
+
+    with locking.bundle_lock(bundle, activity="purge"):
+        return _purge_targets(bundle, scope)
+
+
+def _purge_targets(bundle: Path, scope: str) -> list[str]:
     removed: list[str] = []
     targets: list[Path] = []
     if scope == "chunks":

@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ocr = ["pytesseract>=0.3.10", "Pillow>=10.0.0"]
+ocr = ["pytesseract>=0.3.10; sys_platform != 'win32'", "Pillow>=10.0.0; sys_platform != 'win32'"]  # Windows 는 내장 OCR
 timezone = ["tzdata>=2024.1"]
 
 [project.urls]

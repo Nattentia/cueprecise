@@ -4,7 +4,9 @@
 #
 # 파이썬 패키지가 아닌 것은 따로 설치해야 한다 (README 요구 사항 참고).
 #   ffmpeg / ffprobe   청크 분할, 프레임 추출
-#   tesseract          프레임 OCR (선택)
+#
+# 프레임 OCR 은 Windows 내장 OCR 을 쓰므로 Windows 에서는 설치할 것이 없다.
+# Windows 가 아닌 환경에서만 tesseract 가 예비로 필요하다 (선택).
 
 yt-dlp>=2025.1.15          # 오디오·영상·자막·메타데이터 취득
 google-genai>=1.0.0        # transcribe 단계에서만 쓴다

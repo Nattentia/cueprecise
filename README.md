@@ -336,8 +336,8 @@ A query result includes the time range, text, source, confidence, and any relate
 
 Frames are not sampled uniformly across the whole video. CuePrecise prioritizes screen
 references in the transcript, code/table/diagram candidates, and timestamps requested by
-the user. If OCR is installed, recognized text is stored as separate provenance instead of
-silently replacing the transcript.
+the user. Text recognized on those frames is stored as separate provenance instead of
+replacing the transcript.
 
 ## How it works
 
@@ -411,9 +411,9 @@ The pipeline is designed to resume. Completed chunks are reused when the input a
 are unchanged, and local post-processing such as merge, visual extraction, and indexing
 does not call Gemini.
 
-Measured bundle sizes were approximately 55.8 MB for a 23-minute video and 110.3 MB for a
-58-minute video. The source video can be removed after frame extraction; use `--keep-video`
-to retain it. Transcription audio can be removed with `purge --scope chunks`.
+The source video is removed after frame extraction; use `--keep-video` to retain it. The
+split transcription audio is removed once every chunk is transcribed. The original audio is
+kept. If two apps ask for the same video at once, the second reports that it is busy.
 
 A local usage ledger records attempts by an API-key hash and Pacific date, never the original
 key. CuePrecise shows the expected calls before a job starts and stops if a configured limit
@@ -423,7 +423,8 @@ would be exceeded. Google AI Studio remains authoritative for server-side usage.
 
 - Python 3.11+
 - `ffmpeg` and `ffprobe` for audio chunking and frame extraction
-- Optional Python packages `pytesseract` and `Pillow`, plus the `tesseract` binary, for frame OCR
+- Frame OCR is built into Windows. On macOS and Linux, install `pytesseract`, `Pillow`, and the
+  `tesseract` binary (optional)
 
 ~~~bash
 python -m pip install -r requirements.txt
@@ -447,7 +448,6 @@ installed.
 ## Known limitations
 
 - YouTube caption spelling errors can remain in recovered terms, and captions may be unavailable.
-- OCR requires the optional `pytesseract` and `Pillow` packages and the Tesseract binary.
 - The caption-merge threshold was tuned on a limited set of real videos and needs broader validation.
 - Across three or more chunks, a speaker absent from the overlap can remain `unresolved`.
   CuePrecise avoids assigning a potentially wrong identity.

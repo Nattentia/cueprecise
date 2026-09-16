@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import hashlib
 import json
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+# 잠금 구현은 locking.py 한 곳에만 둔다. 두 벌이면 언젠가 어긋난다.
+from locking import file_lock as _file_lock
 
 
 class _USPacific(tzinfo):
@@ -63,32 +65,6 @@ def key_hash(api_key: str) -> str:
     if not api_key:
         raise ValueError("API key가 비어 있습니다.")
     return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
-
-
-@contextlib.contextmanager
-def _file_lock(path: Path) -> Iterator[None]:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+b") as stream:
-        stream.seek(0, os.SEEK_END)
-        if stream.tell() == 0:
-            stream.write(b"0")
-            stream.flush()
-        stream.seek(0)
-        if os.name == "nt":
-            import msvcrt
-            msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
-            try:
-                yield
-            finally:
-                stream.seek(0)
-                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
 def _read(path: Path) -> dict[str, Any]:
