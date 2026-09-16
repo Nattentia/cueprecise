@@ -1,4 +1,5 @@
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -50,10 +51,25 @@ class McpbPackagingTest(unittest.TestCase):
         for filename in ("cueprecise-mcp.exe", "yt-dlp.exe", "ffmpeg.exe", "ffprobe.exe"):
             self.assertIn(filename, script)
         self.assertIn("FFmpeg-LICENSE.txt", script)
-        self.assertIn("3C3DD10B1F4E3663F38A1FB574D7734F7606DBB758EAEC2E4F7D398B9ACDF78A", script)
+        self.assertRegex(script, r'\$ffmpegSha256 = "[0-9A-F]{64}"')
         self.assertIn('$_.Name -ne "ffplay.exe"', script)
         self.assertIn("github.com/yt-dlp/yt-dlp", notices)
         self.assertIn("github.com/BtbN/FFmpeg-Builds", notices)
+
+    def test_ffmpeg_notice_matches_the_pinned_build(self):
+        """LGPL notice must name the build and source revision that is actually bundled."""
+        script = (ROOT / "installer" / "mcpb" / "build_mcpb.ps1").read_text(
+            encoding="utf-8"
+        )
+        notices = (ROOT / "installer" / "mcpb" / "THIRD_PARTY_NOTICES.md").read_text(
+            encoding="utf-8"
+        )
+        tag = re.search(r'\$ffmpegTag = "([^"]+)"', script).group(1)
+        asset = re.search(r'\$ffmpegAsset = "([^"]+)"', script).group(1)
+        revision = re.search(r"-g([0-9a-f]+)-win64", asset).group(1)
+
+        self.assertIn("FFmpeg-Builds/releases/tag/%s" % tag, notices)
+        self.assertIn("FFmpeg/FFmpeg/commit/%s" % revision, notices)
 
     def test_release_bundle_integrates_yt_dlp_without_a_second_pyinstaller_app(self):
         script = (ROOT / "installer" / "mcpb" / "build_mcpb.ps1").read_text(
