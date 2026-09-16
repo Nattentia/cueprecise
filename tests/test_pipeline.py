@@ -276,6 +276,61 @@ class TranscribeResumeTests(unittest.TestCase):
         self._run(fake)
         self.assertIn("chunk-000.mp3", fake.calls, "꼬리표 없는 응답을 재사용했다")
 
+    # --- 전사 뒤 청크 오디오 정리 -------------------------------------------------
+
+    def _with_source_audio(self) -> None:
+        source = self.bundle / "raw" / "source.webm"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(b"original-audio")
+
+    def test_chunk_audio_is_released_after_all_chunks_finish(self) -> None:
+        self._with_source_audio()
+        self._run(FakeTranscriber({"chunk-000.mp3": ["a"], "chunk-001.mp3": ["b"]}))
+        self.assertFalse((self.bundle / "raw" / "audio").exists(),
+                         "전사가 다 끝났는데 청크 오디오가 남았다")
+        self.assertTrue((self.bundle / "raw" / "source.webm").exists(), "원본을 지웠다")
+        self.assertTrue((self.bundle / "raw/transcripts/chunk-001.json").exists())
+
+    def test_chunk_audio_is_kept_while_a_chunk_is_unfinished(self) -> None:
+        """실패 뒤 이어 전사하려면 남은 청크의 오디오가 있어야 한다."""
+        self._with_source_audio()
+        failing = FakeTranscriber({"chunk-000.mp3": ["a"], "chunk-001.mp3": ["b"]},
+                                  fail_on={"chunk-001.mp3"})
+        with self.assertRaises(pipeline.StageError):
+            self._run(failing)
+        self.assertTrue((self.bundle / "raw/audio/chunk-001.mp3").exists(),
+                        "이어 전사할 청크 오디오를 지웠다")
+
+    def test_chunk_audio_is_kept_without_source_audio(self) -> None:
+        """원본이 없으면 청크가 유일한 오디오다. 되돌릴 수 없으므로 지우지 않는다."""
+        self._run(FakeTranscriber({"chunk-000.mp3": ["a"], "chunk-001.mp3": ["b"]}))
+        self.assertTrue((self.bundle / "raw/audio/chunk-000.mp3").exists())
+
+    def test_replan_only_extracts_unfinished_chunks(self) -> None:
+        """재등록 때 끝난 청크의 오디오까지 다시 뽑으면 지우고 뽑기를 반복한다."""
+        self._with_source_audio()
+        shutil_rmtree = __import__("shutil").rmtree
+        shutil_rmtree(self.bundle / "raw" / "audio")
+        transcript = self.bundle / "raw/transcripts/chunk-000.json"
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text("{}", encoding="utf-8")
+        self.job["chunks"][0]["status"] = "complete"
+        (self.bundle / "job.json").write_text(json.dumps(self.job), encoding="utf-8")
+
+        extracted: list[int] = []
+        original_extract = pipeline.audio.extract_chunks
+        original_fingerprint = pipeline.audio.file_fingerprint
+        pipeline.audio.extract_chunks = (
+            lambda src, root, chunks: extracted.extend(c["index"] for c in chunks))
+        pipeline.audio.file_fingerprint = lambda path: "sha256:x"
+        try:
+            pipeline.stage_plan(self.bundle, "u", chunk_max_secs=1790.0,
+                                overlap_secs=10.0, language_codes=None)
+        finally:
+            pipeline.audio.extract_chunks = original_extract
+            pipeline.audio.file_fingerprint = original_fingerprint
+        self.assertEqual(extracted, [1], "전사가 끝난 청크 오디오까지 다시 뽑았다")
+
 
 class OfflineStageTests(unittest.TestCase):
     """merge/render/index 는 Gemini SDK 없이 동작해야 한다."""

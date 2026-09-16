@@ -503,3 +503,28 @@ class FramesOnDemandTests(unittest.TestCase):
     def test_frames_schema_exposes_max_frames(self) -> None:
         tool = [t for t in mcp_server.TOOLS if t["name"] == "cueprecise_frames"][0]
         self.assertIn("max_frames", tool["inputSchema"]["properties"])
+
+    def test_frames_refuses_bundle_held_by_another_process(self) -> None:
+        """등록 중인 영상에 프레임 도구를 부르면 영상·프레임을 서로 치운다. 막아야 한다."""
+        locking = mcp_server.locking
+        import os
+        import socket
+        import time
+        bundle = pipeline.bundle_path(self.root, "vid")
+        bundle.mkdir(parents=True, exist_ok=True)
+        # 살아 있는 다른 프로세스(이 테스트를 띄운 부모)가 쥔 것으로 기록한다.
+        (bundle / locking.OWNER_NAME).write_text(json.dumps({
+            "pid": os.getppid(), "host": socket.gethostname(),
+            "activity": "register", "started_at": "2026-01-01T00:00:00+00:00",
+            "started_epoch": time.time(),
+        }), encoding="utf-8")
+        called = []
+        original = mcp_server.pipeline.stage_visual
+        mcp_server.pipeline.stage_visual = lambda *a, **k: called.append(1)
+        try:
+            with self.assertRaises(locking.BundleBusy):
+                mcp_server.tool_frames(self.root, video_id="vid")
+        finally:
+            mcp_server.pipeline.stage_visual = original
+            (bundle / locking.OWNER_NAME).unlink(missing_ok=True)
+        self.assertEqual(called, [], "잠겨 있는데 프레임 단계가 돌았다")

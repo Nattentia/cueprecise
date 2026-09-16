@@ -2,6 +2,7 @@
 #
 #   python -m pip install -r requirements-optional.txt
 
-pytesseract>=0.3.10        # 프레임 OCR. tesseract 바이너리도 함께 필요하다
-Pillow>=10.0.0             # pytesseract 가 이미지를 읽는 데 쓴다
+# Windows 는 내장 OCR 을 쓰므로 아래 두 개가 필요 없다 (tesseract 바이너리 239MB 포함).
+pytesseract>=0.3.10; sys_platform != "win32"   # 비Windows 프레임 OCR 예비. tesseract 바이너리도 필요
+Pillow>=10.0.0; sys_platform != "win32"        # pytesseract 가 이미지를 읽는 데 쓴다
 tzdata>=2024.1             # Pacific 시간대. 없으면 내장 폴백을 쓴다

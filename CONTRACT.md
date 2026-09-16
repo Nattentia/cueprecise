@@ -38,6 +38,8 @@
 | `src/summary.py` | claude | 읽기만 |
 | `tests/test_fetch_youtube.py`, `tests/test_render.py`, `tests/test_pipeline.py`, `tests/test_context.py`, `tests/test_visual.py` | claude | 읽기만 |
 | `tests/test_chapters.py`, `tests/test_summary.py`, `tests/test_mcp_server.py` | claude | 읽기만 |
+| `src/locking.py` | claude | 읽기만 |
+| `tests/test_locking.py` | claude | 읽기만 |
 
 남의 파일은 고치지 않는다. 문제를 발견하면 자기 `DECISIONS` 파일에 적는다.
 

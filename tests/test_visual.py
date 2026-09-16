@@ -214,5 +214,94 @@ class SourceVideoLookupTests(unittest.TestCase):
         self._touch("source.mp4")
         self.assertEqual(visual.source_video(self.bundle).name, "source.mp4")
 
+
+class OcrLanguageTests(unittest.TestCase):
+    """자동 선택에 맡기면 Windows 표시 언어가 잡힌다. 말하는 언어를 넘겨야 한다."""
+
+    def setUp(self) -> None:
+        self.bundle = Path(tempfile.mkdtemp())
+        (self.bundle / "raw").mkdir()
+
+    def _captions(self, language) -> None:
+        (self.bundle / "raw" / "captions.json").write_text(
+            json.dumps({"source": "youtube", "language": language}), encoding="utf-8")
+
+    def _job(self, codes) -> None:
+        (self.bundle / "job.json").write_text(
+            json.dumps({"config": {"language_codes": codes}}), encoding="utf-8")
+
+    def test_original_track_suffix_is_removed(self) -> None:
+        self._captions("en-orig")
+        self.assertEqual(visual.ocr_language(self.bundle), "en")
+
+    def test_captions_win_over_job(self) -> None:
+        self._captions("ko")
+        self._job(["en-US"])
+        self.assertEqual(visual.ocr_language(self.bundle), "ko")
+
+    def test_falls_back_to_requested_language(self) -> None:
+        self._captions(None)
+        self._job(["ko-KR", "en-US"])
+        self.assertEqual(visual.ocr_language(self.bundle), "ko-KR")
+
+    def test_unknown_when_nothing_says(self) -> None:
+        self._job(None)
+        self.assertIsNone(visual.ocr_language(self.bundle))
+
+    def test_broken_captions_do_not_raise(self) -> None:
+        (self.bundle / "raw" / "captions.json").write_text("{", encoding="utf-8")
+        self.assertIsNone(visual.ocr_language(self.bundle))
+
+
+class OcrEngineOrderTests(unittest.TestCase):
+    """Windows OCR 이 읽은 것은 그대로 쓰고, 못 읽은 장만 예비 엔진에 넘긴다."""
+
+    def setUp(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        self.a = root / "a.jpg"
+        self.b = root / "b.jpg"
+        for path in (self.a, self.b):
+            path.write_bytes(b"")
+        self._windows = visual._ocr_windows
+        self._tesseract = visual._ocr
+
+    def tearDown(self) -> None:
+        visual._ocr_windows = self._windows
+        visual._ocr = self._tesseract
+
+    def test_windows_result_keeps_missing_score(self) -> None:
+        visual._ocr_windows = lambda paths, language: (
+            {str(p.resolve()): "Slide" for p in paths}, "en-US")
+        visual._ocr = lambda path: self.fail("Windows 가 읽었는데 예비 엔진을 불렀다")
+        result = visual.ocr_frames([self.a], "en")[str(self.a.resolve())]
+        self.assertEqual(result, {"text": "Slide", "confidence": None,
+                                  "engine": "windows", "language": "en-US"})
+
+    def test_unavailable_windows_falls_back_per_frame(self) -> None:
+        visual._ocr_windows = lambda paths, language: None
+        visual._ocr = lambda path: ("text", 0.9)
+        result = visual.ocr_frames([self.a, self.b])
+        self.assertEqual({r["engine"] for r in result.values()}, {"tesseract"})
+        self.assertEqual({r["confidence"] for r in result.values()}, {0.9})
+
+    def test_partial_windows_result_fills_the_rest(self) -> None:
+        visual._ocr_windows = lambda paths, language: (
+            {str(self.a.resolve()): "A"}, "en-US")
+        visual._ocr = lambda path: ("B", 0.7)
+        result = visual.ocr_frames([self.a, self.b])
+        self.assertEqual(result[str(self.a.resolve())]["engine"], "windows")
+        self.assertEqual(result[str(self.b.resolve())]["engine"], "tesseract")
+
+    def test_no_engine_leaves_frames_unread(self) -> None:
+        visual._ocr_windows = lambda paths, language: None
+        visual._ocr = lambda path: (None, None)
+        result = visual.ocr_frames([self.a])[str(self.a.resolve())]
+        self.assertIsNone(result["text"])
+        self.assertIsNone(result["engine"])
+
+    def test_powershell_literal_escapes_quote(self) -> None:
+        self.assertEqual(visual._ps_literal("C:\\Users\\O'Neil"), "C:\\Users\\O''Neil")
+
+
 if __name__ == "__main__":
     unittest.main()

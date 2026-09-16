@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import context
 import chapters
+import locking
 import pipeline
 import configuration
 import credential_store
@@ -256,12 +257,13 @@ def tool_excerpt(bundle_root: Path, *, video_id: str, start: float,
 
 
 def tool_purge(bundle_root: Path, *, video_id: str,
-               scope: str = "derived") -> dict[str, Any]:
+               scope: str = "derived", force: bool = False) -> dict[str, Any]:
     bundle = pipeline.bundle_path(bundle_root, video_id)
-    removed = pipeline.purge(bundle, scope=scope)
+    removed = pipeline.purge(bundle, scope=scope, force=force)
     return {
         "video_id": video_id,
         "scope": scope,
+        "forced": force,
         "removed": removed,
         "note": "derived 는 raw 가 남아 있으면 cueprecise_register 로 재생성할 수 있다. "
                 "chunks 는 원본 오디오가 남아 있으면 plan 단계가 다시 뽑는다.",
@@ -274,7 +276,10 @@ def tool_frames(bundle_root: Path, *, video_id: str,
     # visual.build 를 직접 부르지 않는다. 영상이 없거나 --skip-video 로
     # 미뤄진 경우 프레임 요청 시점에 영상을 확보하는 일까지 pipeline 이 맡는다.
     bundle = pipeline.bundle_path(bundle_root, video_id)
-    return pipeline.stage_visual(bundle, at=at, max_frames=max_frames)
+    # 등록 중인 영상이면 막는다. stage_visual 은 frames.json 을 다시 쓰고 영상을
+    # 지우므로, 같은 번들의 run 과 겹치면 서로의 영상과 프레임을 치운다.
+    with locking.bundle_lock(bundle, activity="frames"):
+        return pipeline.stage_visual(bundle, at=at, max_frames=max_frames)
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -421,13 +426,17 @@ TOOLS: list[dict[str, Any]] = [
         "name": "cueprecise_purge",
         "description": "영상 자료를 명시적으로 삭제한다. "
                        "scope: derived(기본) | chunks | video | raw | all. "
-                       "chunks 는 전사용 청크 오디오만 지우며 원본 오디오에서 다시 만들 수 있다.",
+                       "chunks 는 전사용 청크 오디오만 지우며 원본 오디오에서 다시 만들 수 있다. "
+                       "다른 작업이 그 영상을 다루는 중이면 지우지 않는다.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "video_id": {"type": "string"},
                 "scope": {"type": "string",
                           "enum": ["derived", "chunks", "video", "raw", "all"]},
+                "force": {"type": "boolean",
+                          "description": "도는 작업이 있어도 지운다. 그 실행이 죽고 "
+                                         "이미 쓴 할당량을 다시 써야 할 수 있다."},
             },
             "required": ["video_id"],
         },

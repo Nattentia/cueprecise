@@ -2084,3 +2084,88 @@ argv 노출(1580 줄에서 받아들인 대가)과 설정 파일 평문 저장�
 본다. 릴리스 뒤 별도 브랜치에서 한다.
 
 472 개 통과. 런타임 파일 diff 0 줄.
+
+## 2026-09-16 · 번들 잠금, Windows 내장 OCR, 청크 오디오 정리
+
+### 번들 잠금 (`src/locking.py` 신규)
+
+2026-08-30 "여러 앱이 한 번들을 함께 쓰는 문제" 에서 미룬 번들 단위 잠금을 넣었다.
+붙는 앱이 7종이 되면서 같은 영상을 두 번 등록해 Gemini 를 두 번 쓸 확률이 올라갔다.
+
+- `usage._file_lock` 을 `locking.file_lock` 으로 옮겼다. 한 벌만 둔다.
+- `bundle_lock` 은 OS 잠금을 오래 쥐지 않는다. `lock.json` 에 소유자(pid, host,
+  activity, 시각)를 적고 바로 놓는다. 두 번째 프로세스는 기다리지 않고
+  `BundleBusy` 로 무엇이 도는지 알린다. 전사 몇 분 동안 멈춰 서게 두지 않는다.
+- 같은 프로세스는 중첩 획득한다 (`run` 안의 `stage_visual`).
+- 거는 곳: `run`, `purge`(force 가 아니면), `cueprecise_frames`.
+- 걸지 않은 곳: `set_summary`, `set_chapter_titles`. 쓰는 양이 작고 fingerprint 가
+  낡은 쓰기를 막는다. 걸면 등록 중 요약 저장이 거절된다.
+
+**버려진 기록 판정.** 시간 상한(24시간) → 이 프로세스 번호와 같음(쥐고 있지 않은데
+번호가 같으면 물려받은 것) → 같은 기기면 생존 확인 → 다른 기기는 시간 상한만.
+
+**시험 중 찾은 결함 둘.** (1) Windows 에서 부모가 핸들을 쥔 끝난 프로세스도
+`OpenProcess` 가 열린다. 종료 코드(`STILL_ACTIVE`)까지 본다. (2) `ctypes.windll`
+의 `GetLastError` 는 덮일 수 있다. 접근 거부(=살아 있음)를 없음으로 읽으면 남의
+잠금을 빼앗는다. `WinDLL(use_last_error=True)` 로 바꿨다. 처음 넣은 판정은 같은
+기기에서 살아 보이는 번호에 시간 상한이 적용되지 않아 번호 재사용 시 영영 안
+풀렸다 — 시간 상한을 맨 앞으로 옮겼다.
+
+**실측.** 8 프로세스 × 25회 동시 기록 → 원장 정확히 200.
+
+### Windows 내장 OCR (`src/visual.py`)
+
+`ocr_text` 는 모든 번들에서 null 이었다. `pytesseract` 가 설치기에 없어서다.
+tesseract 설치본은 239MB(엔진 DLL 97MB, 학습 도구 63MB)이고 최소 구성도 132MB 다.
+Windows 내장 `Windows.Media.Ocr` 은 설치가 0 이다.
+
+| 프레임 (`vRTcE19M-KE`) | 내장 | tesseract |
+|---|---|---|
+| 752.6초 슬라이드 | 제목 + `Prompt containing a hard reasoning task` + path 1~4 + `Answer C` | 제목 + path 1 |
+| 나머지 2장 | 동일 | 동일 |
+| 18장 일괄 | 2.4초 | 장당 약 0.6초 |
+
+**결정:** 내장 → tesseract(비Windows 예비) → 없음 순. 결과에 `ocr_engine`,
+`ocr_language` 를 남긴다.
+
+- PowerShell 은 `-EncodedCommand` 로 `visual.py` 안에서 띄운다. 설치본은 단일 exe 라
+  옆 `.ps1` 이 따라가지 않고, 실행 정책이 스크립트 파일을 막을 수 있다.
+- 입출력은 UTF-8 파일로 주고받는다. cp949 콘솔에서 `“` `—` 가 깨진다.
+- 언어는 자막 언어 → job 의 `language_codes` 순으로 지정한다. 자동 선택은 한국어
+  Windows 에서 `ko` 가 잡힌다. 다만 실측상 `ko` 엔진도 영어 슬라이드를 잘 읽었다.
+- 실패한 장은 결과에서 빼 예비 엔진에 넘긴다. "읽었는데 글자 없음" 과 구분한다.
+
+**함께 막은 충돌.** 내장 엔진은 점수를 주지 않는다. `context.py` 는
+`float(record.get("confidence", 1.0))` 였으므로 글자가 있고 점수가 None 이면 index
+단계가 `TypeError` 로 죽었다. None → 0.5 (`UNSCORED_CONFIDENCE`). 키가 없는 기존
+산출물은 전처럼 1.0 이다.
+
+`pytesseract`/`Pillow` 는 `sys_platform != "win32"` 조건을 붙였다.
+
+### 기각: 전사 대기 중 OCR, 영상 360p 상한
+
+- **전사 대기 중 OCR.** 프레임 후보는 `merged.json`/`transcript.json` 에서 고르는데
+  전사 중에는 없다. 내장 OCR 이 40장에 2초라 얻을 시간도 없다. 처음 들어오는 동시성의
+  위험만 남는다.
+- **영상 360p 상한.** `_release_video` 가 프레임 추출 뒤 영상을 지우므로 디스크가
+  줄지 않는다. 480p 66MB 가 남아 보인 `XdbpCM4yGyE` 는 visual 을 돌리지 않은 번들이다.
+  (2026-08-31 에 기각된 것은 영상이 아니라 **오디오 음질**이다.)
+
+### 청크 오디오 자동 정리 (`src/pipeline.py`)
+
+청크 오디오를 읽는 곳은 미완료 청크 전사 하나뿐이다. 저장된 응답 재사용도, assemble
+이후도 쓰지 않는다.
+
+- `_release_chunks`: 모든 청크가 끝나면 `raw/audio` 를 지운다. 하나라도 남았거나
+  원본 오디오가 없으면 둔다 (`purge chunks` 와 같은 규칙).
+- `stage_plan` 재사용 경로는 **미완료 청크만** 다시 뽑는다. 전부 뽑던 기존 동작을
+  두면 재등록마다 ffmpeg 로 만들고 전사 뒤 또 지운다.
+
+실측(`vRTcE19M-KE` 사본): 26.7MB 회수, Gemini 0콜, 재등록 시 재추출 0개.
+기존 3개 번들의 청크 69MB 를 `purge chunks` 로 지웠다 (346MB → 277MB).
+
+### 소유권
+
+`src/locking.py`, `tests/test_locking.py` 가 새로 생겼다. `CONTRACT.md` 1절 표는
+사람 소유라 고치지 않았다 — 두 줄 추가를 기다린다. `README.md`, `README.ko.md`,
+`requirements*.txt`, `pyproject.toml` 은 표에 없어 OCR 요구 사항 줄만 고쳤다.

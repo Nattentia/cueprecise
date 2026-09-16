@@ -108,8 +108,20 @@ def _optional_records(bundle: Path, filename: str, key: str, kind: str) -> Itera
             "speaker_confidence": None,
             "source_path": str(path.relative_to(bundle)).replace("\\", "/"),
             "source_kind": kind,
-            "confidence": float(record.get("confidence", 1.0)),
+            "confidence": _confidence(record),
         }
+
+
+# 점수를 주지 않는 엔진(Windows 내장 OCR)의 결과. 확실하다고도 틀렸다고도 할
+# 수 없어 가운데 값을 쓴다. 키가 아예 없는 기존 산출물은 전처럼 1.0 이다.
+UNSCORED_CONFIDENCE = 0.5
+
+
+def _confidence(record: dict[str, Any]) -> float:
+    if "confidence" not in record:
+        return 1.0
+    value = record["confidence"]
+    return UNSCORED_CONFIDENCE if value is None else float(value)
 
 
 SUMMARY_KEY = "summary"

@@ -106,5 +106,19 @@ class ContextIndexTests(unittest.TestCase):
                 context.build_index(Path(directory))
 
 
+class ConfidenceTests(unittest.TestCase):
+    """Windows OCR 은 점수를 주지 않는다. None 에서 색인이 죽으면 안 된다."""
+
+    def test_missing_key_keeps_old_default(self) -> None:
+        self.assertEqual(context._confidence({"text": "x"}), 1.0)
+
+    def test_unscored_ocr_gets_middle_value(self) -> None:
+        self.assertEqual(context._confidence({"ocr_text": "x", "confidence": None}),
+                         context.UNSCORED_CONFIDENCE)
+
+    def test_scored_value_is_kept(self) -> None:
+        self.assertEqual(context._confidence({"confidence": 0.83}), 0.83)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,8 +8,15 @@ owner: claude
   2. 라틴 문자 용어가 복원된 시각 (origin="youtube") — 슬라이드에 원문이 있을 확률이 높다
   3. 호출자가 지정한 시각
 
-OCR 은 선택이다. `pytesseract` 가 없으면 프레임만 뽑고 `ocr_text` 는 null 로
-둔다. OCR 결과는 transcript 를 덮어쓰지 않고 독립 provenance 로만 저장한다.
+OCR 은 선택이다. 엔진을 차례로 시도한다.
+
+  1. Windows 내장 OCR (`Windows.Media.Ocr`) — 설치할 것이 없다. PowerShell 을
+     한 번 띄워 프레임 전부를 읽는다.
+  2. `pytesseract` + tesseract 바이너리 — Windows 가 아닌 환경의 예비.
+  3. 둘 다 없으면 프레임만 뽑고 `ocr_text` 는 null 로 둔다.
+
+OCR 결과는 transcript 를 덮어쓰지 않고 독립 provenance 로만 저장한다. 어느
+엔진이 어느 언어로 읽었는지 `ocr_engine` / `ocr_language` 에 남긴다.
 
 사용법:
     python src/visual.py <bundle> [--at 208.0,912.5] [--max-frames 40]
@@ -17,9 +24,13 @@ OCR 은 선택이다. `pytesseract` 가 없으면 프레임만 뽑고 `ocr_text`
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import os
 import re
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -165,6 +176,207 @@ def source_video(bundle: Path) -> Path | None:
     return None
 
 
+# Windows 내장 OCR 을 부르는 PowerShell. 별도 .ps1 파일로 두지 않는다 —
+# 설치본은 PyInstaller 단일 exe 라 옆 파일이 따라가지 않고, 사용자 PC 의
+# 실행 정책이 스크립트 파일을 막을 수 있다. -EncodedCommand 는 둘 다 피한다.
+#
+# 입출력은 콘솔이 아니라 UTF-8 파일로 주고받는다. 한국어 Windows 콘솔은
+# cp949 라 `“` `—` 같은 글자가 깨진다 (DECISIONS 참고).
+_WINDOWS_OCR_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+  $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
+  $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
+function Await($op, $type) {
+  $task = $asTask.MakeGenericMethod($type).Invoke($null, @($op))
+  $null = $task.Wait(-1)
+  $task.Result
+}
+$null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime]
+$null = [Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime]
+$null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics, ContentType=WindowsRuntime]
+
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+$manifest = [IO.File]::ReadAllText('__MANIFEST__', $utf8) | ConvertFrom-Json
+
+$engine = $null
+$want = [string]$manifest.language
+if ($want) {
+  $primary = $want.Split('-')[0].ToLowerInvariant()
+  foreach ($candidate in [Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages) {
+    $tag = $candidate.LanguageTag
+    if ($tag -ieq $want -or $tag.Split('-')[0].ToLowerInvariant() -eq $primary) {
+      $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($candidate)
+      break
+    }
+  }
+}
+if (-not $engine) { $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages() }
+
+$results = New-Object System.Collections.ArrayList
+if ($engine) {
+  foreach ($path in $manifest.paths) {
+    $entry = [ordered]@{ path = $path; text = $null; error = $null }
+    try {
+      $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($path)) ([Windows.Storage.StorageFile])
+      $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+      try {
+        $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+        $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+        $ocr = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+        $entry.text = (@($ocr.Lines | ForEach-Object { $_.Text }) -join ' ')
+      } finally {
+        $stream.Dispose()
+      }
+    } catch {
+      $entry.error = $_.Exception.Message
+    }
+    $null = $results.Add([pscustomobject]$entry)
+  }
+}
+
+$language = $null
+if ($engine) { $language = $engine.RecognizerLanguage.LanguageTag }
+$payload = [ordered]@{ engine = 'windows'; language = $language; results = @($results) }
+[IO.File]::WriteAllText('__OUTPUT__', (ConvertTo-Json $payload -Depth 5), $utf8)
+"""
+
+WINDOWS_OCR_BASE_TIMEOUT = 60.0
+WINDOWS_OCR_PER_FRAME_TIMEOUT = 5.0
+
+
+def _ps_literal(value: str) -> str:
+    """PowerShell 작은따옴표 문자열 안에 넣을 수 있게 만든다."""
+    return value.replace("'", "''")
+
+
+def _powershell() -> str | None:
+    found = shutil.which("powershell")
+    if found:
+        return found
+    root = os.environ.get("SystemRoot")
+    if root:
+        candidate = Path(root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _ocr_windows(paths: list[Path], language: str | None
+                 ) -> tuple[dict[str, str | None], str | None] | None:
+    """Windows 내장 OCR 로 여러 장을 한 번에 읽는다.
+
+    돌려주는 것: ({절대경로: 글자 또는 None}, 실제로 쓴 인식 언어).
+    쓸 수 없으면 None — 호출자가 다음 엔진으로 넘어간다.
+    """
+    if os.name != "nt" or not paths:
+        return None
+    shell = _powershell()
+    if shell is None:
+        return None
+
+    with tempfile.TemporaryDirectory(prefix="cueprecise-ocr-") as workdir:
+        manifest_path = Path(workdir) / "manifest.json"
+        output_path = Path(workdir) / "result.json"
+        manifest_path.write_text(json.dumps({
+            "language": language,
+            "paths": [str(path.resolve()) for path in paths],
+        }, ensure_ascii=False), encoding="utf-8")
+
+        script = (_WINDOWS_OCR_SCRIPT
+                  .replace("__MANIFEST__", _ps_literal(str(manifest_path)))
+                  .replace("__OUTPUT__", _ps_literal(str(output_path))))
+        encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+        timeout = WINDOWS_OCR_BASE_TIMEOUT + WINDOWS_OCR_PER_FRAME_TIMEOUT * len(paths)
+        try:
+            completed = subprocess.run(
+                [shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                 "-EncodedCommand", encoded],
+                capture_output=True, timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if completed.returncode != 0 or not output_path.exists():
+            return None
+        try:
+            payload = json.loads(output_path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            return None
+
+    raw_results = payload.get("results") or []
+    if isinstance(raw_results, dict):
+        # PowerShell 5.1 은 원소가 하나인 배열을 객체로 펴기도 한다.
+        raw_results = [raw_results]
+    texts: dict[str, str | None] = {}
+    for item in raw_results:
+        if not isinstance(item, dict) or not item.get("path"):
+            continue
+        if item.get("error"):
+            # 읽다 실패한 장이다. "Windows 가 읽었는데 글자가 없다" 와 다르다.
+            # 결과에서 빼야 예비 엔진이 한 번 더 시도하고, 기록도 거짓이 되지 않는다.
+            continue
+        text = str(item.get("text") or "").strip()
+        texts[str(Path(item["path"]).resolve())] = text or None
+    if not texts:
+        # 엔진을 만들지 못했거나 한 장도 읽지 못했다. 예비 엔진에 기회를 준다.
+        return None
+    return texts, payload.get("language")
+
+
+def ocr_language(bundle: Path) -> str | None:
+    """프레임 글자를 읽을 언어를 고른다. 모르면 None.
+
+    말하는 언어를 쓴다. 자동 선택에 맡기면 Windows 표시 언어가 잡혀, 한국어
+    Windows 에서 영어 슬라이드를 한국어 엔진으로 읽는다. 오류 없이 품질만
+    떨어지므로 눈에 띄지 않는다.
+    """
+    captions = bundle / "raw" / "captions.json"
+    if captions.exists():
+        try:
+            language = _read_json(captions).get("language")
+        except (OSError, ValueError, AttributeError):
+            language = None
+        if isinstance(language, str) and language.strip():
+            # YouTube 원어 트랙은 "en-orig" 처럼 온다.
+            return language.strip().removesuffix("-orig")
+    job = bundle / "job.json"
+    if job.exists():
+        try:
+            codes = (_read_json(job).get("config") or {}).get("language_codes") or []
+        except (OSError, ValueError, AttributeError):
+            codes = []
+        if codes and isinstance(codes[0], str) and codes[0].strip():
+            return codes[0].strip()
+    return None
+
+
+def ocr_frames(paths: list[Path], language: str | None = None
+               ) -> dict[str, dict[str, Any]]:
+    """프레임들의 글자를 읽는다. 경로 -> {text, confidence, engine, language}.
+
+    Windows 내장 OCR 이 점수를 주지 않으므로 그 결과의 confidence 는 None 이다.
+    값이 없다는 사실을 그대로 남긴다. 색인 단계가 기본값을 채운다.
+    """
+    results: dict[str, dict[str, Any]] = {}
+    windows = _ocr_windows(paths, language)
+    if windows is not None:
+        texts, used_language = windows
+        for path in paths:
+            key = str(path.resolve())
+            if key in texts:
+                results[key] = {"text": texts[key], "confidence": None,
+                                "engine": "windows", "language": used_language}
+    for path in paths:
+        key = str(path.resolve())
+        if key in results:
+            continue
+        text, confidence = _ocr(path)
+        results[key] = {"text": text, "confidence": confidence,
+                        "engine": "tesseract" if text is not None else None,
+                        "language": None}
+    return results
+
+
 def _ocr(path: Path) -> tuple[str | None, float | None]:
     """pytesseract 가 있으면 OCR 한다. 없으면 (None, None)."""
     try:
@@ -193,11 +405,16 @@ def _ocr(path: Path) -> tuple[str | None, float | None]:
 
 
 def extract_frames(source_video: Path, bundle: Path,
-                   candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """후보 시각의 프레임을 뽑는다. ffmpeg 가 없으면 빈 목록을 돌려준다."""
+                   candidates: list[dict[str, Any]],
+                   language: str | None = None) -> list[dict[str, Any]]:
+    """후보 시각의 프레임을 뽑는다. ffmpeg 가 없으면 빈 목록을 돌려준다.
+
+    OCR 은 다 뽑은 뒤 한 번에 한다. Windows OCR 은 PowerShell 을 띄우는 데
+    1초 가까이 걸려, 장마다 띄우면 40장에 30초가 넘는다.
+    """
     out_dir = bundle / "raw" / "frames"
     out_dir.mkdir(parents=True, exist_ok=True)
-    frames: list[dict[str, Any]] = []
+    extracted: list[tuple[dict[str, Any], float, str, Path]] = []
     for candidate in candidates:
         timestamp = float(candidate["timestamp"])
         name = "%09d.jpg" % round(timestamp * 1000)
@@ -212,13 +429,20 @@ def extract_frames(source_video: Path, bundle: Path,
                 return []
             if result.returncode != 0 or not target.exists():
                 continue
-        ocr_text, confidence = _ocr(target)
+        extracted.append((candidate, timestamp, name, target))
+
+    readings = ocr_frames([target for _, _, _, target in extracted], language)
+    frames: list[dict[str, Any]] = []
+    for candidate, timestamp, name, target in extracted:
+        reading = readings.get(str(target.resolve()), {})
         frames.append({
             "timestamp": round(timestamp, 3),
             "path": "raw/frames/" + name,
             "reason": candidate["reason"],
-            "ocr_text": ocr_text,
-            "confidence": confidence,
+            "ocr_text": reading.get("text"),
+            "confidence": reading.get("confidence"),
+            "ocr_engine": reading.get("engine"),
+            "ocr_language": reading.get("language"),
         })
     return frames
 
@@ -239,7 +463,8 @@ def build(bundle: Path, *, at: list[float] | None = None,
     candidates = dedupe_candidates(candidates, max_frames=max_frames)
 
     video = source_video(bundle)
-    frames = extract_frames(video, bundle, candidates) if video is not None else []
+    frames = (extract_frames(video, bundle, candidates, language=ocr_language(bundle))
+              if video is not None else [])
     result = {
         "schema_version": 1,
         "video_id": payload.get("video_id") or bundle.name,
