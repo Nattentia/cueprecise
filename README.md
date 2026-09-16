@@ -4,7 +4,11 @@
 
 > **Analyze an hour-long YouTube video sentence by sentence in three minutes, and extract the information you need from the screen.**
 
-A long video in a language you do not speak can still become searchable. CuePrecise is an
+After analyzing a long-form video once, CuePrecise keeps a reusable evidence bundle so AI agents can search, inspect, compare, and revisit the source for open-ended follow-up questions and evidence-based tasks.
+
+Many non-English videos are hard to use through captions alone. Automatic captions can miss context, technical terms, and the direction of a conversation, especially when a sentence only makes sense in the context of the full discussion. CuePrecise analyzes the full video first and preserves the original speech, available captions, speaker labels, selected frames, and timestamps in a reusable evidence bundle. An AI client can then use that context to search and inspect the video, while every result stays tied to the original source.
+
+ CuePrecise is an
 open-source MCP server for Claude Desktop, Codex, Cursor, and other AI clients. It turns a
 YouTube video's original speech, available captions, speaker labels, and selected frames into
 a searchable local reference. The index stays in the video's original language; your AI client
@@ -69,10 +73,9 @@ would follow from what they actually said in the video?
 In Claude Desktop, clicking a timestamp opens YouTube at that moment. Other AI clients may
 render timestamp links differently.
 
-## It keeps answers tied to evidence
+## It keeps every use tied to evidence
 
-CuePrecise is not just a summarizer. It gives your AI client the material it needs to answer
-a question and lets you check where the answer came from:
+CuePrecise is not just a summarizer or a one-shot question-answering tool. After analysis, it gives your AI client a reusable evidence bundle for follow-up questions, source inspection, and other evidence-based tasks, while letting you check where each result came from:
 
 - Gemini's word-level transcription of the original speech.
 - Original-language YouTube captions, when available, aligned to the same timeline.
