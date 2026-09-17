@@ -197,6 +197,95 @@ class McpServerViewerUrlTests(unittest.TestCase):
             self.assertIsNone(result["viewer_url"])
 
 
+class PseudoFullscreenFallbackTests(unittest.TestCase):
+    """Bug 2: 인앱 브라우저 패널처럼 Fullscreen API 가 없거나 거부될 때의 대체 동작."""
+
+    def test_page_html_has_pseudo_fullscreen_css_and_class_toggles(self) -> None:
+        html = viewer.PAGE_HTML
+        self.assertIn("#theater.pseudo-fs", html)
+        self.assertIn("pseudo-fs-active", html)
+        self.assertIn("classList.add(\"pseudo-fs\")", html)
+        self.assertIn("classList.remove(\"pseudo-fs\")", html)
+
+    def test_page_html_falls_back_on_missing_or_rejected_fullscreen(self) -> None:
+        html = viewer.PAGE_HTML
+        self.assertIn("fullscreenEnabled", html)
+        self.assertIn("webkitRequestFullscreen", html)
+        self.assertIn("enterPseudoFullscreen", html)
+        self.assertIn("exitPseudoFullscreen", html)
+        # requestFullscreen()의 거부된 프라미스도 대체로 이어져야 한다.
+        self.assertIn(".catch(() => { enterPseudoFullscreen(); })", html)
+
+    def test_page_html_treats_pseudo_fullscreen_like_real_fullscreen(self) -> None:
+        html = viewer.PAGE_HTML
+        self.assertIn("function isFullscreenish()", html)
+        # idle-fade, 재배치(rebuildDisplay/placeCueLayer), 버튼 상태 모두 의사
+        # 전체화면을 실제 전체화면과 동등하게 다뤄야 한다.
+        self.assertIn("if (isFullscreenish())", html)
+        self.assertIn("function updateFsBtn()", html)
+        self.assertIn("rebuildDisplay(); placeCueLayer(); updateFsBtn();", html)
+
+    def test_page_html_has_open_in_browser_escape_hatch(self) -> None:
+        html = viewer.PAGE_HTML
+        self.assertIn('id="openBrowserBtn"', html)
+        self.assertIn("브라우저에서 열기", html)
+        self.assertIn('window.open(location.href, "_blank", "noopener")', html)
+
+    def test_page_html_escape_key_exits_pseudo_fullscreen(self) -> None:
+        html = viewer.PAGE_HTML
+        start = html.index('key === "escape"')
+        end = html.index("}", html.index("}", start) + 1)
+        block = html[start:end]
+        self.assertIn("exitPseudoFullscreen", block)
+
+
+class ViewerUrlBrowserNoteTests(unittest.TestCase):
+    """Bug 2 연장: viewer_url 이 있으면 인앱 패널이 아니라 기본 브라우저로 열라고 안내한다."""
+
+    def test_instructions_mention_default_browser_when_viewer_url_present(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle_root = Path(directory)
+            bundle = bundle_root / "AAAAAAAAAAA"
+            words = [_word("Hello", 0.0, 0.5), _word("world.", 0.6, 1.1)]
+            _write_json(bundle / "derived" / "transcript.json",
+                       {"video_id": "AAAAAAAAAAA", "words": words})
+            with mock.patch.object(mcp_server.viewer, "ensure_server",
+                                   return_value=("http://127.0.0.1:9999", None)):
+                result = mcp_server.tool_subtitle(bundle_root, video_id="AAAAAAAAAAA")
+            self.assertIn("기본 웹 브라우저", result["instructions"])
+
+    def test_instructions_unchanged_when_viewer_url_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle_root = Path(directory)
+            bundle = bundle_root / "AAAAAAAAAAA"
+            words = [_word("Hello", 0.0, 0.5), _word("world.", 0.6, 1.1)]
+            _write_json(bundle / "derived" / "transcript.json",
+                       {"video_id": "AAAAAAAAAAA", "words": words})
+            with mock.patch.object(mcp_server.viewer, "ensure_server",
+                                   return_value=(None, "포트를 못 열었다")):
+                result = mcp_server.tool_subtitle(bundle_root, video_id="AAAAAAAAAAA")
+            self.assertNotIn("기본 웹 브라우저", result["instructions"])
+
+
+class TermExplanationEmptyStateTests(unittest.TestCase):
+    """터미널(용어) 탭: 용어 해설을 켰는데 short 가 전부 없으면 안내를 보여준다."""
+
+    def test_page_html_shows_notice_when_no_explainable_short(self) -> None:
+        html = viewer.PAGE_HTML
+        self.assertIn("이 영상에는 표시할 용어 해설이 없습니다", html)
+        self.assertIn("function explainableTermCount()", html)
+        self.assertIn("prefs.terms && !explainableTermCount()", html)
+
+    def test_no_overlay_element_used_for_the_notice(self) -> None:
+        # 요구사항: 영상 위 오버레이가 아니라 설정/용어 탭에만 표시한다.
+        html = viewer.PAGE_HTML
+        start = html.index("이 영상에는 표시할 용어 해설이 없습니다")
+        # 이 안내는 termList 안에 들어가는 문자열이어야 하고, termLayer(영상
+        # 위 용어 팝업 레이어)를 조작하는 코드 근처가 아니어야 한다.
+        context = html[max(0, start - 400):start]
+        self.assertIn("renderTermTab", context)
+
+
 class TermsToggleNotPersistedTests(unittest.TestCase):
     """용어 해설 on/off 는 항상 꺼진 채로 시작하고 localStorage 에 저장하지 않는다."""
 

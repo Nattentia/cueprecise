@@ -289,6 +289,16 @@ PAGE_HTML = r"""<!doctype html>
   #theater:fullscreen #stage { flex: 1; aspect-ratio: auto; border-radius: 0; }
   #theater:fullscreen .bar { background: #000; border-top-color: #111; transition: opacity .3s; }
   #theater:fullscreen.idle .bar { opacity: .15; }
+  /* 진짜 Fullscreen API 가 없거나(인앱 브라우저 패널) 거부될 때 쓰는 CSS 대체 전체화면.
+     :fullscreen 과 같은 모양을 position:fixed 로 흉내 낸다 — 16:9 는 유튜브 iframe 이
+     자체적으로 레터박스 처리한다(#stage 배경이 검정이라 나머지가 비어 보이지 않는다). */
+  #theater.pseudo-fs { position: fixed; inset: 0; z-index: 2147483647; display: flex;
+                        flex-direction: column; border-radius: 0; border: 0; background: #000;
+                        width: 100vw; height: 100vh; }
+  #theater.pseudo-fs #stage { flex: 1; aspect-ratio: auto; border-radius: 0; }
+  #theater.pseudo-fs .bar { background: #000; border-top-color: #111; transition: opacity .3s; }
+  #theater.pseudo-fs.idle .bar { opacity: .15; }
+  body.pseudo-fs-active { overflow: hidden; }
   #player { position: absolute; inset: 0; width: 100%; height: 100%; }
   #player iframe { width: 100%; height: 100%; border: 0; }
   #blocked { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
@@ -325,6 +335,12 @@ PAGE_HTML = r"""<!doctype html>
   .iconBtn:hover { background: var(--surface-2); color: var(--text); }
   .iconBtn.on { color: var(--accent); background: var(--accent-soft); }
   .iconBtn small { font-size: 10px; font-weight: 700; margin-top: -2px; }
+  /* 전체화면 API 를 못 쓸 때(인앱 브라우저 패널 등)만 나타나는 작은 텍스트 버튼. */
+  .textBtn { display: none; align-items: center; height: 36px; padding: 0 10px; border-radius: 10px;
+             background: transparent; border: 0; color: var(--dim); cursor: pointer; font-size: 12.5px;
+             white-space: nowrap; }
+  .textBtn.show { display: inline-flex; }
+  .textBtn:hover { background: var(--surface-2); color: var(--text); }
   .seg { display: inline-flex; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
   .seg button { border: 0; background: transparent; color: var(--dim); padding: 5px 12px; border-radius: 7px;
                 cursor: pointer; font-size: 13px; }
@@ -460,6 +476,7 @@ PAGE_HTML = r"""<!doctype html>
       <span class="clock" id="clock"><b>0:00</b> / 0:00</span>
       <button class="iconBtn" id="gearBtn" title="자막 설정"><svg viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg></button>
       <button class="iconBtn" id="fsBtn" title="전체화면 (F)"><svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></svg></button>
+      <button class="textBtn" id="openBrowserBtn" title="기본 웹 브라우저에서 열기">브라우저에서 열기</button>
       <div id="settings">
         <h5>자막</h5>
         <div class="field">크기 <input id="rFont" type="range" min="0.6" max="2.0" step="0.05"><output id="oFont"></output></div>
@@ -901,12 +918,21 @@ function renderSentenceList(filterText) {
   }).join("");
 }
 
+function explainableTermCount() {
+  return (payload && payload.terms ? payload.terms : [])
+    .filter(t => t.status === "confirmed" && t.short).length;
+}
+
 function renderTermTab() {
   const el = $("termList");
   if (!payload.terms.length) { el.innerHTML = '<div class="empty">용어가 없습니다.</div>'; return; }
   $("termCount").textContent = payload.terms.length;
+  // 용어 해설(cTerms)을 켰는데 영상에 뜰 짧은해설(short)이 하나도 없으면,
+  // 영상 위에는 아무것도 안 뜨는 게 정상이더라도 여기 탭에서는 알려준다.
+  const notice = (prefs.terms && !explainableTermCount())
+    ? '<div class="empty">이 영상에는 표시할 용어 해설이 없습니다.</div>' : "";
   const terms = payload.terms.slice().sort((a, b) => (a.first_t ?? 1e9) - (b.first_t ?? 1e9));
-  el.innerHTML = terms.map(t => {
+  el.innerHTML = notice + terms.map(t => {
     const status = t.status === "uncertain" ? ' <span class="pill">불확실</span>' : "";
     const same = t.tgt === t.src;
     return '<div class="termRow" data-first-t="' + (t.first_t == null ? "" : t.first_t) + '">' +
@@ -1020,27 +1046,89 @@ $("cFollow").onchange = e => { prefs.follow = e.target.checked; savePrefs(); };
 $("cTerms").onchange = e => {
   prefs.terms = e.target.checked; savePrefs();
   if (!prefs.terms) { termQueue.forEach(removeTermLine); firedTerms.clear(); }
+  if (payload) renderTermTab();
 };
 
 // 자막은 클릭을 막지 않는다(영상 일시정지·재생바). 위치는 설정의 슬라이더로 조절한다.
 
 // 창 크기·전체화면이 바뀌면 즉시 재배치.
 window.addEventListener("resize", () => { rebuildDisplay(); placeCueLayer(); });
-document.addEventListener("fullscreenchange", () => { rebuildDisplay(); placeCueLayer(); });
+document.addEventListener("fullscreenchange", () => { rebuildDisplay(); placeCueLayer(); updateFsBtn(); });
 
 // --------------------------------------------------------------- 전체화면
+// Claude Desktop 인앱 브라우저 패널 같은 곳은 Fullscreen API 가 아예 없거나
+// (document.fullscreenEnabled === false) requestFullscreen 이 조용히 거부된다.
+// 그럴 땐 CSS 로 흉내낸 "의사 전체화면"(.pseudo-fs)으로 대체한다 — 다만 그
+// 패널 자체를 벗어날 수는 없으므로, 진짜 전체화면을 원하면 기본 브라우저로
+// 열도록 안내하는 버튼도 같이 보여준다.
+function isFullscreenish() {
+  return !!(document.fullscreenElement || $("theater").classList.contains("pseudo-fs"));
+}
+
+function updateFsBtn() {
+  const on = isFullscreenish();
+  $("fsBtn").classList.toggle("on", on);
+  $("fsBtn").title = on ? "전체화면 종료 (F)" : "전체화면 (F)";
+}
+
+function showOpenBrowserBtn() { $("openBrowserBtn").classList.add("show"); }
+
+function enterPseudoFullscreen() {
+  $("theater").classList.add("pseudo-fs");
+  document.body.classList.add("pseudo-fs-active");
+  rebuildDisplay(); placeCueLayer(); updateFsBtn();
+  showOpenBrowserBtn(); // 진짜 전체화면이 아니므로 빠져나갈 길을 늘 보여준다.
+}
+
+function exitPseudoFullscreen() {
+  $("theater").classList.remove("pseudo-fs");
+  document.body.classList.remove("pseudo-fs-active");
+  rebuildDisplay(); placeCueLayer(); updateFsBtn();
+}
+
+function fullscreenApiUsable() {
+  const el = $("theater");
+  if (document.fullscreenEnabled === false) return false;
+  return !!(el.requestFullscreen || el.webkitRequestFullscreen);
+}
+
+if (!fullscreenApiUsable()) showOpenBrowserBtn();
+
+$("openBrowserBtn").onclick = () => { window.open(location.href, "_blank", "noopener"); };
+
 $("fsBtn").onclick = () => {
   const theater = $("theater");
-  if (document.fullscreenElement) document.exitFullscreen();
-  else if (theater.requestFullscreen) theater.requestFullscreen();
+  if (document.fullscreenElement || theater.classList.contains("pseudo-fs")) {
+    if (document.fullscreenElement && document.exitFullscreen) {
+      Promise.resolve(document.exitFullscreen()).catch(() => {});
+    }
+    if (theater.classList.contains("pseudo-fs")) exitPseudoFullscreen();
+    return;
+  }
+  const request = theater.requestFullscreen
+    ? theater.requestFullscreen.bind(theater)
+    : (theater.webkitRequestFullscreen ? theater.webkitRequestFullscreen.bind(theater) : null);
+  if (document.fullscreenEnabled === false || !request) {
+    enterPseudoFullscreen();
+    return;
+  }
+  try {
+    const result = request();
+    if (result && typeof result.then === "function") {
+      result.catch(() => { enterPseudoFullscreen(); });
+    }
+  } catch (e) {
+    enterPseudoFullscreen();
+  }
 };
 
-// 전체화면에서 마우스가 멈추면 조작 막대를 흐리게 한다(자리는 그대로라 자막이 흔들리지 않는다).
+// 전체화면(진짜 또는 의사)에서 마우스가 멈추면 조작 막대를 흐리게 한다
+// (자리는 그대로라 자막이 흔들리지 않는다).
 let idleTimer = null;
 document.addEventListener("mousemove", () => {
   $("theater").classList.remove("idle");
   clearTimeout(idleTimer);
-  if (document.fullscreenElement) idleTimer = setTimeout(() => $("theater").classList.add("idle"), 2500);
+  if (isFullscreenish()) idleTimer = setTimeout(() => $("theater").classList.add("idle"), 2500);
 });
 
 // 단축키. 검색창에 입력 중이면 가로채지 않는다.
@@ -1059,7 +1147,10 @@ document.addEventListener("keydown", e => {
     const order = ["ko", "both", "en"];
     prefs.mode = order[(order.indexOf(prefs.mode) + 1) % order.length];
     savePrefs(); applyPrefsToUI(); rebuildDisplay();
-  } else if (key === "escape") { $("settings").classList.remove("open"); }
+  } else if (key === "escape") {
+    $("settings").classList.remove("open");
+    if ($("theater").classList.contains("pseudo-fs")) exitPseudoFullscreen();
+  }
 });
 
 // ----------------------------------------------------------------- 로드
@@ -1080,6 +1171,7 @@ function renderStatus() {
 
 async function boot() {
   applyPrefsToUI();
+  updateFsBtn();
   try {
     payload = await fetchPayload();
   } catch (e) {

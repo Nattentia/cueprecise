@@ -258,6 +258,17 @@ class TranslatePhaseTests(unittest.TestCase):
                 subtitle.apply_response(bundle, video_id="vid", phase="translate",
                                         fingerprint="sha256:deadbeef", text="1|안녕")
 
+    def test_markdown_decorated_translate_lines_are_parsed_leniently(self) -> None:
+        """Bug 1 연장: <번호>|번역 줄도 같은 마크다운 장식을 벗기고 읽어야 한다."""
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle(Path(directory))
+            packet = self._start_translate(bundle)
+            result = subtitle.apply_response(
+                bundle, video_id="vid", phase="translate", fingerprint=packet["fingerprint"],
+                text="- 1|안녕 세상아.\n`2|그것은 100개 항목이 있습니다.`")
+            self.assertEqual(sorted(result["accepted"]), [1, 2])
+            self.assertEqual(result["rejected"], [])
+
 
 class FullCycleTests(unittest.TestCase):
     def _bundle(self, root: Path) -> Path:
@@ -482,6 +493,100 @@ class TermsRetryTests(unittest.TestCase):
             self.assertEqual(retry["next"]["phase"], "translate")
             state = subtitle.load_state(bundle, "ko")
             self.assertEqual(state["terms_pending_retry"], [])
+
+
+class TermsMarkdownLeniencyTests(unittest.TestCase):
+    """Bug 1: 호스트가 마크다운으로 장식한 T<n> 줄을 조용히 버리지 않는지 확인한다."""
+
+    def _bundle(self, root: Path) -> Path:
+        bundle = root / "vid"
+        words = [_word("Hello", 0.0, 0.5), _word("world.", 0.6, 1.1)]
+        _write_json(bundle / "derived" / "transcript.json",
+                   {"video_id": "vid", "words": words})
+        return bundle
+
+    def test_markdown_decorated_term_lines_are_parsed_leniently(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle(Path(directory))
+            packet = subtitle.build_packet(bundle, video_id="vid", lang="ko")
+            text = (
+                "- T1|Hello|안녕|-|-|-\n"
+                "* T2|Hello|안녕|-|-|-\n"
+                "• T3|Hello|안녕|-|-|-\n"
+                "1. T4|Hello|안녕|-|-|-\n"
+                "`T5|Hello|안녕|-|-|-`\n"
+                "**T6**|Hello|안녕|-|-|-\n"
+                "| T7 | Hello | 안녕 | - | - | - |\n"
+                "|---|---|---|---|---|---|\n"
+                "```\n"
+                "T8|Hello|안녕|-|-|-\n"
+                "```\n"
+            )
+            result = subtitle.apply_response(
+                bundle, video_id="vid", phase="terms", fingerprint=packet["fingerprint"], text=text)
+            self.assertEqual(sorted(result["accepted"]), [f"T{i}" for i in range(1, 9)])
+            self.assertEqual(result["rejected"], [])
+
+    def test_unparseable_line_is_reported_as_rejection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle(Path(directory))
+            packet = subtitle.build_packet(bundle, video_id="vid", lang="ko")
+            result = subtitle.apply_response(
+                bundle, video_id="vid", phase="terms", fingerprint=packet["fingerprint"],
+                text="이 용어는 그냥 설명입니다.")
+            self.assertEqual(result["accepted"], [])
+            self.assertEqual(len(result["rejected"]), 1)
+            self.assertIn("형식이 맞지 않는다", result["rejected"][0]["reason"])
+            self.assertIsNotNone(result["note"])
+            self.assertEqual(result["next"]["phase"], "terms")
+
+
+class TermsCursorStallTests(unittest.TestCase):
+    """Bug 1: 형식이 전부 어긋난 비어 있지 않은 응답은 커서를 전진시키면 안 된다."""
+
+    def _bundle(self, root: Path) -> Path:
+        bundle = root / "vid"
+        words = [
+            _word("So", 10.0, 10.1), _word("this", 10.1, 10.2), _word("is", 10.2, 10.3),
+            _word("all", 10.3, 10.4), _word("by", 10.4, 10.5), _word("torch", 10.5, 10.9),
+            _word("and", 11.3, 11.4), _word("fast.", 11.4, 11.7),
+        ]
+        _write_json(bundle / "derived" / "transcript.json",
+                   {"video_id": "vid", "words": words})
+        _write_json(bundle / "raw" / "captions.json", {
+            "cues": [{"start": 10.0, "end": 11.7, "text": "this is all PyTorch and fast"}],
+        })
+        return bundle
+
+    def test_all_garbage_response_does_not_advance_cursor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle(Path(directory))
+            packet = subtitle.build_packet(bundle, video_id="vid", lang="ko")
+            self.assertEqual(packet["phase"], "terms")
+            state = subtitle.load_state(bundle, "ko")
+            cursor_before = dict(state["terms_cursor"])
+            self.assertGreater(len(state["evidence"]["suspects"]), 0)
+
+            result = subtitle.apply_response(
+                bundle, video_id="vid", phase="terms", fingerprint=packet["fingerprint"],
+                text="이건 그냥 문장이다.\n또 다른 잡음 줄.")
+            self.assertEqual(result["accepted"], [])
+            self.assertEqual(len(result["rejected"]), 2)
+            self.assertIsNotNone(result["note"])
+            self.assertEqual(result["next"]["phase"], "terms")
+
+            state = subtitle.load_state(bundle, "ko")
+            self.assertEqual(state["terms_cursor"], cursor_before)
+            self.assertFalse(state["terms_done"])
+            # 같은 묶음이 다시 나온다.
+            self.assertEqual(result["next"]["packet"], packet["packet"])
+
+            # 형식을 고쳐 보내면 정상적으로 진행된다.
+            suspect_id = state["evidence"]["suspects"][0]["id"]
+            retry = subtitle.apply_response(
+                bundle, video_id="vid", phase="terms", fingerprint=result["next"]["fingerprint"],
+                text=f"T1|PyTorch|파이토치|-|-|{suspect_id}")
+            self.assertEqual(retry["accepted"], ["T1"])
 
 
 class GlossaryHeardTests(unittest.TestCase):
