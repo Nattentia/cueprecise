@@ -16,7 +16,7 @@ class McpbPackagingTest(unittest.TestCase):
         payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
 
         self.assertEqual(payload["manifest_version"], "0.3")
-        self.assertEqual(payload["version"], "0.2.6")
+        self.assertEqual(payload["version"], "0.2.7")
         self.assertEqual(payload["server"]["type"], "binary")
         self.assertEqual(
             payload["server"]["entry_point"], "py/python.exe"
