@@ -124,6 +124,71 @@ class RuntimeToolTest(unittest.TestCase):
                     mock.patch.object(sys, "executable", str(executable)):
                 self.assertEqual(runtime.tool("yt-dlp"), str(tool.resolve()))
 
+    def test_non_frozen_runtime_also_prefers_sibling_executable(self) -> None:
+        """MCPB의 임베더블 파이썬은 얼려지지 않았지만 python.exe 옆에 ffmpeg.exe 를 둔다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            executable = root / "python.exe"
+            executable.write_bytes(b"")
+            tool = root / "ffmpeg.exe"
+            tool.write_bytes(b"")
+            with mock.patch.object(sys, "frozen", False, create=True), \
+                    mock.patch.object(sys, "executable", str(executable)):
+                self.assertEqual(runtime.tool("ffmpeg"), str(tool.resolve()))
+
+    def test_falls_back_to_path_name_when_no_sibling_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            executable = root / "python.exe"
+            executable.write_bytes(b"")
+            with mock.patch.object(sys, "frozen", False, create=True), \
+                    mock.patch.object(sys, "executable", str(executable)):
+                self.assertEqual(runtime.tool("ffmpeg"), "ffmpeg")
+
+
+class RuntimeCommandTest(unittest.TestCase):
+    def test_sibling_executable_wins(self) -> None:
+        """setup.exe 설치본은 yt-dlp.exe 를 서버 옆에 따로 둔다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            server = Path(tmp) / "cueprecise-mcp.exe"
+            server.write_bytes(b"")
+            (Path(tmp) / "yt-dlp.exe").write_bytes(b"")
+            with mock.patch.object(sys, "frozen", True, create=True), \
+                    mock.patch.object(sys, "executable", str(server)):
+                self.assertEqual(runtime.command("yt-dlp"),
+                                 [str(Path(tmp).resolve() / "yt-dlp.exe")])
+
+    def test_frozen_build_with_module_recalls_itself_with_a_flag(self) -> None:
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.object(sys, "executable", "C:/dist/cueprecise-mcp.exe"), \
+                mock.patch("importlib.util.find_spec", return_value=object()):
+            self.assertEqual(
+                runtime.command("yt-dlp"),
+                ["C:/dist/cueprecise-mcp.exe", "--yt-dlp"],
+            )
+
+    def test_frozen_build_without_module_uses_path_name(self) -> None:
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.object(sys, "executable", "C:/dist/cueprecise-mcp.exe"), \
+                mock.patch("importlib.util.find_spec", return_value=None):
+            self.assertEqual(runtime.command("yt-dlp"), ["yt-dlp"])
+
+    def test_non_frozen_with_importable_module_uses_module_flag(self) -> None:
+        """MCPB의 임베더블 파이썬은 site-packages 의 yt_dlp 를 -m 으로 부른다."""
+        with mock.patch.object(sys, "frozen", False, create=True), \
+                mock.patch.object(sys, "executable", "C:/mcpb/py/python.exe"), \
+                mock.patch("importlib.util.find_spec", return_value=object()):
+            self.assertEqual(
+                runtime.command("yt-dlp"),
+                ["C:/mcpb/py/python.exe", "-m", "yt_dlp"],
+            )
+
+    def test_non_frozen_without_module_falls_back_to_path_name(self) -> None:
+        with mock.patch.object(sys, "frozen", False, create=True), \
+                mock.patch.object(sys, "executable", "C:/py/python.exe"), \
+                mock.patch("importlib.util.find_spec", return_value=None):
+            self.assertEqual(runtime.command("yt-dlp"), ["yt-dlp"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -90,7 +90,7 @@ def _youtube_metadata(bundle: Path, url: str | None) -> dict[str, Any]:
         return cached
     try:
         result = subprocess.run(
-            [runtime.tool("yt-dlp"), "--dump-single-json", "--skip-download", url],
+            [*runtime.command("yt-dlp"), "--dump-single-json", "--skip-download", url],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
         )
     except (OSError, subprocess.TimeoutExpired):

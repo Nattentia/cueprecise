@@ -85,7 +85,7 @@ FALLBACK_LANGS = ("ko", "en")
 def _download_subs(url: str, directory: Path, langs: tuple[str, ...], *,
                    auto: bool) -> list[Path]:
     target = directory / "%(id)s.%(ext)s"
-    command = [runtime.tool("yt-dlp")]
+    command = list(runtime.command("yt-dlp"))
     if auto:
         command.append("--write-auto-sub")
     command += ["--write-subs", "--sub-langs", ",".join(langs),

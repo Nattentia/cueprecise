@@ -57,6 +57,13 @@ Claude에서는 응답의 타임스탬프를 누르면 해당 시점부터 YouTu
 
 ## 설치 방법
 
+> **Windows 스마트 앱 컨트롤:** v0.2.5는 스마트 앱 컨트롤이 켜진 PC에서
+> `[WinError 4551] 애플리케이션 제어 정책에서 이 파일을 차단했습니다` 오류로 막혔습니다.
+> `v0.2.6`부터 Claude Desktop 확장 프로그램은 널리 쓰이는 실행 파일(공식 Python 임베디드
+> 패키지와 수정하지 않은 FFmpeg 정식 빌드)만 담아 스마트 앱 컨트롤이 켜진 상태에서도
+> 동작합니다. `cueprecise-setup.exe`는 아직 차단될 수 있어 수정 중입니다. 이 문제를 피하려고
+> 스마트 앱 컨트롤을 끄지는 마세요.
+
 가장 간단한 경로는 Windows용 Claude Desktop 확장 프로그램입니다.
 
 1. Releases에서 cueprecise-windows.mcpb를 내려받습니다.
@@ -66,8 +73,8 @@ Claude에서는 응답의 타임스탬프를 누르면 해당 시점부터 YouTu
    영상 자료를 저장할 폴더를 지정합니다.
 4. CuePrecise를 켠 뒤 YouTube 링크에 관해 질문합니다.
 
-이 파일 하나에 CuePrecise 서버, yt-dlp, FFmpeg, FFprobe가 함께 들어 있습니다.
-약 86MiB이며 Python, Git, 별도 명령어 입력이 필요 없습니다. 현재 이 확장 프로그램은
+이 파일 하나에 CuePrecise 서버, 내장 Python, yt-dlp, FFmpeg, FFprobe가 함께 들어 있습니다.
+약 95MiB이며 Python, Git, 별도 명령어 입력이 필요 없습니다. 현재 이 확장 프로그램은
 Windows용 Claude Desktop에서 사용할 수 있습니다. 다른 지원 앱에는 같은 Releases의
 cueprecise-setup.exe를 사용합니다.
 
@@ -169,7 +176,7 @@ Python이나 Git을 설치할 필요가 없습니다. Windows에서는 API 키�
 추가하며, 예전 버전이 평문으로 저장했던 키도 업그레이드할 때 암호화 저장소로
 옮깁니다.
 
-현재 `v0.2.5` 배포 파일은 서명되지 않은 시험판입니다. Windows에서 알 수 없는 게시자
+현재 `v0.2.6` 배포 파일은 서명되지 않은 시험판입니다. Windows에서 알 수 없는 게시자
 경고가 나타날 수 있으므로 이 저장소의 Releases에서 받은 파일만 사용하세요.
 
 ### macOS·Linux 또는 명령어 설치

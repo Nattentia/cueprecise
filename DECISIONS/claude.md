@@ -2440,3 +2440,23 @@ translate 로 진입 → 첫 배치 58문장 확인 → `<번호>|=` 와 `/+1` �
 **남은 것.** 품질 보고의 교정 목록이 heard 필터와 무관하게 첫 S 근거를 교정으로 센다
 (MinGPT->minGPT 같은 대소문자 차이 포함). 전체화면·실제 재생 중 해설 타이밍은 자동화
 브라우저 탭이 백그라운드라 재생이 안 돼 사람이 확인해야 한다.
+
+## 2026-09-17 · MCPB 를 흔한 실행 파일만으로 다시 싼다 (Smart App Control)
+
+**무엇:** v0.2.5 MCPB 는 Smart App Control(차단 모드)에서 막혔다. 막힌 것은 전부
+세상에 우리만 가진 서명 없는 exe 였다: C# yt-dlp shim, BtbN FFmpeg, 일부 PyInstaller
+서버 빌드(setup.exe 판은 Codex 가 켤 때마다 차단), uv 가 패키지마다 만드는 시작 exe.
+python.org 임베디드 파이썬 + `.py` 소스 + PyPI 부품 + Gyan essentials 9.0.1 원본
+ffmpeg/ffprobe 로 바꿨다. manifest 는 `py/python.exe -m mcp_server`, yt-dlp 는
+`python -m yt_dlp`.
+
+**왜:** 판정 기준은 서명보다 "흔한 파일인가"였다(평판은 파일 내용에 붙는다). 사용자
+원칙인 "파일 하나, 따로 설치 없음"을 지키면서 유료 서명 없이 통과하는 유일한 구성이다.
+PyInstaller exe 는 빌드마다 평판이 0 에서 시작해 복불복이다.
+
+**측정:** 이 PC(차단 모드)에서 한글·공백 경로, PATH/PYTHONHOME 오염 환경으로 등록→전사→
+질의→프레임→자막 뷰어까지 통과, CodeIntegrity 3077 0건. 폴더 이름을 `py/lib`, `app` 으로
+줄여 최장 경로 94자(Desktop 확장 폴더 포함 약 230자).
+
+**기각:** FFmpeg 사용자 설치(winget, 원칙 위반), 스마트 앱 컨트롤 끄기 안내, 유료 서명.
+**남은 것:** setup.exe(PyInstaller) 는 미해결. SignPath 무료 서명은 릴리스 후 신청.

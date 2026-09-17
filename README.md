@@ -115,6 +115,13 @@ discussed the new issue.
 
 ## Quick start
 
+> **Windows Smart App Control:** v0.2.5 was blocked on PCs where Smart App Control is on
+> (`[WinError 4551] An Application Control policy has blocked this file`). Starting with
+> `v0.2.6`, the Claude Desktop extension ships only widely used runtime files (the official
+> Python embeddable package and an unmodified FFmpeg release build) and runs with Smart App
+> Control on. `cueprecise-setup.exe` can still be blocked; a fix is in progress. Please do not
+> turn off Smart App Control to work around this.
+
 ### Claude Desktop on Windows — one-file extension
 
 1. Open [Releases](https://github.com/Nattentia/cueprecise/releases) and download
@@ -123,7 +130,7 @@ discussed the new issue.
 3. Select the file. Claude will ask for a Gemini API key and a folder for local video data.
 4. Enable CuePrecise and ask Claude about a YouTube link.
 
-The approximately 86 MiB bundle includes CuePrecise, `yt-dlp`, FFmpeg, and FFprobe. You do
+The approximately 95 MiB bundle includes CuePrecise, an embedded Python runtime, `yt-dlp`, FFmpeg, and FFprobe. You do
 not need to install Python, Git, or the video tools separately. The extension is currently
 available for Claude Desktop on Windows.
 
@@ -142,7 +149,7 @@ so safely; a secret-bearing Codex TOML may be left without a backup to avoid cop
 On Windows, the API key is encrypted with Windows DPAPI for the current user. Older plaintext
 CuePrecise keys are moved into the protected store during an upgrade.
 
-> **Unsigned preview:** `v0.2.5` is not digitally signed, so Windows may show an
+> **Unsigned preview:** `v0.2.6` is not digitally signed, so Windows may show an
 > unknown-publisher warning. Download it only from this repository's Releases page and
 > verify `SHA256SUMS.txt` if you want to check the file before installing it.
 

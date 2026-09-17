@@ -1,33 +1,56 @@
-# CuePrecise MCPB binary proof of concept
+# CuePrecise MCPB (Claude Desktop extension)
 
-This package answers three questions before CuePrecise adopts MCPB as a release format:
+## Why this layout
 
-1. Can Claude Desktop install and launch an unsigned PyInstaller binary from an MCPB?
-2. Which tools work before `ffmpeg` and `yt-dlp` are bundled?
-3. Does Claude Desktop mask, store, pass, and remove a `sensitive` Gemini API key safely?
+Windows Smart App Control (SAC, enforcement mode) blocks rare unsigned EXEs. On a real
+SAC machine we measured PyInstaller onefile binaries (our old `cueprecise-mcp.exe`), a
+small custom-compiled C# shim (the old `yt-dlp.exe`), and BtbN's FFmpeg autobuilds all
+getting blocked at least some of the time. Common, mainstream files were not blocked:
+the official python.org **embeddable** CPython interpreter running our `.py` source, and
+Gyan's FFmpeg "essentials" build's original `ffmpeg.exe` / `ffprobe.exe`.
 
-The PoC contains `cueprecise-mcp.exe` only. The Claude release bundle additionally contains
-`yt-dlp`, `ffmpeg`, and `ffprobe`, so a Claude Desktop user does not need Python or a separate
-media-tool installation.
+So this MCPB ships:
+
+- `py/` — the official python.org embeddable package (pinned version + SHA-256)
+  with our runtime dependencies installed into `lib` (from this repo's
+  `uv.lock`) and `ffmpeg.exe` / `ffprobe.exe` (pinned Gyan essentials build, SHA-256
+  verified) copied in unmodified, next to `python.exe`.
+- `app/` — CuePrecise's own `.py` source (`src/*.py`, runtime modules only).
+- `licenses/` — the Python PSF license, FFmpeg's GPLv3 license text, and
+  `THIRD_PARTY_NOTICES.md`.
+
+Claude Desktop launches `py/python.exe -m mcp_server --bundle-root <dir>`
+(see `manifest.json`). Nothing is installed onto the user's machine outside the unpacked
+extension folder — the interpreter, the dependencies, and the media tools all travel
+inside the `.mcpb`. `src/runtime.py` finds `ffmpeg.exe` / `ffprobe.exe` next to
+`sys.executable` in every mode (not just when frozen), and calls yt-dlp as
+`python.exe -m yt_dlp` when the `yt_dlp` package is importable — which it always is here,
+since `uv pip install --target` put it in `lib`.
+
+This replaces the previous approach of one PyInstaller onefile binary (which bundled
+yt-dlp itself), a tiny C# executable that shimmed subprocess calls into it, and a BtbN
+shared FFmpeg build. Those pieces are gone (`mcpb_entrypoint.py`, `yt_dlp_shim.cs`); the
+legacy PyInstaller `setup.exe` installer (`installer/build_windows.ps1`) is unaffected —
+it still produces its own frozen `cueprecise-mcp.exe`, which now recognizes a `--yt-dlp`
+flag (see `src/mcp_server.py`) so it no longer needs a second bundled executable either.
 
 ## Build
 
 ```powershell
-pwsh -File installer/mcpb/build_mcpb_poc.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File installer/mcpb/build_mcpb.ps1
 ```
 
-The result is `dist/mcpb/cueprecise-windows-poc.mcpb`.
+This downloads (and caches) the pinned python.org embeddable package and the pinned
+Gyan FFmpeg essentials build, verifies both against hardcoded SHA-256 hashes, installs
+this repository's locked Python dependencies with `uv pip install --target`, copies
+CuePrecise's own source, and zips the result into `dist/mcpb/cueprecise-windows.mcpb`.
 
-For the complete Claude Desktop bundle, run:
+For the older binary-type proof of concept (PyInstaller `cueprecise-mcp.exe` alone, no
+media tools, used only to answer install/SmartScreen/`sensitive`-key questions), run:
 
 ```powershell
-pwsh -File installer/mcpb/build_mcpb.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File installer/mcpb/build_mcpb_poc.ps1
 ```
-
-This creates `dist/mcpb/cueprecise-windows.mcpb`. The build downloads a pinned BtbN LGPL
-shared FFmpeg archive, verifies its SHA-256 hash, omits `ffplay`, and includes the applicable
-license and source/build links. The MCP executable also contains yt-dlp; a small sibling shim
-preserves the existing subprocess interface without bundling a second Python runtime.
 
 ## Manual acceptance test
 
@@ -37,23 +60,12 @@ Use a canary value such as `CUEPRECISE_POC_KEY_DO_NOT_USE` instead of a real API
 2. In Claude Desktop, open Settings > Extensions > Advanced settings > Install Extension.
 3. Select the bundle, enter the canary key, and keep the default data directory.
 4. Start a new chat and confirm that CuePrecise tools are listed.
-5. Call `cueprecise_status` with a nonexistent video id. A structured response proves the
-   binary launched without requiring `ffmpeg` or `yt-dlp`.
-6. Try registering a video and record the first missing-tool error. Do not install a tool
-   during this test.
-7. Search Claude settings, logs, and the extension directory for the canary value; record
+5. Register a short public video and confirm transcription/frames succeed without the
+   user installing Python, FFmpeg, or yt-dlp separately.
+6. Search Claude settings, logs, and the extension directory for the canary value; record
    whether it is plaintext, encrypted, or absent.
-8. Remove the extension and repeat the canary search.
+7. Remove the extension and repeat the canary search.
 
-Do not publish this bundle until the test passes on a clean Windows account with Smart App
-Control or SmartScreen enabled.
-
-## Observed on Windows
-
-Claude Desktop 1.40609.1.0 installed and enabled an Internet-zone-marked bundle without a
-SmartScreen prompt. The extracted unsigned executable had no `Zone.Identifier` stream. The
-canary was absent from a plaintext search of Claude's data directory; the extension settings
-stored it with an `__encrypted__:` prefix. Removing the extension deleted both its extracted
-directory and settings file, and the canary remained absent from a plaintext search. These
-observations cover this machine and Claude version only. Server environment delivery still
-needs separate verification.
+On a Smart App Control (enforcement mode) machine, also check
+`Microsoft-Windows-CodeIntegrity/Operational` (event 3077) for any blocked file after
+running the above — the whole point of this layout is that there should be none.
