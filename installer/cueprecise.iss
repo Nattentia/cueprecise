@@ -1,5 +1,5 @@
 #define MyAppName "CuePrecise"
-#define MyAppVersion "0.2.9"
+#define MyAppVersion "0.2.10"
 #define MyAppPublisher "Nattentia"
 #define MyAppURL "https://github.com/Nattentia/cueprecise"
 
