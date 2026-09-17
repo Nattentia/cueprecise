@@ -426,7 +426,7 @@ PAGE_HTML = r"""<!doctype html>
   .termRow .meaning { color: var(--dim); font-size: 12.5px; margin-top: 4px; }
   .pill { font-size: 10.5px; color: #ffb86b; border: 1px solid rgba(255,184,107,.35); border-radius: 4px; padding: 0 5px; }
 
-  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px; }
   .stat { background: var(--surface-2); border-radius: 10px; padding: 10px; }
   .stat b { display: block; font-size: 18px; font-weight: 700; }
   .stat span { color: var(--faint); font-size: 11.5px; }
@@ -956,10 +956,16 @@ function renderQualityTab() {
   const untranslated = r.untranslated.length
     ? r.untranslated.map(no => '<span class="chip qRow" data-no="' + no + '">#' + no + "</span>").join("")
     : '<span class="ev">없음</span>';
+  const warnings = (r.warnings || []).length
+    ? '<div class="qSection" style="color:var(--gloss)"><h4>경고</h4>' +
+      r.warnings.map(w => '<div class="qRow">' + esc(w) + "</div>").join("") + "</div>"
+    : "";
   const pct = p.sentences ? Math.round(p.translated / p.sentences * 100) : 0;
   el.innerHTML =
+    warnings +
     '<div class="stats">' +
       '<div class="stat"><b>' + pct + '%</b><span>번역</span></div>' +
+      '<div class="stat"><b>' + (r.terms_count || 0) + '</b><span>용어 수</span></div>' +
       '<div class="stat"><b>' + fixes.length + '</b><span>용어 교정</span></div>' +
       '<div class="stat"><b>' + (r.speed_over_ratio * 100).toFixed(1) + '%</b><span>읽기 속도 초과</span></div>' +
     '</div>' +
