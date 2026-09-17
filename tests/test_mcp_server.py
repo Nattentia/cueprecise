@@ -56,7 +56,8 @@ class ToolSurfaceTests(unittest.TestCase):
         self.assertEqual(names, {
             "cueprecise_register", "cueprecise_status", "cueprecise_outline", "cueprecise_query",
             "cueprecise_excerpt", "cueprecise_frames", "cueprecise_purge", "cueprecise_set_chapter_titles",
-            "cueprecise_summary", "cueprecise_set_summary"})
+            "cueprecise_summary", "cueprecise_set_summary",
+            "cueprecise_subtitle", "cueprecise_set_subtitle"})
 
     def test_every_tool_declares_an_input_schema(self) -> None:
         for tool in mcp_server.TOOLS:
@@ -205,7 +206,7 @@ class ModernEraTests(unittest.TestCase):
         mcp_server.serve(stream_in, stream_out, bundle_root=Path("data"))
         replies = [json.loads(line) for line in stream_out.getvalue().splitlines()]
         self.assertEqual([r["id"] for r in replies], [1, 2])
-        self.assertEqual(len(replies[0]["result"]["tools"]), 10)
+        self.assertEqual(len(replies[0]["result"]["tools"]), len(mcp_server.TOOLS))
 
 
 class OutlineTests(BundleFixture):
@@ -437,6 +438,16 @@ class ArgumentValidationTests(unittest.TestCase):
             bundle_root=Path("data"))
         self.assertTrue(reply["result"]["isError"])
         self.assertIn("video_id", reply["result"]["content"][0]["text"])
+
+
+class BundleRootTests(unittest.TestCase):
+    def test_unexpanded_home_placeholders_resolve_to_home(self) -> None:
+        home = Path.home()
+        for raw in ("${HOME}/.cueprecise/data", "~/.cueprecise/data"):
+            self.assertEqual(mcp_server._resolve_bundle_root(raw), home / ".cueprecise" / "data")
+
+    def test_plain_path_is_unchanged(self) -> None:
+        self.assertEqual(mcp_server._resolve_bundle_root("data"), Path("data"))
 
 
 if __name__ == "__main__":

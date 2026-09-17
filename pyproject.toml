@@ -53,8 +53,10 @@ py-modules = [
   "render",
   "runtime",
   "speakers",
+  "subtitle",
   "summary",
   "transcribe",
   "usage",
+  "viewer",
   "visual",
 ]

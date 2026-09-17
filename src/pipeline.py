@@ -1502,7 +1502,9 @@ def _purge_targets(bundle: Path, scope: str) -> list[str]:
     if scope in {"derived", "all"}:
         targets += [bundle / "derived", bundle / "index.sqlite3"]
     if scope in {"raw", "all"}:
-        targets += [bundle / "raw"]
+        # translations/ 는 raw 에서 재생성할 수 없다 (CONTRACT 16절). derived 범위에서는
+        # 지우지 않고, raw·all 범위에서만 명시적으로 함께 지운다.
+        targets += [bundle / "raw", bundle / "translations"]
     if scope == "all":
         targets.append(bundle / "job.json")
     for target in targets:
