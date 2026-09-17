@@ -132,7 +132,7 @@ report. Translation uses your AI client, not an extra Gemini call.
 > (`[WinError 4551] An Application Control policy has blocked this file`). Starting with
 > v0.2.6, the Claude Desktop extension ships only widely used runtime files (the official
 > Python embeddable package and an unmodified FFmpeg release build) and runs with Smart App
-> Control on. `v0.2.8` ships the other AI clients installer the same way, as a plain zip
+> Control on. `v0.2.9` ships the other AI clients installer the same way, as a plain zip
 > instead of an unsigned installer executable. There is no remaining known Smart App Control
 > issue.
 
@@ -166,7 +166,7 @@ safely; a secret-bearing Codex TOML may be left without a backup to avoid copyin
 On Windows, the API key is encrypted with Windows DPAPI for the current user. Older plaintext
 CuePrecise keys are moved into the protected store during an upgrade.
 
-> **Unsigned preview:** `v0.2.8` is not digitally signed, so Windows may show an
+> **Unsigned preview:** `v0.2.9` is not digitally signed, so Windows may show an
 > unknown-publisher warning. Download it only from this repository's Releases page and
 > verify `SHA256SUMS.txt` if you want to check the file before installing it.
 

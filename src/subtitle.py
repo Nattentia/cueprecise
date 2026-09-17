@@ -1017,11 +1017,13 @@ def _packet_review(bundle: Path, state: dict[str, Any], indexed: Indexed,
                      f"{_render_sentence(item)}")
         block.append(f"(현재 번역) {_render_stored_translation(stored)}")
         block_text = "\n".join(block)
-        if batch and total + len(block_text) > MAX_PACKET_CHARS:
+        # 블록 사이에 붙는 빈 줄(두 글자)도 상한에 센다.
+        added = len(block_text) + (2 if lines else 0)
+        if batch and total + added > MAX_PACKET_CHARS:
             break
         batch.append(item)
         lines.append(block_text)
-        total += len(block_text)
+        total += added
     instructions = ("flag 이유를 보고 필요하면 번역을 고쳐 translate 와 같은 형식(<번호>|번역)으로 "
                    "다시 보내라. 문제가 없으면 (현재 번역)을 넘김 표시까지 그대로 다시 보내도 된다. "
                    "병합된 문장이 있는 줄은 /+n, /+n.k 를 쓸 수 있다.")

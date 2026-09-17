@@ -7,6 +7,7 @@ import tempfile
 import threading
 import types
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
@@ -860,3 +861,28 @@ class ReportTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReviewPacketLimitTests(unittest.TestCase):
+    def test_block_separators_count_toward_the_packet_limit(self) -> None:
+        """블록 사이 빈 줄을 세지 않아 12,011자 패킷이 나간 회귀를 막는다."""
+        sentences, lines_state = [], {}
+        for no in range(1, 41):
+            key = f"k{no}"
+            words = [{"text": "word%03d" % i, "start": float(no), "end": float(no) + 0.1}
+                     for i in range(30)]
+            sentences.append({"no": no, "key": key, "start": float(no), "end": float(no) + 3.0,
+                              "words": words, "breaths": [], "text": " ".join(w["text"] for w in words)})
+            lines_state[key] = {"state": "flagged", "flags": ["pace"], "ko": "가" * 60}
+        indexed = types.SimpleNamespace(sentences=sentences)
+        state = {"lines": lines_state, "sentences_fingerprint": "fp"}
+        original = (subtitle._flagged_unreviewed, subtitle._progress)
+        subtitle._flagged_unreviewed = lambda st, idx: sentences
+        subtitle._progress = lambda st, idx: {}
+        try:
+            for limit in range(3000, 4200, 13):
+                with unittest.mock.patch.object(subtitle, "MAX_PACKET_CHARS", limit):
+                    packet = subtitle._packet_review(Path("."), state, indexed, "vid")
+                    self.assertLessEqual(len(packet["packet"]), limit)
+        finally:
+            subtitle._flagged_unreviewed, subtitle._progress = original
