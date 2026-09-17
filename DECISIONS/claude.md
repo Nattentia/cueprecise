@@ -2169,3 +2169,274 @@ Windows 내장 `Windows.Media.Ocr` 은 설치가 0 이다.
 `src/locking.py`, `tests/test_locking.py` 가 새로 생겼다. `CONTRACT.md` 1절 표는
 사람 소유라 고치지 않았다 — 두 줄 추가를 기다린다. `README.md`, `README.ko.md`,
 `requirements*.txt`, `pyproject.toml` 은 표에 없어 OCR 요구 사항 줄만 고쳤다.
+
+## 2026-09-17 · 번역 자막 코어 1단계 — `src/subtitle.py`, MCP 툴 2개
+
+CONTRACT.md 를 소유자가 claude 에게 상시 위임했다(문서 맨 위 2026-09-17 개정 절).
+그 위임을 근거로 16절(번역 자막과 뷰어)을 추가하고, 1절 소유권 표에
+`src/subtitle.py`/`src/viewer.py`(claude)와 대응 테스트 줄을 넣었다. 이번 세션은
+그 16절을 코어(문장 분할·교차 대조·phase 진행)와 MCP 툴 두 개로 구현했다. 뷰어는
+범위 밖이라 `viewer_url` 은 항상 `None`이다.
+
+### 설계 요지
+
+- **문장**: `chapters._sentences` 와 같은 경계(끝 문장부호, 공백 >1.2초, 35단어)를
+  쓰되 단어 인덱스를 보존하는 버전을 새로 짰다(`build_sentences`). 35단어 강제
+  절단은 마지막 10단어 안에서 가장 긴 공백 뒤를 자른다. 키는
+  `"s-" + sha1(f"{start:.2f}|{end:.2f}|{text}")[:12]`, 번호는 매 호출 1..N 재계산.
+  숨 지점(`^k`)은 공백 ≥0.3초 또는 `,;:` 로 끝나는 단어 뒤, 시각은 다음 단어 start.
+- **교차 대조** (`build_evidence`, 최초 `cueprecise_subtitle` 때 한 번): YouTube
+  큐(대괄호 큐 제외) 시각 창의 Gemini 단어와 정규화 비교, 인접 2단어 결합까지
+  후보로 넣고 `difflib.SequenceMatcher` 비율 ≥0.55 로 의심(S번호)을 잡는다.
+  정규화는 처음에 소문자+영숫자+`.`만 남기게 짰더니 문장 끝 마침표 하나
+  때문에("ago." vs "ago") 완전히 같은 단어가 의심으로 잡히는 오탐이 실측
+  393건 중 다수였다 — 양끝 문장부호를 먼저 벗기고 나서 정규화하도록 고쳤다
+  (`comnet.js` 처럼 단어 안쪽 점은 그대로 남는다). 고친 뒤 실측 219건으로 줄었고,
+  스펙이 요구한 네 예시(ImageNet/imageet, PyTorch/"by torch", "combine JS"/comnet.js,
+  "mid journey"/majour)를 전부 잡았다. OCR 근거는 `derived/frames.json` 을 건드리지
+  않고 `ko.json.evidence.ocr` 에만 쌓는다.
+- **용어(terms) phase**: 진행 중 사용자가 응답 줄 형식을 바꿔 확정했다 —
+  `T<n>|원어|번역어|짧은해설(≤16자)|긴설명(≤50자)|근거`. 짧은해설이 있으면 긴설명도
+  있어야 하고, 원어가 Gemini 전사 원문(전체 텍스트 부분 문자열 검색)과 다르면
+  근거에 S번호가 있어야 한다. 저장된 각 용어에 `first_t`(뷰어용 첫 등장 초)를
+  붙인다 — 교정된 용어는 근거 S번호가 가리키는 Gemini 원형의 시각을 쓴다.
+- **번역(translate)/재검토(review) phase**: 서버는 상태를 두지 않는다 — 다음 묶음은
+  매번 `translations/ko.json.lines` 와 문장 색인에서 다시 계산한다(첫 미저장 문장부터
+  연속으로, `BATCH_CHARS`/자연스러운 끊김 우선). 구조 거절 2회(`MAX_REJECTS`)면
+  `untranslated` 로 굳히고 더 묻지 않는다. 숫자 누락·용어집 누락·읽기 속도 초과·
+  `?` 표시는 저장은 하되 `flagged` 로 남긴다. review phase 는 첫 호출에서 일관성
+  검사(용어 tgt 불일치, 합쇼체/해요체 소수 쪽)만 하고 한 번 더 불러야 실제 재검토
+  묶음을 준다 — `consistency_done` 이 그 경계다.
+- **저장**: `translations/ko.json`, `locking.file_lock` 로 읽기→병합→원자적 쓰기.
+  `schema_version` 불일치는 덮어쓰지 않고 거절. `pipeline._purge_targets` 는
+  `raw`/`all` 범위에서만 `translations/` 를 함께 지운다(`derived` 범위는 보존).
+
+### 명세와 다르게 했거나 단순화한 곳
+
+- **일관성 검사 (c) "같은 이름의 다른 한글 표기"**: 자유 텍스트에서 같은 개체의
+  서로 다른 한글 표기를 찾는 건 개체 인식이 필요해 이번 범위에서 뺐다. (a)
+  용어집 src/tgt 불일치와 (b) 합쇼체/해요체 혼용만 구현했다.
+- **번역 묶음 시작점**: "다음 미번역 문장부터"를 "키가 아직 없는 첫 문장부터
+  연속으로"로 구현했다. 번역 도중 문장 하나가 중간에 비는 경우(동시 다중 클라이언트
+  등)는 다루지 않는다 — 원래도 단일 호스트 왕복을 가정한 설계라 영향은 없다고 본다.
+- **교정 판정**: "Gemini 원문 표기와 다르면 교정"을 Gemini 전사 전체 텍스트에 대한
+  부분 문자열 검색으로 판정한다. 단어 경계를 엄격히 보지 않으므로 아주 드물게
+  우연히 부분 문자열이 겹치면 근거 없이 통과할 수 있다.
+- **읽기 속도 실측**: `XdbpCM4yGyE` 는 영어 강의라 `derived/frames.json` 에 이미
+  OCR 이 있었고, 의심 시각 프레임은 `visual.extract_frames` 로 새로 몇 장 더
+  찍었다(영상은 `pipeline.ensure_video` 가 그 자리에서 내려받았다 — Gemini 호출은
+  없다). 스모크 뒤 `translations/`, 새로 받은 `raw/source_video.mp4` 는 지워
+  번들을 원래 상태로 되돌렸다.
+
+### 테스트·스모크
+
+`tests/test_subtitle.py`(18개) 신설: 문장 분할/키 안정성, 숨 지점/예산, 의심 탐지,
+교정 무근거 거절, 구조 거절/MAX_REJECTS, 숫자/용어 표시, `/k` 검증, fingerprint
+불일치, 동시 저장 병합(스레드 2개), phase 전 구간(terms→translate→review→done),
+패킷 12,000자 이하. `tests/test_mcp_server.py` 의 도구 목록 테스트 두 곳을 새
+도구 두 개를 포함하도록 갱신(개수 비교는 `len(mcp_server.TOOLS)` 로 바꿔 다음에
+도구가 늘어도 다시 고칠 필요가 없게 했다). 전체 `python -m pytest -q tests`
+552 passed (기존 534 + 신설 18).
+
+실데이터(`data/XdbpCM4yGyE`, 934문장) `cueprecise_subtitle` 을 파이썬에서 직접
+호출: 의심 219건, 용어 후보 482건, OCR 41건, terms 패킷 11,956자·translate 첫
+패킷 5,817자(둘 다 12,000자 이내), 첫 translate 묶음 58문장/4,998자, 전체
+76,329자를 5,000자로 나누면 약 16묶음.
+
+### 같은 날 검토 후 수정 — terms 패킷 잘림, 의심 잡음
+
+코드 리뷰에서 두 가지를 지적받았다: (1) terms 패킷이 의심 219건 중 절반쯤에서
+`_truncate_packet` 에 조용히 잘려 나머지가 영원히 안 보였다 — 정밀성 위반.
+(2) 의심 목록에 the/that, suspected/suspect, nodes/node 같은 의미 없는 잡음이
+많았다. 둘 다 고쳤다.
+
+- **terms phase 페이지네이션**: `terms_done` 하나로 "받았다/안 받았다"를 나누던
+  것을, `terms_cursor: {suspects, candidates}` 로 "몇 번까지 보여줬다"를 세는
+  방식으로 바꿨다. `_select_terms_chunk` 가 12,000자 안에서 다음 묶음(의심 우선,
+  남는 자리에 후보)을 고르고, `_apply_terms` 가 응답을 저장한 뒤 그 묶음만큼
+  커서를 전진시킨다. 둘 다 소진돼야 `terms_done=true` 다. 빈 응답으로 계속
+  불러도 결국 전부 보여준다 — 새 테스트(`TermsPaginationTests`, 의심 400개
+  합성)로 확인.
+- **`_truncate_packet` 폐기 → `_enforce_packet_limit`**: 이제 어느 phase 든
+  실제로 문자를 잘라내지 않는다. 패킷이 12,000자를 넘으면 그건 묶음을 더
+  잘게 나누지 못한 버그이므로 `SubtitleError` 를 올린다. translate phase 도
+  같은 이유로 `_translate_batch_for` 안에 축소 루프를 넣었다 — 용어집이 아주
+  커지면 배치를 줄여서 맞춘다(그리고 `_packet_translate`/`_apply_translate`
+  가 항상 같은 함수로 같은 배치를 보게 리팩터링했다). review phase 는 원래도
+  블록 단위로 상한을 지키며 쌓고 있어 손대지 않았다.
+- **의심 잡음 필터** (`_is_noise_pair`, `_find_suspects` 안에서 매칭 직후 적용):
+  ① 공백·하이픈·아포스트로피 제거 후 같으면 버림(smart home/smarthome,
+  that 's/that's). ② 흔한 축약형 전개(`'s`→is, `'re`→are, `'ve`→have,
+  `'ll`→will, `n't`→not, `'m`→am, `'d`→would)까지 같이 넣어 확장 동치도
+  버림(there's/there is, we're/we are). ③ 한쪽이 다른 쪽의 접두사이고 길이차
+  ≤3 이면 버림(suspected/suspect, nodes/node, so/solve). ④ 양쪽 토큰이 전부
+  `_COMMON_WORDS`(영어 기능어·흔한 단어 약 210개, `chapters._STOP` 의 영어
+  부분을 밑돌로 삼음)에만 속하면 버림(the/that, all/really). 살아남은 의심은
+  `_finalize_suspects` 가 "유지 신호(모양이 특이하거나 slide 근거, 단
+  슬라이드 근거는 토큰 길이 ≥4 일 때만 인정) 있는 것 먼저 → 그다음 시각순"
+  으로 정렬해 S번호를 다시 매긴다.
+- **후보(C) 축소** (`_build_term_candidates`): 의심 목록과 겹치는 표기는
+  아예 후보 풀에 넣지 않는다. 빈도 1회이면서 모양도 안 특이하면 버린다.
+  최종 120개로 자르고, 잘린 개수는 버리지 않고 `evidence.candidates_dropped`
+  로 남겨 terms 패킷 헤더에 그대로 밝힌다("상한 초과로 N건 생략").
+
+실측(`XdbpCM4yGyE`, 필터 전/후): 의심 **219 → 132**, 용어 후보 **482 → 120**
+(3건 생략 표시). 요구된 7개 예시(ImageNet/imageet, PyTorch/"by torch",
+"combine JS"/comnet.js, "mid journey"/majour, Knuth/Nuth, MinGPT/mining,
+ChatGPT/chashp) 전부 남았다. 지정된 잡음 예시 10개 중 9개가 사라졌다 — 다만
+"step by"/"step-by-step" 은 접두사 길이차가 4(`stepby`→`stepbystep`)라 ≤3
+규칙을 살짝 넘겨 그대로 남는다. 임계값을 늘리면 진짜 다른 단어 쌍(교정 후보)
+까지 버릴 위험이 있어 규칙 그대로 두고 이 한 건은 남겨 뒀다. 필터링 결과가
+줄어든 덕에 이 영상은 이제 terms 패킷 1개로 전부 끝난다(원래도 위 페이지네이션
+자체는 합성 데이터로 여러 패킷이 실제로 도는 것을 확인했다). 스모크 뒤
+`translations/` 는 다시 지워 원상복구했다. 전체 테스트
+`python -m pytest -q tests` 554 passed (테스트 20개로 순증).
+
+## 2026-09-17 · 뷰어(2단계) — `src/viewer.py`, `subtitle.viewer_payload`
+
+`viewer_spec.md` 를 그대로 구현했다. MCP 프로세스 안에서 도는 HTTP 뷰어다.
+시제품 `viewer/`(사용자가 만든 것, 미추적)는 지우지 않고 기능만 옮겨 왔다.
+
+- **`subtitle.viewer_payload(bundle, lang)`**: 문장·용어·보고를 JSON 하나로
+  낸다. 이걸 만들면서 1단계 코드에 실은 버그 하나를 고쳤다 — `_validate_and_
+  store_line` 의 읽기 속도 검사가 문장의 **전체** breath 목록으로 구간을
+  나눴는데, 실제로는 응답이 쓴 `breaks`(부분집합)만 구간 경계여야 한다. 전체
+  breath 를 쓰면 `breaks` 를 일부만 쓴 문장에서 구간·시간이 어긋난다. 고치는
+  김에 `segments`(문장을 `/k` 로 나눈 조각의 텍스트+시간)를 `lines[key]` 에
+  같이 저장하게 했다 — 안 그러면 뷰어가 나눔을 다시 계산할 방법이 없다(원래
+  스키마엔 없던 필드라 CONTRACT 6절의 "새 필드는 optional" 규칙을 따랐다).
+  `_packet_done`/뷰어 품질 탭이 같은 데이터(`_report_data`)를 쓰게 리팩터링.
+- **`viewer.py` 서버**: `ensure_server(bundle_root)` 가 처음 불릴 때만
+  `ThreadingHTTPServer` 데몬 스레드를 띄운다. 8787~8797 순서로 포트를
+  시도하되, 먼저 `/__cueprecise/health` 로 그 포트에 이미 뭔가 있는지
+  묻는다 — 우리 앱이고 `bundle_root_hash` 가 같으면 새로 열지 않고 재사용,
+  아니면 다음 포트. 전부 막히면 포트 0(임의)으로 마지막 시도.
+  `Host` 헤더가 `127.0.0.1:<port>`/`localhost:<port>` 가 아니면 403(DNS
+  리바인딩 방지). `video_id`/`lang` 은 정규식으로만 받고, 그 값으로 파일
+  경로를 직접 만들지 않는다(정적 파일 서빙 자체가 없다 — HTML은 파이썬 문자열
+  상수). `log_message` 를 무력화해 stdio MCP 파이프에 아무것도 안 흘린다.
+  `viewer_url` 은 `subtitle.build_packet`/`apply_response` 에 새 인자로
+  받아 `_base_packet` 이 채운다 — `mcp_server.tool_subtitle`/`tool_set_
+  subtitle` 이 `viewer.ensure_server` 를 불러 넘기고, 실패해도 예외를
+  삼켜 자막 작업 자체는 막지 않는다.
+- **뷰어 HTML/JS**: 시제품의 YouTube IFrame API·목록·검색·자동 따라가기를
+  그대로 옮기고, 자막 겹침을 명세대로 다시 짰다 — 문장의 `segments`(또는
+  번역 없는 문장은 `words` 시각)를 글자 폭 가중(한글 1.0/라틴 0.55)으로
+  줄바꿈, 2줄을 넘기면 글자수 비율로 더 쪼개 시간도 비례 배분, 1.5초 미만
+  큐는 같은 문장 안에서 합치거나(2줄 초과하면) 끝 시각만 늘림. 모드(한국어/
+  병기/영어), 톱니 메뉴(글자 크기·세로 위치·싱크 오프셋·자동 따라가기),
+  전체화면, 용어 해설 팝업(등장 시각 발동·최대 3줄 스택·타이머 페이드),
+  오른쪽 패널 3탭(문장/용어/품질), 미완료면 10초마다 재요청, 유튜브 임베드
+  차단 시 대체 화면을 넣었다.
+- **사용자 확정 변경**: 용어 해설 on/off 는 페이지를 열 때마다 항상 꺼진
+  채로 시작하고 localStorage 에 저장하지 않는다. `PERSISTED_KEYS` 화이트
+  리스트로 저장 대상을 제한해(글자 크기·위치·모드·싱크·자동 따라가기만)
+  구현했고, `TermsToggleNotPersistedTests` 로 저장 코드에 `"terms"` 가
+  없는지 확인한다.
+
+### 명세와 다르게 했거나 단순화한 곳
+
+- 자막 줄바꿈·글자 폭 계산은 실제 렌더된 DOM 크기를 재는 근사식(상자 폭 비례
+  글자 크기 추정)이다. 폰트마다 실측이 다를 수 있어 완벽한 폭 계산은 아니다.
+- 용어 해설이 "쌓기 최대 3줄, 3초 미만은 버림" 규칙은 구현했지만 자막이
+  2줄일 때의 "최대 2초 대기 후 그래도 안 되면 표시" 는 단순화해 항상 2초
+  뒤에 표시한다(조건 재확인 루프는 안 넣었다).
+- 브라우저 JS 로직(줄바꿈·팝업 타이밍)은 Python 테스트로 검증할 수 없어
+  수동 검토로만 확인했다. `tests/test_viewer.py` 는 명세가 요구한 대로
+  `viewer_payload`/서버(보안·헬스·재사용)/`viewer_url` 주입만 자동화했다.
+
+### 테스트·스모크
+
+`tests/test_viewer.py`(15개) 신설. 전체 `python -m pytest -q tests`
+**569 passed** (554 + 15). 실데이터(`XdbpCM4yGyE`) 로 서버를 잠깐 띄워
+`/`(200, 28,461바이트, 외부 스크립트 iframe_api 하나뿐) · `/api/subtitle`
+(200, 649,487바이트, 문장 934개) 를 받고 잘못된 `v` 가 400 인 것까지 확인한
+뒤 `stop_server()` 로 내렸다(포트 재바인딩 성공으로 확인). 뷰어는 읽기
+전용이라 `translations/` 를 만들지 않았다 — 지울 것이 없었다.
+
+## 2026-09-17 · 실전 번역 실측에서 나온 결함 4건
+
+사람이 `data/XdbpCM4yGyE` 를 직접 호스트로 번역하며(용어 39개 확정) 찾은 버그
+넷을 고쳤다. 실측 중인 `translations/ko.json` 은 절대 건드리지 않고, 스모크는
+전부 복사본 번들(스크래치패드, 작업 후 삭제)로 했다.
+
+- **교정 판정 대소문자·단어경계**: `src not in transcript_text` 를
+  `_contains_term`(단어 경계 정규식 + `re.IGNORECASE`)으로 바꿨다. "NanoGPT"
+  원문에 "nanoGPT" 로 써도 이제 그대로 통과한다. OCR 후보(C)로만 근거를 댄
+  용어는 거절 사유를 "원문 음성에 나오지 않는 용어"로 구분해 표시한다(거절
+  자체는 그대로).
+- **terms 거절 재시도 1회**: `state["terms_pending_retry"]` 로 직전 응답의
+  거절 줄을 들고 있다가, 다음 `cueprecise_subtitle` 호출에서 그 줄과 사유만
+  다시 보여준다(`_packet_terms_retry`). 재시도 라운드는 새 S/C 묶음을 보여준
+  게 아니므로 `terms_cursor` 를 움직이지 않는다. 재시도에서도 실패하면(또는
+  응답이 없으면) 그 용어는 포기하고 커서가 다음 묶음으로 넘어간다.
+- **용어집에 들린 표기(`heard`)**: 교정 용어는 근거 S들의 Gemini 원형을
+  `heard` 로 저장하고, `[용어집]` 줄에 `ConvNetJS=ConvNetJS (원고 표기:
+  combine JS)` 처럼 덧붙인다. 번역 시 용어 일관성 검사(`terms` flag)도 원문에
+  `src` 또는 `heard` 중 하나가 있으면 `tgt` 를 요구하도록 넓혔다. 이미
+  확정된 실전 용어 39개는 이 필드가 생기기 전에 만들어져 `heard` 가 비어
+  있다 — 소급 채움은 하지 않았다(다시 확정하지 않는 한 자연스럽게 빈 채로
+  남는다. 기능 자체엔 지장 없다).
+- **문장 병합(`<번호>|=`)**: 문장이 중간에 끊겨 한국어 어순상 다음 문장과
+  합쳐야만 옮길 수 있는 경우를 지원한다. `_apply_translate` 가 응답을 오름
+  차순으로 두 번 훑는다 — 1차로 `=` 선언을 사슬(11←12←13, "바로 앞 번호"가
+  이번 응답에 있거나 이미 저장돼 있어야 유효)로 정리하고, 2차로 일반 번역
+  줄을 저장하면서 자신이 사슬의 뿌리면 마지막 조각 끝을 사슬 마지막 문장
+  끝까지 늘린다(`extended_end`). `/+n` 은 "n 번째 병합 문장의 시작 시각"을
+  가리키는 새 넘김 표기로, 기존 `/k`(문장 자신의 숨 지점)와 한 줄에 섞어 쓸
+  수 있다 — `_parse_translate_line` 이 `/(\+?\d+)` 로 토큰만 뽑고,
+  `_resolve_break_times` 가 그 문장이 알고 있는 숨 지점 목록과 병합 문장
+  시작 목록 중 알맞은 쪽에서 시각을 찾아 증가 순서를 검증한다. 병합된
+  문장은 `lines[key] = {"ko": null, "state": "ok", "merged_into": <root key>}`
+  로 저장하고, `viewer_payload` 는 이 문장을 `ko=null, merged_into=<key>` 로
+  내보내 목록에서 앞 문장과 묶여 보이게 한다. 대상이 없는 병합 선언은 다른
+  구조 거절과 같은 `MAX_REJECTS` 규칙을 탄다. 패킷 `instructions`/
+  `response_format` 에 한 줄씩 설명을 추가했다.
+  - **범위를 좁힌 곳**: review phase 는 병합 선언을 받지 않는다(그 phase는
+    이미 저장된 개별 줄만 다시 검증하는 구조라 사슬 재구성 비용이 크다).
+    review 중 `=` 를 보내면 "번역이 비었다"로 구조 거절될 뿐 크래시는 안
+    난다. 또한 병합 선언이 root 번역과 **다른 배치/호출**에서 뒤늦게
+    도착하면(즉 root 가 이미 저장된 뒤) segments 의 마지막 끝은 소급해서
+    늘리지 않는다 — 번역 배치는 보통 여러 문장을 한 번에 묶어 보여주므로
+    (실측 기준 58문장/배치) 실제로는 root 와 병합 선언이 같은 응답에
+    함께 오는 경우가 대부분이라 영향이 작다.
+- **덤(요청엔 없었지만 발견) `_last_result` 누수**: `apply_response` 가
+  `state.pop("_last_result")` 를 파일을 쓴 **뒤에** 메모리에서만 지우고
+  있어, 매 응답의 accepted/rejected 스크래치 값이 `ko.json` 에 그대로
+  쌓이고 있었다. `_mutate_state` 가 쓰기 직전에 그 키를 뺀 사본을 쓰도록
+  고쳤다. 동작은 그대로고 파일만 깨끗해진다.
+
+### 테스트·스모크
+
+새 테스트 11개(`TermCorrectionCaseTests`, `TermsRetryTests`,
+`GlossaryHeardTests`, `MergeLineTests`) 추가. 전체
+`python -m pytest -q tests` **580 passed** (569 + 11). 실전 데이터
+복사본(`XdbpCM4yGyE`, 39개 용어 그대로 유지)으로: terms_done 그대로 읽힘 →
+translate 로 진입 → 첫 배치 58문장 확인 → `<번호>|=` 와 `/+1` 스모크 성공
+(merged_into, segments 연장, viewer_payload 반영 확인). 스모크 후 복사본은
+삭제했고, 원본 `data/XdbpCM4yGyE/translations/ko.json` 은 크기·용어 수
+(39개) 그대로 확인해 손대지 않았음을 검증했다.
+
+
+## 2026-09-17 · 실측(68분 강연 번역)에서 드러난 결함 수정
+
+**측정.** `XdbpCM4yGyE` 934문장을 호스트(Opus)로 끝까지 번역했다. 용어 확정 약 2분,
+번역 19묶음 약 14분(묶음당 약 40초, 서버 처리 0.6~0.8초), 재검토 6패킷. 재생 속도의
+약 5배라 요청 직후 재생을 시작해도 번역이 앞선다. 속도용 Gemini 번역 경로는 두지 않는다.
+
+**고친 것.**
+- 붙은 '?' 를 자신없음 표시로 읽어 의문문 물음표를 지우던 파서. 공백 뒤 홀로 선 ' ?' 만 인정.
+- 첫 review 응답이 일관성 검사에 밀려 조용히 버려지던 흐름. 검사는 translate 가 끝날 때
+  돈다. 재검토 대상이 아닌 줄은 rejected 로 알린다.
+- 말투 검사 오탐. 인용문·의문문·'~죠/까요/세요/네요' 는 판정하지 않는다.
+- 읽기 속도 오탐. 1.5초 미만 발화와 3자 이하 초과는 표시하지 않는다.
+- 옛 규칙의 pace/style 표시는 로드 시 `flags_revision` 으로 한 번 재평가한다.
+- review 패킷의 (현재 번역)에 넘김 표시를 되살린다. 병합 루트 줄은 review 에서도 사슬을 유지한다.
+- `/+n.k` — 병합된 문장 안의 숨 지점.
+- 용어의 한 단어만 걸린 의심 표기는 heard 에 넣지 않는다.
+- 뷰어: 병합된 문장이 영어 큐를 따로 만들어 앞 문장 한국어를 덮던 문제, 목록에 '영어' 로
+  보이던 문제, 해설 줄이 최신이 맨 위로 쌓이던 문제.
+
+**남은 것.** 품질 보고의 교정 목록이 heard 필터와 무관하게 첫 S 근거를 교정으로 센다
+(MinGPT->minGPT 같은 대소문자 차이 포함). 전체화면·실제 재생 중 해설 타이밍은 자동화
+브라우저 탭이 백그라운드라 재생이 안 돼 사람이 확인해야 한다.

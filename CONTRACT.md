@@ -1,7 +1,8 @@
 # CONTRACT
 
-에이전트는 이 파일을 수정하지 않는다. 변경은 사람만 한다.
-변경이 필요하면 `DECISIONS/<자기이름>.md`에 근거를 적고 사람의 판단을 기다린다.
+**2026-09-17 개정.** 소유자가 claude 에게 이 파일의 수정 권한을 상시 위임했다.
+claude 는 필요할 때 이 파일을 고치고, 고친 이유를 `DECISIONS/claude.md` 에 남긴다.
+다른 에이전트는 여전히 수정하지 않는다.
 
 **2026-08-30 개정.** codex 가 토큰 한도로 중단됐다. 프로젝트 소유자가 claude
 에게 전권을 위임했고, 이 파일의 개정 권한도 함께 위임했다. 아래 소유권 표를
@@ -40,6 +41,8 @@
 | `tests/test_chapters.py`, `tests/test_summary.py`, `tests/test_mcp_server.py` | claude | 읽기만 |
 | `src/locking.py` | claude | 읽기만 |
 | `tests/test_locking.py` | claude | 읽기만 |
+| `src/subtitle.py`, `src/viewer.py` | claude | 읽기만 |
+| `tests/test_subtitle.py`, `tests/test_viewer.py` | claude | 읽기만 |
 
 남의 파일은 고치지 않는다. 문제를 발견하면 자기 `DECISIONS` 파일에 적는다.
 
@@ -411,6 +414,8 @@ data/<video_id>/
     output.srt        선택 (render)
     output.txt        선택 (render)
   index.sqlite3       transcript/chapter/frame 색인 + 요약
+  translations/
+    <lang>.json       호스트 번역 자막 (16절)
 ```
 
 - 위 구조는 **가능한 산출물의 전체 목록**이다. "선택"으로 표시한 것은 기본
@@ -473,6 +478,7 @@ data/<video_id>/
 - 내용 질의 및 근거 span/frame 반환
 - 특정 내용/시각의 자막과 프레임 조회
 - derived 재생성 및 명시적 영상 자료 삭제
+- 번역 자막 작업 패킷 조회와 호스트 번역 저장 (16절)
 
 최종 acceptance:
 
@@ -650,3 +656,35 @@ data/<video_id>/
 
 - `pyproject.toml` 의 `version` 과 `installer/cueprecise.iss` 의
   `MyAppVersion` 은 항상 같아야 한다. `tests/test_naming.py` 가 검사한다.
+
+## 16. 번역 자막과 뷰어
+
+영어 강연을 한국어 자막으로 보게 한다. 전사는 기존 Gemini 경로를 쓰고,
+번역은 호스트 에이전트가 MCP 도구로 한다. 서버는 Gemini 외 LLM 을 부르지 않는다.
+
+### 보관
+
+- `translations/<lang>.json` 은 derived 가 아니다. raw 에서 재생성할 수 없으므로
+  `purge --scope derived` 가 지우지 않는다. `raw`·`all` 만 지운다.
+- 번역은 문장 키(시작·끝·원문 해시)에 붙는다. 전사나 병합이 바뀌어도 키가 같은
+  문장의 번역은 유지한다. 키를 잃은 번역은 지우지 않고 숨긴다.
+- 쓰기는 파일 잠금 안에서 원자적으로 한다. 번들 잠금(`BundleBusy`)을 쓰지 않는다.
+
+### 흐름
+
+1. 교차 대조: Gemini 전사·유튜브 자막·슬라이드 OCR 이 어긋나는 곳을 의심 목록으로 만든다.
+2. 용어 확정: 교정은 의심 목록의 근거 번호가 있을 때만 받는다.
+3. 번역: 장면 단위 묶음. 줄 단위 텍스트로 주고받는다. 자막 넘김은 원문 숨 지점과 짝짓는다.
+4. 기계 검사: 누락·한국어·숫자·용어·읽기 속도·넘김 짝.
+5. 재검토: 검사에 걸린 문장만 앞뒤 문맥과 함께. 같은 문장이 두 번 걸리면 표시만 남기고 진행한다.
+
+### 도구
+
+- `cueprecise_subtitle`, `cueprecise_set_subtitle` 두 개만 둔다.
+- 서버 상태를 요청 사이에 두지 않는다. 다음 묶음은 번역 파일에서 매번 계산한다.
+
+### 뷰어
+
+- MCP 프로세스 안의 HTTP 서버가 `127.0.0.1` 에만 연다.
+- `video_id` 는 `[A-Za-z0-9_-]{11}` 만 받는다. 번역·전사 읽기 외 파일은 내주지 않는다.
+- 뷰어는 읽기만 한다. 번역이 없는 문장은 영어로 보인다.

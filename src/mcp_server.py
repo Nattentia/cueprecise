@@ -10,6 +10,8 @@ owner: claude
   cueprecise_query        내용 질의. 근거 span/frame 과 timestamp 반환
   cueprecise_excerpt      특정 시각 구간의 자막과 프레임 조회
   cueprecise_purge        derived 재생성 및 명시적 영상 자료 삭제
+  cueprecise_subtitle       번역 자막 작업 패킷 조회 (CONTRACT.md 16절)
+  cueprecise_set_subtitle   번역 자막 응답 검증·저장, 다음 패킷 반환
 
 의존성 없이 stdlib 만으로 MCP stdio 프로토콜을 구현한다. 외부 패키지를
 새로 들이지 않는다는 합의서 7절 제약을 지키기 위해서다.
@@ -21,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -33,7 +36,9 @@ import locking
 import pipeline
 import configuration
 import credential_store
+import subtitle
 import summary as summary_mod
+import viewer
 import visual
 
 MAX_EXCERPT_CHARS = 12000
@@ -282,6 +287,48 @@ def tool_frames(bundle_root: Path, *, video_id: str,
         return pipeline.stage_visual(bundle, at=at, max_frames=max_frames)
 
 
+def _viewer_url(bundle_root: Path, video_id: str) -> str | None:
+    """뷰어 서버를 지연 시작하고 이 영상의 주소를 돌려준다. 실패하면 None.
+
+    서버를 못 열어도 자막 작업 자체는 계속돼야 하므로 예외를 삼킨다 — 뷰어는
+    2단계 부가 기능이다.
+    """
+    try:
+        base_url, _reason = viewer.ensure_server(bundle_root)
+    except Exception:  # noqa: BLE001 - 뷰어 실패가 자막 작업을 막으면 안 된다.
+        return None
+    return viewer.viewer_url_for(base_url, video_id) if base_url else None
+
+
+def tool_subtitle(bundle_root: Path, *, video_id: str | None = None, url: str | None = None,
+                  lang: str = "ko") -> dict[str, Any]:
+    """번역 자막 작업 패킷을 돌려준다 (CONTRACT.md 16절). Gemini 를 부르지 않는다."""
+    if not video_id and not url:
+        raise ToolError("video_id 또는 url 중 하나가 필요하다.")
+    if not video_id:
+        video_id = pipeline.video_id_from_url(url)
+    bundle = pipeline.bundle_path(bundle_root, video_id)
+    _transcript(bundle)  # 전사가 없으면 여기서 ToolError 로 알린다.
+    try:
+        return subtitle.build_packet(bundle, video_id=video_id, lang=lang,
+                                     viewer_url=_viewer_url(bundle_root, video_id))
+    except subtitle.SubtitleError as error:
+        raise ToolError(str(error)) from error
+
+
+def tool_set_subtitle(bundle_root: Path, *, video_id: str, phase: str, fingerprint: str,
+                      text: str, lang: str = "ko") -> dict[str, Any]:
+    """cueprecise_subtitle 패킷 응답을 검증·저장하고 다음 패킷을 돌려준다."""
+    bundle = pipeline.bundle_path(bundle_root, video_id)
+    _transcript(bundle)
+    try:
+        return subtitle.apply_response(bundle, video_id=video_id, phase=phase,
+                                       fingerprint=fingerprint, lang=lang, text=text,
+                                       viewer_url=_viewer_url(bundle_root, video_id))
+    except subtitle.SubtitleError as error:
+        raise ToolError(str(error)) from error
+
+
 TOOLS: list[dict[str, Any]] = [
     {
         "name": "cueprecise_register",
@@ -441,6 +488,35 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["video_id"],
         },
     },
+    {
+        "name": "cueprecise_subtitle",
+        "description": "영어 영상의 한국어 자막 작업 패킷을 돌려준다. 패킷의 instructions 대로 "
+                       "작성해 cueprecise_set_subtitle 에 보내고, 응답의 next 를 끝(phase done)까지 "
+                       "반복한다. 멈췄다면 다시 부르면 이어서 한다.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "video_id": {"type": "string"},
+                "url": {"type": "string", "description": "YouTube URL. video_id 대신 줄 수 있다"},
+                "lang": {"type": "string", "description": "기본 ko. 현재 ko 만 지원"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "cueprecise_set_subtitle",
+        "description": "cueprecise_subtitle 패킷에 대한 응답을 검증·저장하고 다음 패킷을 돌려준다.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "video_id": {"type": "string"},
+                "phase": {"type": "string"},
+                "fingerprint": {"type": "string"},
+                "text": {"type": "string"},
+            },
+            "required": ["video_id", "phase", "fingerprint", "text"],
+        },
+    },
 ]
 
 
@@ -538,6 +614,13 @@ def dispatch(name: str, arguments: dict[str, Any], *, bundle_root: Path,
     if name == "cueprecise_purge":
         return tool_purge(bundle_root, video_id=arguments["video_id"],
                           scope=arguments.get("scope", "derived"))
+    if name == "cueprecise_subtitle":
+        return tool_subtitle(bundle_root, video_id=arguments.get("video_id"),
+                             url=arguments.get("url"), lang=arguments.get("lang", "ko"))
+    if name == "cueprecise_set_subtitle":
+        return tool_set_subtitle(bundle_root, video_id=arguments["video_id"],
+                                 phase=arguments["phase"], fingerprint=arguments["fingerprint"],
+                                 text=arguments["text"])
     raise ToolError("알 수 없는 도구: %s" % name)
 
 
@@ -658,14 +741,23 @@ def _force_utf8(*streams) -> None:
             pass
 
 
-def main() -> int:
-    import os
+def _resolve_bundle_root(raw: str) -> Path:
+    """클라이언트가 풀지 않고 넘긴 `${HOME}`·`~`·환경변수를 서버에서 푼다.
 
+    Claude Desktop(MSIX 2.110)은 manifest user_config 기본값의 `${HOME}` 을
+    치환하지 않고 글자 그대로 넘긴다.
+    """
+    home = str(Path.home())
+    text = raw.replace("${HOME}", home).replace("${USERPROFILE}", home)
+    return Path(os.path.expandvars(os.path.expanduser(text)))
+
+
+def main() -> int:
     # argparse의 --help도 비ASCII 문서를 출력하므로 파싱 전에 UTF-8로 고정한다.
     _force_utf8(sys.stdin, sys.stdout, sys.stderr)
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--bundle-root", type=Path, default=Path("data"))
+    parser.add_argument("--bundle-root", type=_resolve_bundle_root, default=Path("data"))
     args = parser.parse_args()
     try:
         api_key = credential_store.resolve()
