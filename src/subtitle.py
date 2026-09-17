@@ -1099,26 +1099,73 @@ def build_packet(bundle: Path, *, video_id: str, lang: str,
     else:
         packet = _packet_done(state, indexed, video_id)
     packet["viewer_url"] = viewer_url
+    if viewer_url:
+        # Claude Desktop 등 인앱 브라우저 패널에는 전체화면 API가 아예 없거나
+        # 막혀 있을 수 있다 — 의사 전체화면으로 대체는 하지만, 그 패널 크기
+        # 안에서만 채워진다. 진짜 전체화면을 보려면 기본 웹 브라우저로 열어야
+        # 한다는 것을 호스트에게 알린다.
+        packet["instructions"] = (
+            packet["instructions"] + " 뷰어 링크(viewer_url)는 앱 내장 브라우저 패널이 아니라 "
+            "기본 웹 브라우저에서 열어야 전체화면이 제대로 된다 — 인앱 패널 안에서는 전체화면이 "
+            "그 패널 크기로 제한된다."
+        )
     return packet
 
 
 # ---------------------------------------------------------- 응답 검증·저장
 
-_TERM_LINE_RE = re.compile(r"^T(\d+)\|(.*)$")
+_TERM_LINE_RE = re.compile(r"^T(\d+)\s*\|\s*(.*)$")
+_CODE_FENCE_RE = re.compile(r"^`{3,}")
+_TABLE_SEP_RE = re.compile(r"^\|?[\s:|-]+\|?$")
+_LIST_MARKER_RE = re.compile(r"^(?:[-*•]|\d+\.)\s+")
 
 
-def _parse_terms(text: str) -> list[tuple[int, list[str]]]:
-    parsed = []
+def _strip_markdown_decoration(raw_line: str) -> str | None:
+    """마크다운 장식(목록 기호·굵게·인라인 코드·표 칸)을 벗긴다.
+
+    무시해도 되는 줄(빈 줄, 코드펜스 구분선 ```` ``` ````, 표 구분선 `|---|`)이면
+    `None`. 그 외에는 장식만 벗긴 내용을 돌려준다 — 벗기고 나서도 형식이 안 맞으면
+    호출부가 그 사실을 거절로 보고할 수 있도록, 여기서는 조용히 버리지 않는다.
+    """
+    line = raw_line.strip()
+    if not line:
+        return None
+    if _CODE_FENCE_RE.match(line):
+        return None
+    if "-" in line and _TABLE_SEP_RE.match(line):
+        return None
+    line = _LIST_MARKER_RE.sub("", line, count=1).strip()
+    line = line.replace("**", "").strip()
+    line = line.strip("`").strip()
+    if line.startswith("|"):
+        line = line[1:]
+    if line.endswith("|"):
+        line = line[:-1]
+    return line.strip()
+
+
+def _parse_terms(text: str) -> tuple[list[tuple[int, list[str]]], list[str]]:
+    """T<n>|원어|번역어|짧은해설|긴설명|근거 줄을 관대하게 파싱한다.
+
+    목록 기호(`-`,`*`,`•`,`1.`)·굵게(`**`)·인라인 코드(백틱)·표 칸(양끝 `|`)은
+    벗기고 읽는다. 코드펜스 구분선과 표 구분선(`|---|`)은 무시한다(거절이
+    아니다). 그 외 비어 있지 않은 줄이 그래도 `T<n>|...` 로 안 읽히면 둘째
+    반환값(`unmatched`)에 원본 형태로 담아 호출부가 거절로 보고하게 한다.
+    """
+    parsed: list[tuple[int, list[str]]] = []
+    unmatched: list[str] = []
     for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
+        line = _strip_markdown_decoration(raw_line)
+        if line is None:
             continue
         match = _TERM_LINE_RE.match(line)
         if not match:
+            if line:
+                unmatched.append(line)
             continue
-        fields = match.group(2).split("|")
+        fields = [field.strip() for field in match.group(2).split("|")]
         parsed.append((int(match.group(1)), fields))
-    return parsed
+    return parsed, unmatched
 
 
 MAX_SHORT_EXPLANATION_CHARS = 16
@@ -1166,7 +1213,8 @@ def _apply_terms(bundle: Path, state: dict[str, Any], words: list[dict[str, Any]
     is_retry_round = bool(state.get("terms_pending_retry"))
     accepted, rejected = [], []
     terms = list(state.get("terms") or [])
-    for number, fields in _parse_terms(text):
+    parsed_terms, unmatched_lines = _parse_terms(text)
+    for number, fields in parsed_terms:
         term_id = f"T{number}"
         if len(fields) < 5:
             rejected.append({"line": term_id, "reason": "필드 수가 부족하다"})
@@ -1214,8 +1262,25 @@ def _apply_terms(bundle: Path, state: dict[str, Any], words: list[dict[str, Any]
         accepted.append(term_id)
     state["terms"] = terms
 
+    for line in unmatched_lines:
+        # 형식이 아예 안 맞아 T<n> 조차 못 읽은 줄 — 조용히 버리지 않고 거절로
+        # 보고한다. id 가 없으니 원본 줄 자체를 식별자로 쓴다.
+        rejected.append({"line": line[:120],
+                         "reason": "형식이 맞지 않는다: T<n>|원어|번역어|짧은해설|긴설명|근거"})
+
+    # 응답에 뭔가 글자는 있었는데(공백뿐이 아니었는데) T<n>|... 로 읽히는 줄이
+    # 하나도 없었다 — 형식이 전부 어긋난 응답이다. 이럴 땐 커서를 전진시키지
+    # 않는다: 같은 묶음을 다음 호출에도 그대로 다시 보여줘야 호스트가 형식을
+    # 고쳐 다시 시도할 수 있다. (빈 응답은 정상적인 "이번 묶음엔 없음" 의미라
+    # 여기 해당하지 않는다.)
+    stalled = (not is_retry_round) and bool(text.strip()) and not parsed_terms
+
     if is_retry_round:
         # 재시도는 한 번뿐이다 — 이번에도 거절되면 그냥 포기하고 넘어간다.
+        state["terms_pending_retry"] = []
+    elif stalled:
+        # 개별 줄 재시도(terms_pending_retry)가 아니라 같은 묶음을 통째로 다시
+        # 보여준다 — 고칠 T번호 자체를 하나도 못 건졌기 때문이다.
         state["terms_pending_retry"] = []
     elif rejected:
         # 거절된 줄만 다음 패킷에 다시 보여준다(딱 한 번).
@@ -1223,7 +1288,7 @@ def _apply_terms(bundle: Path, state: dict[str, Any], words: list[dict[str, Any]
     else:
         state["terms_pending_retry"] = []
 
-    if not is_retry_round:
+    if not is_retry_round and not stalled:
         # 이번에 보여준 새 묶음만큼 커서를 전진시킨다 — 같은 의심·후보를 두 번
         # 보여주지 않는다. 재시도 라운드는 새 묶음을 보여준 게 아니므로 커서를
         # 움직이지 않는다. 응답에 등장하지 않은 S/C 번호는(그 묶음에 있었더라도)
@@ -1241,8 +1306,16 @@ def _apply_terms(bundle: Path, state: dict[str, Any], words: list[dict[str, Any]
     cursor = state.get("terms_cursor") or {"suspects": 0, "candidates": 0}
     exhausted = (cursor["suspects"] >= len(evidence["suspects"])
                 and cursor["candidates"] >= len(evidence["candidates"]))
-    state["terms_done"] = exhausted and not state["terms_pending_retry"]
-    state["_last_result"] = {"accepted": accepted, "rejected": rejected}
+    state["terms_done"] = exhausted and not state["terms_pending_retry"] and not stalled
+
+    note = None
+    if text.strip() and not accepted:
+        if stalled:
+            note = ("이번 응답에서 형식에 맞는 용어 줄(T<n>|...)을 하나도 찾지 못했다 — "
+                    "저장된 용어 없음(accepted 0건). 같은 묶음을 다시 보여준다.")
+        else:
+            note = "이번 응답에서 저장된 용어가 없다(accepted 0건) — rejected 사유를 확인하라."
+    state["_last_result"] = {"accepted": accepted, "rejected": rejected, "note": note}
     return state
 
 
@@ -1413,13 +1486,17 @@ def _pace_exceeded(segment: str, duration: float, sentence_secs: float) -> bool:
     return chars > duration * READ_CPS * 1.2 + PACE_SLACK_CHARS
 
 
-_LINE_NO_RE = re.compile(r"^(\d+)\|(.*)$")
+_LINE_NO_RE = re.compile(r"^(\d+)\s*\|\s*(.*)$")
 
 
 def _parse_numbered_lines(text: str) -> dict[int, str]:
+    """<번호>|번역 줄을 읽는다. 목록 기호·굵게·인라인 코드·표 칸 장식은 벗기고 읽는다
+    (`_strip_markdown_decoration`, terms 단계와 같은 완화 규칙). 문법 자체(꺾쇠 표시
+    `/k`, `/+n`, ' ?')는 바꾸지 않는다 — 여전히 안 읽히는 줄은 조용히 버린다(번호가
+    응답에 없는 문장은 다음 패킷에 다시 나오므로 여기서 거절을 만들 필요가 없다)."""
     result = {}
     for raw_line in text.splitlines():
-        line = raw_line.strip()
+        line = _strip_markdown_decoration(raw_line)
         if not line:
             continue
         match = _LINE_NO_RE.match(line)
@@ -1691,7 +1768,8 @@ def apply_response(bundle: Path, *, video_id: str, phase: str, fingerprint: str,
     next_packet = build_packet(bundle, video_id=video_id, lang=lang, viewer_url=viewer_url)
     return {
         "video_id": video_id, "phase": phase, "accepted": result.get("accepted", []),
-        "rejected": result.get("rejected", []), "progress": _progress(state, indexed),
+        "rejected": result.get("rejected", []), "note": result.get("note"),
+        "progress": _progress(state, indexed),
         "next": next_packet,
     }
 
