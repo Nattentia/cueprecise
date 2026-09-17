@@ -56,11 +56,12 @@ MANAGED_COMMANDS = {"cueprecise-mcp", "cueprecise-mcp.exe"}
 SECRET_ENV_NAMES = ("GEMINI_API_KEY",)
 
 REDACTED = "***"
-# 값을 모르는 자리에서 쓰는 그물. `AIza` 로 시작하는 옛 Google API 키를 잡는다.
-# **이것만 믿으면 안 된다.** 2026 년부터 발급되는 Google Auth 키는 이 접두사를
-# 쓰지 않아 이 그물에 걸리지 않는다. 그래서 `mask_secrets` 는 값을 아는 자리에서
-# 값 자체를 함께 받아 지운다. 생김새는 마지막 보루일 뿐이다.
-SECRET_PATTERN = re.compile(r"AIza[0-9A-Za-z_-]{30,}")
+# 값을 모르는 자리에서 쓰는 그물. `AIza` 로 시작하는 옛 Google API 키와, 2026
+# 년부터 발급되는 `AQ.` 로 시작하는 새 Google Auth 키를 잡는다.
+# **이것만 믿으면 안 된다.** 아직 알려지지 않은 세 번째 모양이 나오면 이 그물에도
+# 걸리지 않는다. 그래서 `mask_secrets` 는 값을 아는 자리에서 값 자체를 함께 받아
+# 지운다. 생김새는 마지막 보루일 뿐이다.
+SECRET_PATTERN = re.compile(r"AIza[0-9A-Za-z_-]{30,}|AQ\.[A-Za-z0-9_.-]{20,}")
 
 
 def mask_secrets(text: str, *secrets: str | None) -> str:

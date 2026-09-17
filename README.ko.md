@@ -59,10 +59,11 @@ Claude에서는 응답의 타임스탬프를 누르면 해당 시점부터 YouTu
 
 > **Windows 스마트 앱 컨트롤:** v0.2.5는 스마트 앱 컨트롤이 켜진 PC에서
 > `[WinError 4551] 애플리케이션 제어 정책에서 이 파일을 차단했습니다` 오류로 막혔습니다.
-> `v0.2.6`부터 Claude Desktop 확장 프로그램은 널리 쓰이는 실행 파일(공식 Python 임베디드
+> v0.2.6부터 Claude Desktop 확장 프로그램은 널리 쓰이는 실행 파일(공식 Python 임베디드
 > 패키지와 수정하지 않은 FFmpeg 정식 빌드)만 담아 스마트 앱 컨트롤이 켜진 상태에서도
-> 동작합니다. `cueprecise-setup.exe`는 아직 차단될 수 있어 수정 중입니다. 이 문제를 피하려고
-> 스마트 앱 컨트롤을 끄지는 마세요.
+> 동작합니다. `v0.2.7`부터는 다른 AI 앱용 설치 파일도 서명되지 않은 실행 파일 대신 같은
+> 방식의 압축 파일(zip)로 배포해 같은 문제를 해결했습니다. 현재 알려진 스마트 앱 컨트롤
+> 문제는 없습니다.
 
 가장 간단한 경로는 Windows용 Claude Desktop 확장 프로그램입니다.
 
@@ -76,7 +77,7 @@ Claude에서는 응답의 타임스탬프를 누르면 해당 시점부터 YouTu
 이 파일 하나에 CuePrecise 서버, 내장 Python, yt-dlp, FFmpeg, FFprobe가 함께 들어 있습니다.
 약 95MiB이며 Python, Git, 별도 명령어 입력이 필요 없습니다. 현재 이 확장 프로그램은
 Windows용 Claude Desktop에서 사용할 수 있습니다. 다른 지원 앱에는 같은 Releases의
-cueprecise-setup.exe를 사용합니다.
+cueprecise-windows.zip을 사용합니다.
 
 두 Windows 배포 파일에는 아직 디지털 서명이 없습니다. 반드시 이 저장소의 Releases에서
 내려받고, 필요하면 SHA256SUMS.txt로 파일을 확인하세요.
@@ -176,18 +177,23 @@ stdio MCP 서버이기 때문입니다.
 
 ### Windows의 다른 AI 앱
 
-1. [Releases](https://github.com/Nattentia/cueprecise/releases)에서 cueprecise-setup.exe를
-   내려받아 실행합니다.
-2. 설치 화면에서 **API 키 만들기**를 누르고 Google AI Studio에서 만든 키를 붙여넣습니다.
-3. 연결할 AI 앱을 선택하고 **연결하기**를 누릅니다.
+1. [Releases](https://github.com/Nattentia/cueprecise/releases)에서
+   cueprecise-windows.zip을 내려받습니다.
+2. 압축을 풀고 `CuePrecise 설치.cmd`를 더블클릭합니다. Windows가 실행을 확인하는
+   창을 띄울 수 있습니다.
+3. Google AI Studio에서 만든 [Gemini API 키](https://aistudio.google.com/api-keys)를
+   붙여넣고, 연결할 AI 앱을 고릅니다.
 4. 연결이 끝나면 선택한 AI 앱을 완전히 껐다가 다시 켭니다.
+
+AI 앱이 직접 대화형 입력 없이 스크립트를 실행할 수도 있습니다. 예:
+`CuePrecise 설치.cmd --api-key-stdin --targets claude-desktop,codex`.
 
 Python이나 Git을 설치할 필요가 없습니다. Windows에서는 API 키를 현재 사용자만
 풀 수 있도록 DPAPI로 암호화합니다. 기존 설정은 백업한 뒤 CuePrecise 항목만
 추가하며, 예전 버전이 평문으로 저장했던 키도 업그레이드할 때 암호화 저장소로
 옮깁니다.
 
-현재 `v0.2.6` 배포 파일은 서명되지 않은 시험판입니다. Windows에서 알 수 없는 게시자
+현재 `v0.2.7` 배포 파일은 서명되지 않은 시험판입니다. Windows에서 알 수 없는 게시자
 경고가 나타날 수 있으므로 이 저장소의 Releases에서 받은 파일만 사용하세요.
 
 ### macOS·Linux 또는 명령어 설치

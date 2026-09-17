@@ -130,10 +130,11 @@ report. Translation uses your AI client, not an extra Gemini call.
 
 > **Windows Smart App Control:** v0.2.5 was blocked on PCs where Smart App Control is on
 > (`[WinError 4551] An Application Control policy has blocked this file`). Starting with
-> `v0.2.6`, the Claude Desktop extension ships only widely used runtime files (the official
+> v0.2.6, the Claude Desktop extension ships only widely used runtime files (the official
 > Python embeddable package and an unmodified FFmpeg release build) and runs with Smart App
-> Control on. `cueprecise-setup.exe` can still be blocked; a fix is in progress. Please do not
-> turn off Smart App Control to work around this.
+> Control on. `v0.2.7` ships the other AI clients installer the same way, as a plain zip
+> instead of an unsigned installer executable. There is no remaining known Smart App Control
+> issue.
 
 ### Claude Desktop on Windows — one-file extension
 
@@ -150,19 +151,22 @@ available for Claude Desktop on Windows.
 ### Other AI clients on Windows
 
 1. Open [Releases](https://github.com/Nattentia/cueprecise/releases) and download
-   `cueprecise-setup.exe`.
-2. Run the installer, click **Create API key**, and paste a key from
-   [Google AI Studio](https://aistudio.google.com/api-keys).
-3. Select the AI clients found on your computer and click **Connect**.
+   `cueprecise-windows.zip`.
+2. Extract the zip and double-click `CuePrecise 설치.cmd`. Windows may ask you to confirm
+   running it.
+3. Paste a Gemini API key from [Google AI Studio](https://aistudio.google.com/api-keys) when
+   asked, then pick the AI clients found on your computer.
 4. Fully quit and reopen the connected clients.
 
-The installer checks for FFmpeg and FFprobe and installs FFmpeg through WinGet when it is
-missing. It adds only the CuePrecise entry and backs up existing configuration when it can do
-so safely; a secret-bearing Codex TOML may be left without a backup to avoid copying the key.
+An AI client can also run the script non-interactively instead of walking through the
+prompts, for example `CuePrecise 설치.cmd --api-key-stdin --targets claude-desktop,codex`.
+
+It adds only the CuePrecise entry and backs up existing configuration when it can do so
+safely; a secret-bearing Codex TOML may be left without a backup to avoid copying the key.
 On Windows, the API key is encrypted with Windows DPAPI for the current user. Older plaintext
 CuePrecise keys are moved into the protected store during an upgrade.
 
-> **Unsigned preview:** `v0.2.6` is not digitally signed, so Windows may show an
+> **Unsigned preview:** `v0.2.7` is not digitally signed, so Windows may show an
 > unknown-publisher warning. Download it only from this repository's Releases page and
 > verify `SHA256SUMS.txt` if you want to check the file before installing it.
 
