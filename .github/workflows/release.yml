@@ -78,7 +78,7 @@ jobs:
           EXPECTED: ${{ needs.build.outputs.sha256 }}
         run: |
           cd artifacts
-          actual="$(sha256sum cueprecise-setup.exe | cut -d ' ' -f 1)"
+          actual="$(sha256sum cueprecise-windows.zip | cut -d ' ' -f 1)"
           if [ "$actual" != "$EXPECTED" ]; then
             echo "::error::설치 프로그램 해시가 빌드 결과와 다르다 (빌드 $EXPECTED, 받은 파일 $actual)"
             exit 1
@@ -88,7 +88,7 @@ jobs:
             echo "::error::Claude MCPB 해시가 빌드 결과와 다르다"
             exit 1
           fi
-          printf '%s  cueprecise-setup.exe\n%s  cueprecise-windows.mcpb\n' "$actual" "$mcpb_actual" > SHA256SUMS.txt
+          printf '%s  cueprecise-windows.zip\n%s  cueprecise-windows.mcpb\n' "$actual" "$mcpb_actual" > SHA256SUMS.txt
           cat SHA256SUMS.txt
       # --draft: 확인하고 Publish 를 누르기 전까지 태그도, 공개도 없다.
       # --prerelease: 코드 서명 심사가 끝나면 이 줄을 뺀다.
@@ -103,7 +103,7 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "CuePrecise $TAG" \
             --generate-notes \
-            artifacts/cueprecise-setup.exe \
+            artifacts/cueprecise-windows.zip \
             artifacts/cueprecise-windows.mcpb \
             artifacts/SHA256SUMS.txt
           echo "### 초안 릴리스를 만들었다: $TAG" >> "$GITHUB_STEP_SUMMARY"
