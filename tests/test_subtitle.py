@@ -381,6 +381,18 @@ class TermsPaginationTests(unittest.TestCase):
         _write_json(bundle / "raw" / "captions.json", {"cues": cues})
         return bundle
 
+    @staticmethod
+    def _shown_ids(packet_text: str) -> list[str]:
+        """패킷 본문에서 보여준 S<n>/C<n> id 줄만 뽑는다(규칙·제목 줄은 제외)."""
+        ids = []
+        for line in packet_text.splitlines():
+            if "|" not in line:
+                continue
+            token = line.split("|", 1)[0].strip()
+            if len(token) >= 2 and token[0] in "SC" and token[1:].isdigit():
+                ids.append(token)
+        return ids
+
     def test_terms_phase_spans_multiple_packets_without_truncation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             bundle = self._bundle_with_many_suspects(Path(directory), 400)
@@ -397,11 +409,15 @@ class TermsPaginationTests(unittest.TestCase):
             while packet["phase"] == "terms":
                 guard += 1
                 self.assertLess(guard, total_suspects + 20, "terms phase 가 끝나지 않는다")
-                for line in packet["packet"].splitlines():
-                    if line.startswith("S") and "|" in line:
-                        seen_ids.add(line.split("|")[0].strip())
+                shown = self._shown_ids(packet["packet"])
+                for token in shown:
+                    if token.startswith("S"):
+                        seen_ids.add(token)
+                # 이번 패킷에 실린 항목 전부를 명시적으로 건너뛴다 — 빈 응답은
+                # 더 이상 커서를 전진시키지 않는다(결정이 있어야 한다).
+                text = "\n".join(f"{token}|-" for token in shown)
                 result = subtitle.apply_response(bundle, video_id="vid", phase="terms",
-                                                 fingerprint=fingerprint, text="")
+                                                 fingerprint=fingerprint, text=text)
                 packet = result["next"]
                 fingerprint = packet["fingerprint"]
             state = subtitle.load_state(bundle, "ko")
@@ -588,6 +604,146 @@ class TermsCursorStallTests(unittest.TestCase):
                 bundle, video_id="vid", phase="terms", fingerprint=result["next"]["fingerprint"],
                 text=f"T1|PyTorch|파이토치|-|-|{suspect_id}")
             self.assertEqual(retry["accepted"], ["T1"])
+
+
+class TermsExplicitDecisionTests(unittest.TestCase):
+    """모든 S/C 항목에 명시적 결정이 필요하다는 새 규칙의 회귀 테스트."""
+
+    def _bundle_with_suspects(self, root: Path, count: int) -> Path:
+        bundle = root / "vid"
+        words = []
+        cues = []
+        t = 0.0
+        for i in range(count):
+            words.append(_word("by", t, t + 0.1))
+            words.append(_word(f"torch{i}", t + 0.1, t + 0.3))
+            cues.append({"start": t, "end": t + 0.3, "text": f"PyTorchVariant{i}"})
+            t += 5.0
+        words.append(_word("End.", t, t + 0.3))
+        _write_json(bundle / "derived" / "transcript.json",
+                   {"video_id": "vid", "words": words})
+        _write_json(bundle / "raw" / "captions.json", {"cues": cues})
+        return bundle
+
+    def test_skip_line_counts_as_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle_with_suspects(Path(directory), 1)
+            packet = subtitle.build_packet(bundle, video_id="vid", lang="ko")
+            state = subtitle.load_state(bundle, "ko")
+            sid = state["evidence"]["suspects"][0]["id"]
+            result = subtitle.apply_response(
+                bundle, video_id="vid", phase="terms", fingerprint=packet["fingerprint"],
+                text=f"{sid}|-")
+            self.assertIn(sid, result["accepted"])
+            self.assertEqual(result["rejected"], [])
+            state = subtitle.load_state(bundle, "ko")
+            self.assertIn(sid, state["terms_decided"])
+            self.assertEqual(state["terms_cursor"]["suspects"], 1)
+            self.assertEqual(result["next"]["phase"], "translate")
+
+    def test_term_line_evidence_counts_as_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle_with_suspects(Path(directory), 1)
+            packet = subtitle.build_packet(bundle, video_id="vid", lang="ko")
+            state = subtitle.load_state(bundle, "ko")
+            sid = state["evidence"]["suspects"][0]["id"]
+            result = subtitle.apply_response(
+                bundle, video_id="vid", phase="terms", fingerprint=packet["fingerprint"],
+                text=f"T1|PyTorch|파이토치|-|-|{sid}")
+            self.assertEqual(result["accepted"], ["T1"])
+            state = subtitle.load_state(bundle, "ko")
+            self.assertIn(sid, state["terms_decided"])
+            self.assertEqual(result["next"]["phase"], "translate")
+
+    def test_partial_decision_advances_only_contiguous_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle_with_suspects(Path(directory), 3)
+            packet = subtitle.build_packet(bundle, video_id="vid", lang="ko")
+            state = subtitle.load_state(bundle, "ko")
+            suspects = state["evidence"]["suspects"]
+            self.assertEqual(len(suspects), 3)
+            s1, s2, s3 = (s["id"] for s in suspects)
+            # s1, s3만 결정한다(s2는 비워둔다) — 맨 앞부터 이어지는 구간만 전진해야 한다.
+            result = subtitle.apply_response(
+                bundle, video_id="vid", phase="terms", fingerprint=packet["fingerprint"],
+                text=f"{s1}|-\n{s3}|-")
+            state = subtitle.load_state(bundle, "ko")
+            self.assertEqual(state["terms_cursor"]["suspects"], 1)  # s2가 막고 있다.
+            self.assertEqual(set(state["terms_decided"]), {s1, s3})
+            self.assertEqual(result["next"]["phase"], "terms")
+            self.assertIn(s2, result["next"]["packet"])
+            self.assertNotIn(s1, result["next"]["packet"])  # 이미 전진한 s1은 다시 안 보인다.
+
+            # s2까지 결정하면 이미 결정돼 있던 s3까지 한 번에 이어서 전진한다.
+            result2 = subtitle.apply_response(
+                bundle, video_id="vid", phase="terms", fingerprint=result["next"]["fingerprint"],
+                text=f"{s2}|-")
+            state = subtitle.load_state(bundle, "ko")
+            self.assertEqual(state["terms_cursor"]["suspects"], 3)
+            self.assertEqual(result2["next"]["phase"], "translate")
+
+    def test_empty_response_does_not_advance_and_notes_undecided_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle_with_suspects(Path(directory), 1)
+            packet = subtitle.build_packet(bundle, video_id="vid", lang="ko")
+            state = subtitle.load_state(bundle, "ko")
+            sid = state["evidence"]["suspects"][0]["id"]
+            result = subtitle.apply_response(
+                bundle, video_id="vid", phase="terms", fingerprint=packet["fingerprint"], text="")
+            self.assertEqual(result["accepted"], [])
+            self.assertEqual(result["next"]["phase"], "terms")
+            self.assertIsNotNone(result["note"])
+            self.assertIn(sid, result["note"])
+            state = subtitle.load_state(bundle, "ko")
+            self.assertEqual(state["terms_cursor"], {"suspects": 0, "candidates": 0})
+
+    def test_three_stalled_responses_auto_skip_remaining_chunk(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle_with_suspects(Path(directory), 2)
+            packet = subtitle.build_packet(bundle, video_id="vid", lang="ko")
+            fingerprint = packet["fingerprint"]
+            for _ in range(2):
+                result = subtitle.apply_response(
+                    bundle, video_id="vid", phase="terms", fingerprint=fingerprint, text="")
+                self.assertEqual(result["next"]["phase"], "terms")
+                fingerprint = result["next"]["fingerprint"]
+            state = subtitle.load_state(bundle, "ko")
+            self.assertEqual(state["terms_stall_count"], 2)
+
+            result = subtitle.apply_response(
+                bundle, video_id="vid", phase="terms", fingerprint=fingerprint, text="")
+            state = subtitle.load_state(bundle, "ko")
+            self.assertEqual(state["terms_auto_skipped"], 2)
+            self.assertEqual(state["terms_stall_count"], 0)
+            self.assertTrue(state["terms_done"])
+            self.assertEqual(result["next"]["phase"], "translate")
+            self.assertIn("건너뛰었다", result["note"])
+
+    def test_report_warns_when_zero_terms_but_suspects_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle_with_suspects(Path(directory), 1)
+            packet = subtitle.build_packet(bundle, video_id="vid", lang="ko")
+            state = subtitle.load_state(bundle, "ko")
+            sid = state["evidence"]["suspects"][0]["id"]
+            subtitle.apply_response(bundle, video_id="vid", phase="terms",
+                                    fingerprint=packet["fingerprint"], text=f"{sid}|-")
+            payload = subtitle.viewer_payload(bundle, "ko")
+            self.assertEqual(payload["report"]["terms_count"], 0)
+            self.assertEqual(len(payload["report"]["warnings"]), 1)
+            self.assertIn("용어", payload["report"]["warnings"][0])
+
+    def test_no_warning_when_terms_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle_with_suspects(Path(directory), 1)
+            packet = subtitle.build_packet(bundle, video_id="vid", lang="ko")
+            state = subtitle.load_state(bundle, "ko")
+            sid = state["evidence"]["suspects"][0]["id"]
+            subtitle.apply_response(
+                bundle, video_id="vid", phase="terms", fingerprint=packet["fingerprint"],
+                text=f"T1|PyTorch|파이토치|-|-|{sid}")
+            payload = subtitle.viewer_payload(bundle, "ko")
+            self.assertEqual(payload["report"]["terms_count"], 1)
+            self.assertEqual(payload["report"]["warnings"], [])
 
 
 class GlossaryHeardTests(unittest.TestCase):
@@ -886,3 +1042,16 @@ class ReviewPacketLimitTests(unittest.TestCase):
                     self.assertLessEqual(len(packet["packet"]), limit)
         finally:
             subtitle._flagged_unreviewed, subtitle._progress = original
+
+
+class EverydayTermGuardTests(unittest.TestCase):
+    def test_everyday_words_are_not_terms(self) -> None:
+        for word in ("is", "that's", "probably", "times", "map"):
+            self.assertTrue(subtitle._is_everyday_word(word), word)
+        for word in ("Kaplan-Meier", "censoring", "at risk", "Mantel-Haenszel", "log-rank test"):
+            self.assertFalse(subtitle._is_everyday_word(word), word)
+
+    def test_term_mentions_use_word_boundaries(self) -> None:
+        self.assertFalse(subtitle._mentions("So this is fine", "hi"))
+        self.assertFalse(subtitle._mentions("this", "is"))
+        self.assertTrue(subtitle._mentions("The Kaplan-Meier curve", "kaplan-meier"))

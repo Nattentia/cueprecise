@@ -595,6 +595,7 @@ def _default_state(*, video_id: str, lang: str, fingerprint: str,
         "sentences_fingerprint": fingerprint, "evidence": evidence,
         "terms_done": False, "terms": [], "lines": {}, "rejects": {},
         "terms_cursor": {"suspects": 0, "candidates": 0}, "terms_pending_retry": [],
+        "terms_decided": [], "terms_stall_count": 0, "terms_auto_skipped": 0,
         "consistency_done": False, "updated_at": _now_iso(),
     }
 
@@ -744,12 +745,19 @@ def _base_packet(*, video_id: str, phase: str, fingerprint: str, progress: dict[
 
 _TERMS_RULES: tuple[str, ...] = (
     "", "[규칙]",
+    "이 패킷에 실린 의심(S)·후보(C) 전부에 결정을 내려야 한다 — 하나도 빠짐없이. 결정 없는 응답(빈 "
+    "응답 포함)은 커서를 전진시키지 않고 같은 항목을 다시 보여준다.",
     "한 줄: T<n>|원어|번역어|짧은해설(<=16자, 없으면 -)|긴설명(<=50자, 없으면 -)|근거(S3,C5 또는 -)",
+    "근거에 적은 S번호·C번호는 그 항목에 대한 결정으로 처리된다.",
+    "용어로 만들 게 아니면 S<n>|- 또는 C<n>|- 한 줄로 그 항목을 건너뛴다고 밝혀라.",
+    "용어집에는 고유명사(사람·기관·제품 이름)와 전문용어만 넣는다. is, times, probably, map 같은 일상 "
+    "단어는 표기가 달라도 용어가 아니다 — S<n>|- 로 건너뛴다.",
+    "gemini 와 youtube/slide 가 다른 의심(S)이 고유명사·전문용어의 전사 오류면 교정 용어로 만들고 근거에 "
+    "그 S번호를 적어라.",
     "원어가 Gemini 원문 표기와 다르면(=교정) 근거에 S번호가 반드시 있어야 한다.",
     "번역어를 모르면 ? 를 쓴다 (원문 유지, uncertain 표시).",
     "짧은해설이 있으면 긴설명도 있어야 한다.",
-    "해설은 비전공자가 모를 전문용어에만 적는다. 농담·문화 해설은 만들지 않는다.",
-    "이 패킷에 실린 의심·후보에 대해서만 결정해도 된다 — 다음 호출이 나머지를 이어서 보여준다.",
+    "짧은해설(<=16자)·긴설명은 비전공자가 모를 전문용어에만 적는다. 농담·문화 해설은 만들지 않는다.",
 )
 
 
@@ -853,13 +861,15 @@ def _packet_terms(bundle: Path, state: dict[str, Any], indexed: Indexed,
     cursor = state.get("terms_cursor") or {"suspects": 0, "candidates": 0}
     suspect_chunk, candidate_chunk = _select_terms_chunk(title, channel, evidence, cursor)
     packet_text = _render_terms_body(title, channel, evidence, cursor, suspect_chunk, candidate_chunk)
-    instructions = ("의심 목록과 후보를 보고 용어집을 만들어라. 각 줄을 "
-                   "T<n>|원어|번역어|짧은해설|긴설명|근거 형식으로 cueprecise_set_subtitle 에 보내라. "
-                   "빈 응답이어도 된다 — 다음 호출이 나머지 의심·후보를 이어서 보여준다.")
+    instructions = ("의심 목록과 후보를 보고 용어집을 만들어라. 이 패킷에 실린 의심(S)·후보(C) 전부에 "
+                   "결정이 있어야 한다. 각 줄을 T<n>|원어|번역어|짧은해설|긴설명|근거 형식으로 만들거나, "
+                   "용어로 만들지 않을 항목은 S<n>|- 또는 C<n>|- 로 cueprecise_set_subtitle 에 보내라. "
+                   "결정이 빠진 항목이 있으면(빈 응답 포함) 같은 항목을 다시 보여준다. "
+                   "용어집에는 고유명사와 전문용어만 넣고, 일상 단어는 건너뛴다.")
     return _base_packet(video_id=video_id, phase="terms", fingerprint=state["sentences_fingerprint"],
                         progress=_progress(state, indexed), instructions=instructions,
                         packet_text=packet_text,
-                        response_format="T<n>|원어|번역어|짧은해설|긴설명|근거")
+                        response_format="T<n>|원어|번역어|짧은해설|긴설명|근거 또는 S<n>|- / C<n>|-")
 
 
 def _translate_batch_for(bundle: Path, state: dict[str, Any], indexed: Indexed
@@ -1058,8 +1068,19 @@ def _report_data(state: dict[str, Any], indexed: Indexed) -> dict[str, Any]:
     pace_ratio = (len(paced) / len(translated_lines)) if translated_lines else 0.0
     untranslated_nos = sorted(item["no"] for item in indexed.sentences
                               if (lines_state.get(item["key"]) or {}).get("state") == "untranslated")
+    terms_count = len(state.get("terms") or [])
+    terms_auto_skipped = int(state.get("terms_auto_skipped") or 0)
+    evidence = state.get("evidence") or {}
+    suspects_and_candidates = len(evidence.get("suspects") or []) + len(evidence.get("candidates") or [])
+    warnings: list[str] = []
+    if terms_count == 0 and suspects_and_candidates > 0:
+        warnings.append(
+            "의심(%d건)·후보(%d건)가 있는데 용어가 하나도 만들어지지 않았다 — terms 단계 응답을 확인하라."
+            % (len(evidence.get("suspects") or []), len(evidence.get("candidates") or [])))
     return {"corrections": corrections, "uncertain": uncertain_terms,
-            "untranslated": untranslated_nos, "speed_over_ratio": round(pace_ratio, 4)}
+            "untranslated": untranslated_nos, "speed_over_ratio": round(pace_ratio, 4),
+            "terms_count": terms_count, "terms_auto_skipped": terms_auto_skipped,
+            "warnings": warnings}
 
 
 def _packet_done(state: dict[str, Any], indexed: Indexed, video_id: str) -> dict[str, Any]:
@@ -1071,10 +1092,14 @@ def _packet_done(state: dict[str, Any], indexed: Indexed, video_id: str) -> dict
         f"문장 수: {progress['sentences']}",
         f"번역됨: {progress['translated']} / 표시됨: {progress['flagged']} / "
         f"영어로 남음: {progress['untranslated']}",
+        f"용어 수: {report['terms_count']}" +
+        (f" (자동 건너뛴 항목 {report['terms_auto_skipped']}건)" if report["terms_auto_skipped"] else ""),
         "교정 목록: " + corrections_text,
         "uncertain 용어: " + (", ".join(report["uncertain"]) if report["uncertain"] else "(없음)"),
         f"읽기 속도 초과 비율: {report['speed_over_ratio']:.1%}",
     ]
+    if report["warnings"]:
+        lines.append("경고: " + " / ".join(report["warnings"]))
     return _base_packet(video_id=video_id, phase="done", fingerprint=state["sentences_fingerprint"],
                         progress=progress, instructions="번역이 끝났다. 추가로 부를 필요 없다.",
                         packet_text="\n".join(lines), response_format="(없음)")
@@ -1117,6 +1142,7 @@ def build_packet(bundle: Path, *, video_id: str, lang: str,
 # ---------------------------------------------------------- 응답 검증·저장
 
 _TERM_LINE_RE = re.compile(r"^T(\d+)\s*\|\s*(.*)$")
+_SKIP_LINE_RE = re.compile(r"^([SC]\d+)\s*\|\s*-\s*$")
 _CODE_FENCE_RE = re.compile(r"^`{3,}")
 _TABLE_SEP_RE = re.compile(r"^\|?[\s:|-]+\|?$")
 _LIST_MARKER_RE = re.compile(r"^(?:[-*•]|\d+\.)\s+")
@@ -1146,28 +1172,60 @@ def _strip_markdown_decoration(raw_line: str) -> str | None:
     return line.strip()
 
 
-def _parse_terms(text: str) -> tuple[list[tuple[int, list[str]]], list[str]]:
-    """T<n>|원어|번역어|짧은해설|긴설명|근거 줄을 관대하게 파싱한다.
+def _parse_terms_response(text: str) -> tuple[list[tuple[int, list[str]]], list[str], list[str]]:
+    """T<n>|원어|번역어|짧은해설|긴설명|근거 줄과 S<n>|- / C<n>|- 건너뛰기 줄을 관대하게 파싱한다.
 
     목록 기호(`-`,`*`,`•`,`1.`)·굵게(`**`)·인라인 코드(백틱)·표 칸(양끝 `|`)은
     벗기고 읽는다. 코드펜스 구분선과 표 구분선(`|---|`)은 무시한다(거절이
-    아니다). 그 외 비어 있지 않은 줄이 그래도 `T<n>|...` 로 안 읽히면 둘째
+    아니다). 그 외 비어 있지 않은 줄이 그래도 둘 다로 안 읽히면 셋째
     반환값(`unmatched`)에 원본 형태로 담아 호출부가 거절로 보고하게 한다.
     """
     parsed: list[tuple[int, list[str]]] = []
+    skip_ids: list[str] = []
     unmatched: list[str] = []
     for raw_line in text.splitlines():
         line = _strip_markdown_decoration(raw_line)
         if line is None:
             continue
-        match = _TERM_LINE_RE.match(line)
-        if not match:
-            if line:
-                unmatched.append(line)
+        term_match = _TERM_LINE_RE.match(line)
+        if term_match:
+            fields = [field.strip() for field in term_match.group(2).split("|")]
+            parsed.append((int(term_match.group(1)), fields))
             continue
-        fields = [field.strip() for field in match.group(2).split("|")]
-        parsed.append((int(match.group(1)), fields))
-    return parsed, unmatched
+        skip_match = _SKIP_LINE_RE.match(line)
+        if skip_match:
+            skip_ids.append(skip_match.group(1))
+            continue
+        if line:
+            unmatched.append(line)
+    return parsed, skip_ids, unmatched
+
+
+# 용어집에 들어오면 안 되는 흔한 영어 단어. 실측에서 is/times/that's/probably/map 이
+# 용어로 들어와 번역 검사(terms 플래그)가 문장 절반을 잘못 표시했다.
+_EVERYDAY_WORDS = frozenset("""
+a an the is are was were be been being am do does did done have has had having
+it its it's this that that's these those there here what what's which who whom whose
+i you he she we they me him her us them my your his our their
+and or but so if then than because as of in on at to for from by with about into over
+not no yes can could will would shall should may might must
+time times thing things way ways day days year years people person
+probably necessarily actually really just very also only even still maybe perhaps
+map maps fare
+get got make made take took see saw say said know knew go went come came look looked
+""".split())
+
+
+def _is_everyday_word(src: str) -> bool:
+    words = re.findall(r"[A-Za-z']+", src)
+    if not words or src != src.lower():
+        return False  # 대문자가 섞이면 고유명사일 수 있다.
+    return all(word in _EVERYDAY_WORDS for word in words)
+
+
+def _mentions(text: str, form: str) -> bool:
+    """단어 경계에서 대소문자 무시로 찾는다 ('is' 가 'this' 에 걸리지 않게)."""
+    return re.search(r"(?<![A-Za-z])" + re.escape(form) + r"(?![A-Za-z])", text, re.I) is not None
 
 
 MAX_SHORT_EXPLANATION_CHARS = 16
@@ -1213,9 +1271,12 @@ def _apply_terms(bundle: Path, state: dict[str, Any], words: list[dict[str, Any]
     transcript_text = state["evidence"].get("transcript_text", "")
     gemini_pairs = _gemini_word_pairs(words)
     is_retry_round = bool(state.get("terms_pending_retry"))
+    # 구 상태 파일 호환: `terms_decided` 가 없으면 아무것도 결정되지 않은 것으로 본다.
+    decided_before = set(state.get("terms_decided") or [])
+    decided = set(decided_before)
     accepted, rejected = [], []
     terms = list(state.get("terms") or [])
-    parsed_terms, unmatched_lines = _parse_terms(text)
+    parsed_terms, skip_ids, unmatched_lines = _parse_terms_response(text)
     for number, fields in parsed_terms:
         term_id = f"T{number}"
         if len(fields) < 5:
@@ -1224,6 +1285,10 @@ def _apply_terms(bundle: Path, state: dict[str, Any], words: list[dict[str, Any]
         src, tgt, short, note, evidence_raw = (fields + ["-"])[:5]
         src, tgt, short, note = src.strip(), tgt.strip(), short.strip(), note.strip()
         evidence_ids = [e.strip() for e in evidence_raw.split(",") if e.strip() and e.strip() != "-"]
+        if _is_everyday_word(src):
+            rejected.append({"line": term_id,
+                             "reason": "일상 단어는 용어가 아니다 — S<n>|- 로 건너뛰어라"})
+            continue
         if not src or not tgt:
             rejected.append({"line": term_id, "reason": "원어 또는 번역어가 비었다"})
             continue
@@ -1262,27 +1327,35 @@ def _apply_terms(bundle: Path, state: dict[str, Any], words: list[dict[str, Any]
                       "short": short_clean, "note": note_clean, "heard": heard,
                       "evidence": evidence_ids, "status": status, "first_t": first_t})
         accepted.append(term_id)
+        # 이 용어의 근거에 적힌 S/C 번호는 그 항목에 대한 결정으로 처리한다.
+        decided.update(e for e in evidence_ids if e in known_suspects or e in known_candidates)
     state["terms"] = terms
 
-    for line in unmatched_lines:
-        # 형식이 아예 안 맞아 T<n> 조차 못 읽은 줄 — 조용히 버리지 않고 거절로
-        # 보고한다. id 가 없으니 원본 줄 자체를 식별자로 쓴다.
-        rejected.append({"line": line[:120],
-                         "reason": "형식이 맞지 않는다: T<n>|원어|번역어|짧은해설|긴설명|근거"})
+    for sid in skip_ids:
+        if sid in known_suspects or sid in known_candidates:
+            decided.add(sid)
+            accepted.append(sid)
+        else:
+            rejected.append({"line": sid, "reason": "알 수 없는 의심·후보 번호다"})
 
-    # 응답에 뭔가 글자는 있었는데(공백뿐이 아니었는데) T<n>|... 로 읽히는 줄이
-    # 하나도 없었다 — 형식이 전부 어긋난 응답이다. 이럴 땐 커서를 전진시키지
-    # 않는다: 같은 묶음을 다음 호출에도 그대로 다시 보여줘야 호스트가 형식을
-    # 고쳐 다시 시도할 수 있다. (빈 응답은 정상적인 "이번 묶음엔 없음" 의미라
-    # 여기 해당하지 않는다.)
-    stalled = (not is_retry_round) and bool(text.strip()) and not parsed_terms
+    for line in unmatched_lines:
+        # 형식이 아예 안 맞아 T<n> 도 S<n>|-/C<n>|- 도 못 읽은 줄 — 조용히 버리지
+        # 않고 거절로 보고한다. id 가 없으니 원본 줄 자체를 식별자로 쓴다.
+        rejected.append({"line": line[:120],
+                         "reason": "형식이 맞지 않는다: T<n>|원어|번역어|짧은해설|긴설명|근거 또는 "
+                                  "S<n>|- / C<n>|-"})
+
+    # 응답에 뭔가 글자는 있었는데(공백뿐이 아니었는데) 결정으로 읽히는 줄이 하나도
+    # 없었다 — 형식이 전부 어긋난 응답이다. 개별 줄 재시도(terms_pending_retry)를
+    # 만들지 않는다 — 고칠 T번호 자체를 하나도 못 건졌기 때문이다.
+    stalled = (not is_retry_round) and bool(text.strip()) and not parsed_terms and not skip_ids
 
     if is_retry_round:
-        # 재시도는 한 번뿐이다 — 이번에도 거절되면 그냥 포기하고 넘어간다.
+        # 재시도는 한 번뿐이다 — 이번에도 거절되면 그냥 포기하고 넘어간다. 그
+        # 항목은 결정되지 않은 채 남고, 명시적 건너뛰기나 3회 정체 후 자동
+        # 건너뛰기로만 해소된다.
         state["terms_pending_retry"] = []
     elif stalled:
-        # 개별 줄 재시도(terms_pending_retry)가 아니라 같은 묶음을 통째로 다시
-        # 보여준다 — 고칠 T번호 자체를 하나도 못 건졌기 때문이다.
         state["terms_pending_retry"] = []
     elif rejected:
         # 거절된 줄만 다음 패킷에 다시 보여준다(딱 한 번).
@@ -1290,33 +1363,71 @@ def _apply_terms(bundle: Path, state: dict[str, Any], words: list[dict[str, Any]
     else:
         state["terms_pending_retry"] = []
 
-    if not is_retry_round and not stalled:
-        # 이번에 보여준 새 묶음만큼 커서를 전진시킨다 — 같은 의심·후보를 두 번
-        # 보여주지 않는다. 재시도 라운드는 새 묶음을 보여준 게 아니므로 커서를
-        # 움직이지 않는다. 응답에 등장하지 않은 S/C 번호는(그 묶음에 있었더라도)
-        # 재요청하지 않는다 — terms 단계는 "한 번 보여줌"이 기준이지 "확정"이
-        # 기준이 아니다.
-        title, channel = _video_meta(bundle)
-        evidence = state["evidence"]
-        cursor = dict(state.get("terms_cursor") or {"suspects": 0, "candidates": 0})
-        suspect_chunk, candidate_chunk = _select_terms_chunk(title, channel, evidence, cursor)
-        cursor["suspects"] += len(suspect_chunk)
-        cursor["candidates"] += len(candidate_chunk)
-        state["terms_cursor"] = cursor
-
+    # 커서는 이제 "한 번 보여줌"이 아니라 "결정됨"을 기준으로 움직인다: 이번
+    # 호출이 보여준 것과 같은 묶음(커서 위치가 안 바뀌었으므로 다시 골라도 같은
+    # 항목이다)에서, 맨 앞부터 이어지는 연속 구간이 전부 결정됐을 때만 그만큼
+    # 전진한다. 중간에 결정 안 된 항목이 있으면 그 뒤는 다음 호출에도 다시 보인다.
+    title, channel = _video_meta(bundle)
     evidence = state["evidence"]
-    cursor = state.get("terms_cursor") or {"suspects": 0, "candidates": 0}
+    cursor = dict(state.get("terms_cursor") or {"suspects": 0, "candidates": 0})
+    suspect_chunk, candidate_chunk = _select_terms_chunk(title, channel, evidence, cursor)
+    chunk_ids = [item["id"] for item in suspect_chunk] + [item["id"] for item in candidate_chunk]
+
+    def _decided_prefix(items: list[dict[str, Any]]) -> int:
+        length = 0
+        for item in items:
+            if item["id"] not in decided:
+                break
+            length += 1
+        return length
+
+    suspect_prefix = _decided_prefix(suspect_chunk)
+    candidate_prefix = _decided_prefix(candidate_chunk)
+    fully_decided_this_chunk = (suspect_prefix == len(suspect_chunk)
+                                and candidate_prefix == len(candidate_chunk))
+    newly_decided = decided - decided_before
+
+    # 무한 루프 방지: 같은 묶음이 진전 없이(이번 호출에서 그 묶음의 항목이 하나도
+    # 새로 결정되지 않고) 3회 연속되면 남은 항목을 전부 건너뛴 것으로 표시한다.
+    auto_skipped_now = 0
+    if fully_decided_this_chunk or not chunk_ids or (set(chunk_ids) & newly_decided):
+        state["terms_stall_count"] = 0
+    else:
+        stall_count = int(state.get("terms_stall_count") or 0) + 1
+        if stall_count >= 3:
+            for item in suspect_chunk + candidate_chunk:
+                if item["id"] not in decided:
+                    decided.add(item["id"])
+                    auto_skipped_now += 1
+            suspect_prefix, candidate_prefix = len(suspect_chunk), len(candidate_chunk)
+            fully_decided_this_chunk = True
+            state["terms_stall_count"] = 0
+        else:
+            state["terms_stall_count"] = stall_count
+
+    cursor["suspects"] += suspect_prefix
+    cursor["candidates"] += candidate_prefix
+    state["terms_cursor"] = cursor
+    state["terms_decided"] = sorted(decided)
+    if auto_skipped_now:
+        state["terms_auto_skipped"] = int(state.get("terms_auto_skipped") or 0) + auto_skipped_now
+
     exhausted = (cursor["suspects"] >= len(evidence["suspects"])
                 and cursor["candidates"] >= len(evidence["candidates"]))
-    state["terms_done"] = exhausted and not state["terms_pending_retry"] and not stalled
+    # 자동 건너뛰기로 완결된 경우엔 이번 응답 자체가 정체(stalled)였더라도 막지 않는다.
+    blocking_stall = stalled and not auto_skipped_now
+    state["terms_done"] = exhausted and not state["terms_pending_retry"] and not blocking_stall
 
+    undecided_ids = [cid for cid in chunk_ids if cid not in decided]
     note = None
-    if text.strip() and not accepted:
-        if stalled:
-            note = ("이번 응답에서 형식에 맞는 용어 줄(T<n>|...)을 하나도 찾지 못했다 — "
-                    "저장된 용어 없음(accepted 0건). 같은 묶음을 다시 보여준다.")
-        else:
-            note = "이번 응답에서 저장된 용어가 없다(accepted 0건) — rejected 사유를 확인하라."
+    if auto_skipped_now:
+        note = "같은 항목이 3회 연속 결정되지 않아 남은 %d건을 자동으로 건너뛰었다." % auto_skipped_now
+    elif undecided_ids:
+        note = ("다음 항목에 아직 결정이 없다: %s — 각 항목을 T<n>|원어|번역어|짧은해설|긴설명|근거 로 "
+                "용어로 만들거나, 만들지 않으려면 S<n>|- / C<n>|- 로 건너뛴다고 밝혀라." %
+                ", ".join(undecided_ids))
+    elif text.strip() and not accepted:
+        note = "이번 응답에서 저장된 용어가 없다(accepted 0건) — rejected 사유를 확인하라."
     state["_last_result"] = {"accepted": accepted, "rejected": rejected, "note": note}
     return state
 
@@ -1449,7 +1560,7 @@ def _validate_and_store_line(state: dict[str, Any], indexed: Indexed, item: dict
         if term.get("status") == "uncertain":
             continue
         source_forms = [term["src"], *(term.get("heard") or [])]
-        if any(form in item["text"] for form in source_forms) and term["tgt"] not in text:
+        if any(_mentions(item["text"], form) for form in source_forms) and term["tgt"] not in text:
             flags.append("terms")
             break
     # 넘김 구간 경계: 문장 시작 -> 실제로 쓴 숨 지점(들)의 시각 -> 문장(또는
@@ -1839,7 +1950,8 @@ def viewer_payload(bundle: Path, lang: str = "ko") -> dict[str, Any]:
         progress = {"sentences": len(indexed.sentences), "translated": 0,
                    "flagged": 0, "untranslated": 0}
         complete = False
-        report = {"corrections": [], "uncertain": [], "untranslated": [], "speed_over_ratio": 0.0}
+        report = {"corrections": [], "uncertain": [], "untranslated": [], "speed_over_ratio": 0.0,
+                  "terms_count": 0, "terms_auto_skipped": 0, "warnings": []}
 
     return {
         "video_id": video_id, "title": title, "complete": complete, "progress": progress,
