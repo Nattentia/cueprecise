@@ -113,6 +113,19 @@ That lets your AI client:
 A simulated debate is generated from the video. It is not a claim that those people actually
 discussed the new issue.
 
+### Watch with subtitles built from the same evidence
+
+When a video's captions or YouTube's automatic translation are not good enough, your AI
+client can turn the same evidence into subtitles. CuePrecise cross-checks the Gemini
+transcript against YouTube captions and on-screen text, settles technical terms first
+(for example `by torch → PyTorch`, `combine JS → ConvNetJS`), and then has your AI client
+translate the talk in small, checked batches. Numbers, terms, reading speed, and missing
+lines are checked automatically, and only flagged lines are reviewed again.
+
+The result opens in a local viewer in your browser: the YouTube player with the translated
+subtitles, a searchable script, a term list with optional short explanations, and a quality
+report. Translation uses your AI client, not an extra Gemini call.
+
 ## Quick start
 
 > **Windows Smart App Control:** v0.2.5 was blocked on PCs where Smart App Control is on
@@ -261,7 +274,7 @@ configuration message.
 
 ## MCP tools
 
-The tools fall into four groups.
+The tools fall into five groups.
 
 Analysis and status:
 
@@ -280,6 +293,11 @@ Saved results:
 - `cueprecise_summary` — create or retrieve a summary.
 - `cueprecise_set_summary` — validate and save a host-improved summary.
 - `cueprecise_set_chapter_titles` — validate and save host-written chapter titles.
+
+Subtitles:
+
+- `cueprecise_subtitle` — return the next subtitle work packet (term review, translation, or checks) and the local viewer link.
+- `cueprecise_set_subtitle` — validate and save the AI client's response, then return the next packet.
 
 Cleanup:
 
@@ -467,6 +485,8 @@ installed.
   may be needed when the host AI does not translate the query.
 - Timestamps assigned to caption-recovered words are placed inside the missing transcription gap
   and should be treated as approximate within that interval.
+- The subtitle viewer runs on this computer (`127.0.0.1`) while the MCP server is running, and
+  is designed for desktop browsers.
 
 ## Documentation
 
