@@ -750,8 +750,10 @@ _TERMS_RULES: tuple[str, ...] = (
     "한 줄: T<n>|원어|번역어|짧은해설(<=16자, 없으면 -)|긴설명(<=50자, 없으면 -)|근거(S3,C5 또는 -)",
     "근거에 적은 S번호·C번호는 그 항목에 대한 결정으로 처리된다.",
     "용어로 만들 게 아니면 S<n>|- 또는 C<n>|- 한 줄로 그 항목을 건너뛴다고 밝혀라.",
-    "gemini 표기와 youtube/slide 표기가 다른 의심(S)은 대개 전사 오류다 — 대부분 용어(교정)가 돼야 하고, "
-    "그때 근거에 그 S번호를 반드시 적어라. 진짜 용어가 아닐 때만 건너뛴다.",
+    "용어집에는 고유명사(사람·기관·제품 이름)와 전문용어만 넣는다. is, times, probably, map 같은 일상 "
+    "단어는 표기가 달라도 용어가 아니다 — S<n>|- 로 건너뛴다.",
+    "gemini 와 youtube/slide 가 다른 의심(S)이 고유명사·전문용어의 전사 오류면 교정 용어로 만들고 근거에 "
+    "그 S번호를 적어라.",
     "원어가 Gemini 원문 표기와 다르면(=교정) 근거에 S번호가 반드시 있어야 한다.",
     "번역어를 모르면 ? 를 쓴다 (원문 유지, uncertain 표시).",
     "짧은해설이 있으면 긴설명도 있어야 한다.",
@@ -862,7 +864,8 @@ def _packet_terms(bundle: Path, state: dict[str, Any], indexed: Indexed,
     instructions = ("의심 목록과 후보를 보고 용어집을 만들어라. 이 패킷에 실린 의심(S)·후보(C) 전부에 "
                    "결정이 있어야 한다. 각 줄을 T<n>|원어|번역어|짧은해설|긴설명|근거 형식으로 만들거나, "
                    "용어로 만들지 않을 항목은 S<n>|- 또는 C<n>|- 로 cueprecise_set_subtitle 에 보내라. "
-                   "결정이 빠진 항목이 있으면(빈 응답 포함) 같은 항목을 다시 보여준다.")
+                   "결정이 빠진 항목이 있으면(빈 응답 포함) 같은 항목을 다시 보여준다. "
+                   "용어집에는 고유명사와 전문용어만 넣고, 일상 단어는 건너뛴다.")
     return _base_packet(video_id=video_id, phase="terms", fingerprint=state["sentences_fingerprint"],
                         progress=_progress(state, indexed), instructions=instructions,
                         packet_text=packet_text,
@@ -1198,6 +1201,33 @@ def _parse_terms_response(text: str) -> tuple[list[tuple[int, list[str]]], list[
     return parsed, skip_ids, unmatched
 
 
+# 용어집에 들어오면 안 되는 흔한 영어 단어. 실측에서 is/times/that's/probably/map 이
+# 용어로 들어와 번역 검사(terms 플래그)가 문장 절반을 잘못 표시했다.
+_EVERYDAY_WORDS = frozenset("""
+a an the is are was were be been being am do does did done have has had having
+it its it's this that that's these those there here what what's which who whom whose
+i you he she we they me him her us them my your his our their
+and or but so if then than because as of in on at to for from by with about into over
+not no yes can could will would shall should may might must
+time times thing things way ways day days year years people person
+probably necessarily actually really just very also only even still maybe perhaps
+map maps fare
+get got make made take took see saw say said know knew go went come came look looked
+""".split())
+
+
+def _is_everyday_word(src: str) -> bool:
+    words = re.findall(r"[A-Za-z']+", src)
+    if not words or src != src.lower():
+        return False  # 대문자가 섞이면 고유명사일 수 있다.
+    return all(word in _EVERYDAY_WORDS for word in words)
+
+
+def _mentions(text: str, form: str) -> bool:
+    """단어 경계에서 대소문자 무시로 찾는다 ('is' 가 'this' 에 걸리지 않게)."""
+    return re.search(r"(?<![A-Za-z])" + re.escape(form) + r"(?![A-Za-z])", text, re.I) is not None
+
+
 MAX_SHORT_EXPLANATION_CHARS = 16
 MAX_NOTE_CHARS = 50
 
@@ -1255,6 +1285,10 @@ def _apply_terms(bundle: Path, state: dict[str, Any], words: list[dict[str, Any]
         src, tgt, short, note, evidence_raw = (fields + ["-"])[:5]
         src, tgt, short, note = src.strip(), tgt.strip(), short.strip(), note.strip()
         evidence_ids = [e.strip() for e in evidence_raw.split(",") if e.strip() and e.strip() != "-"]
+        if _is_everyday_word(src):
+            rejected.append({"line": term_id,
+                             "reason": "일상 단어는 용어가 아니다 — S<n>|- 로 건너뛰어라"})
+            continue
         if not src or not tgt:
             rejected.append({"line": term_id, "reason": "원어 또는 번역어가 비었다"})
             continue
@@ -1526,7 +1560,7 @@ def _validate_and_store_line(state: dict[str, Any], indexed: Indexed, item: dict
         if term.get("status") == "uncertain":
             continue
         source_forms = [term["src"], *(term.get("heard") or [])]
-        if any(form in item["text"] for form in source_forms) and term["tgt"] not in text:
+        if any(_mentions(item["text"], form) for form in source_forms) and term["tgt"] not in text:
             flags.append("terms")
             break
     # 넘김 구간 경계: 문장 시작 -> 실제로 쓴 숨 지점(들)의 시각 -> 문장(또는

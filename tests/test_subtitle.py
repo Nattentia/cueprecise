@@ -1042,3 +1042,16 @@ class ReviewPacketLimitTests(unittest.TestCase):
                     self.assertLessEqual(len(packet["packet"]), limit)
         finally:
             subtitle._flagged_unreviewed, subtitle._progress = original
+
+
+class EverydayTermGuardTests(unittest.TestCase):
+    def test_everyday_words_are_not_terms(self) -> None:
+        for word in ("is", "that's", "probably", "times", "map"):
+            self.assertTrue(subtitle._is_everyday_word(word), word)
+        for word in ("Kaplan-Meier", "censoring", "at risk", "Mantel-Haenszel", "log-rank test"):
+            self.assertFalse(subtitle._is_everyday_word(word), word)
+
+    def test_term_mentions_use_word_boundaries(self) -> None:
+        self.assertFalse(subtitle._mentions("So this is fine", "hi"))
+        self.assertFalse(subtitle._mentions("this", "is"))
+        self.assertTrue(subtitle._mentions("The Kaplan-Meier curve", "kaplan-meier"))
