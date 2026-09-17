@@ -223,7 +223,7 @@ def _download(url: str, fmt: str, raw: Path, stem: str,
     staging.mkdir(parents=True, exist_ok=True)
     try:
         result = subprocess.run(
-            [runtime.tool("yt-dlp"), "--no-playlist", "-f", fmt,
+            [*runtime.command("yt-dlp"), "--no-playlist", "-f", fmt,
              "-o", str(staging / stem) + ".%(ext)s", url],
             capture_output=True, text=True,
         )
@@ -301,7 +301,7 @@ def _fetch_metadata(url: str, raw: Path) -> Path | None:
     """
     try:
         result = subprocess.run(
-            [runtime.tool("yt-dlp"), "--no-playlist", "--skip-download", "--dump-json", url],
+            [*runtime.command("yt-dlp"), "--no-playlist", "--skip-download", "--dump-json", url],
             capture_output=True, text=True,
         )
     except FileNotFoundError:
@@ -335,7 +335,7 @@ def _fetch_sources(url: str, raw: Path, *, want_video: bool,
     found: dict[str, Path | None] = {"audio": None, "video": None, "captions": None}
     try:
         fmt = AUDIO_FORMAT + ("," + VIDEO_FORMAT if want_video else "")
-        command = [runtime.tool("yt-dlp"), "--no-playlist", "-f", fmt]
+        command = [*runtime.command("yt-dlp"), "--no-playlist", "-f", fmt]
         if want_captions:
             command += ["--write-auto-sub", "--sub-langs",
                         ",".join(fetch_youtube.ORIGINAL_LANGS),

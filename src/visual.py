@@ -472,9 +472,11 @@ def build(bundle: Path, *, at: list[float] | None = None,
         "candidates_considered": len(candidates),
         # 찾았지만 근접·상한으로 떨어진 수. 몇 장을 안 뽑았는지 숨기지 않는다.
         "candidates_dropped": found - len(candidates),
-        "note": None if frames else
-        "프레임을 뽑지 못했다. raw/source.mp4 등 영상 파일이 필요하다 "
-        "(오디오만 받은 bundle 에서는 후보 시각만 계산된다).",
+        "note": None if frames else (
+            "프레임을 뽑지 못했다. raw/source.mp4 등 영상 파일이 필요하다 "
+            "(오디오만 받은 bundle 에서는 후보 시각만 계산된다)." if video is None else
+            "화면을 가리키는 발화가 없어 뽑을 시각 후보가 없었다." if not candidates else
+            "후보 시각에서 프레임을 뽑지 못했다."),
     }
     _write_json(bundle / "derived" / "frames.json", result)
     return result

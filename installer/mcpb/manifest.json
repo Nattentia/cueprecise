@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "cueprecise",
   "display_name": "CuePrecise",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Analyze an hour-long YouTube video sentence by sentence in three minutes, and extract the information you need from the screen.",
   "long_description": "CuePrecise transcribes the original speech in a YouTube video, aligns it to the timeline, and retrieves matching passages and frames for Claude.",
   "author": {
@@ -30,10 +30,12 @@
   ],
   "server": {
     "type": "binary",
-    "entry_point": "server/cueprecise-mcp.exe",
+    "entry_point": "py/python.exe",
     "mcp_config": {
-      "command": "${__dirname}/server/cueprecise-mcp.exe",
+      "command": "${__dirname}/py/python.exe",
       "args": [
+        "-m",
+        "mcp_server",
         "--bundle-root",
         "${user_config.data_directory}"
       ],

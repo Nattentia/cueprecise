@@ -753,6 +753,14 @@ def _resolve_bundle_root(raw: str) -> Path:
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "--yt-dlp":
+        # 얼려진 빌드(PyInstaller setup.exe)에서는 별도 yt-dlp.exe 없이 이
+        # 실행 파일 자신을 다시 불러 yt-dlp 를 실행한다. src/runtime.py 의
+        # command() 가 이 경로를 선택한다(구 mcpb_entrypoint.py 와 동일한 계약).
+        del sys.argv[1]
+        from yt_dlp import main as yt_dlp_main
+
+        return int(yt_dlp_main() or 0)
     # argparse의 --help도 비ASCII 문서를 출력하므로 파싱 전에 UTF-8로 고정한다.
     _force_utf8(sys.stdin, sys.stdout, sys.stderr)
     parser = argparse.ArgumentParser(description=__doc__,

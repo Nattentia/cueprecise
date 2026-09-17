@@ -113,7 +113,27 @@ That lets your AI client:
 A simulated debate is generated from the video. It is not a claim that those people actually
 discussed the new issue.
 
+### Watch with subtitles built from the same evidence
+
+When a video's captions or YouTube's automatic translation are not good enough, your AI
+client can turn the same evidence into subtitles. CuePrecise cross-checks the Gemini
+transcript against YouTube captions and on-screen text, settles technical terms first
+(for example `by torch → PyTorch`, `combine JS → ConvNetJS`), and then has your AI client
+translate the talk in small, checked batches. Numbers, terms, reading speed, and missing
+lines are checked automatically, and only flagged lines are reviewed again.
+
+The result opens in a local viewer in your browser: the YouTube player with the translated
+subtitles, a searchable script, a term list with optional short explanations, and a quality
+report. Translation uses your AI client, not an extra Gemini call.
+
 ## Quick start
+
+> **Windows Smart App Control:** v0.2.5 was blocked on PCs where Smart App Control is on
+> (`[WinError 4551] An Application Control policy has blocked this file`). Starting with
+> `v0.2.6`, the Claude Desktop extension ships only widely used runtime files (the official
+> Python embeddable package and an unmodified FFmpeg release build) and runs with Smart App
+> Control on. `cueprecise-setup.exe` can still be blocked; a fix is in progress. Please do not
+> turn off Smart App Control to work around this.
 
 ### Claude Desktop on Windows — one-file extension
 
@@ -123,7 +143,7 @@ discussed the new issue.
 3. Select the file. Claude will ask for a Gemini API key and a folder for local video data.
 4. Enable CuePrecise and ask Claude about a YouTube link.
 
-The approximately 86 MiB bundle includes CuePrecise, `yt-dlp`, FFmpeg, and FFprobe. You do
+The approximately 95 MiB bundle includes CuePrecise, an embedded Python runtime, `yt-dlp`, FFmpeg, and FFprobe. You do
 not need to install Python, Git, or the video tools separately. The extension is currently
 available for Claude Desktop on Windows.
 
@@ -142,7 +162,7 @@ so safely; a secret-bearing Codex TOML may be left without a backup to avoid cop
 On Windows, the API key is encrypted with Windows DPAPI for the current user. Older plaintext
 CuePrecise keys are moved into the protected store during an upgrade.
 
-> **Unsigned preview:** `v0.2.5` is not digitally signed, so Windows may show an
+> **Unsigned preview:** `v0.2.6` is not digitally signed, so Windows may show an
 > unknown-publisher warning. Download it only from this repository's Releases page and
 > verify `SHA256SUMS.txt` if you want to check the file before installing it.
 
@@ -254,7 +274,7 @@ configuration message.
 
 ## MCP tools
 
-The tools fall into four groups.
+The tools fall into five groups.
 
 Analysis and status:
 
@@ -273,6 +293,11 @@ Saved results:
 - `cueprecise_summary` — create or retrieve a summary.
 - `cueprecise_set_summary` — validate and save a host-improved summary.
 - `cueprecise_set_chapter_titles` — validate and save host-written chapter titles.
+
+Subtitles:
+
+- `cueprecise_subtitle` — return the next subtitle work packet (term review, translation, or checks) and the local viewer link.
+- `cueprecise_set_subtitle` — validate and save the AI client's response, then return the next packet.
 
 Cleanup:
 
@@ -460,6 +485,8 @@ installed.
   may be needed when the host AI does not translate the query.
 - Timestamps assigned to caption-recovered words are placed inside the missing transcription gap
   and should be treated as approximate within that interval.
+- The subtitle viewer runs on this computer (`127.0.0.1`) while the MCP server is running, and
+  is designed for desktop browsers.
 
 ## Documentation
 
