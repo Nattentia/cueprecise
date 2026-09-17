@@ -310,6 +310,30 @@ class CliTargetTest(PretendsCommandsExist):
             self.assertEqual(cli.environments[-1]["CODEX_HOME"], str(path.parent))
             self.assertTrue(result["api_key_configured"])
 
+    def test_codex_accepts_the_zip_installs_python_module_command(self) -> None:
+        """zip 설치본은 `python.exe` 를 `-m mcp_server` 로 부른다(exe 대신).
+
+        Codex 는 TOML 을 쓰므로 이 항목이 나중에 우리 것으로 다시 인식되려면
+        (`configuration.is_managed_server`) 실행 파일 이름이 아니라
+        `mcp_server`/`--bundle-root` 가 함께 있는 인자로 판정돼야 한다.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target, cli, path = self._target(root, configuration.CODEX, {})
+            with mock.patch.object(configuration.subprocess, "run", cli.run):
+                result = target.install(
+                    root / "data", api_key="secret",
+                    server_command="C:/CuePrecise/py/python.exe",
+                    server_args=["-m", "mcp_server"])
+
+            tail = cli.last_add()[cli.last_add().index("--") + 1:]
+            self.assertEqual(tail[:3], ["C:/CuePrecise/py/python.exe", "-m", "mcp_server"])
+            self.assertEqual(tail[3], "--bundle-root")
+            self.assertTrue(result["api_key_configured"])
+
+            saved_entry = configuration.read_toml_config(path)["mcp_servers"]["cueprecise"]
+            self.assertTrue(configuration.is_managed_server(saved_entry))
+
     def test_claude_code_uses_user_scope_and_replaces_existing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

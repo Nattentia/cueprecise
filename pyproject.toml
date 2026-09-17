@@ -44,6 +44,7 @@ py-modules = [
   "context",
   "credential_store",
   "cueprecise_cli",
+  "cueprecise_setup",
   "fetch_youtube",
   "installer_support",
   "locking",

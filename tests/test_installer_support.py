@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -188,6 +189,141 @@ class RuntimeCommandTest(unittest.TestCase):
                 mock.patch.object(sys, "executable", "C:/py/python.exe"), \
                 mock.patch("importlib.util.find_spec", return_value=None):
             self.assertEqual(runtime.command("yt-dlp"), ["yt-dlp"])
+
+
+class PythonZipServerDetectionTest(unittest.TestCase):
+    """zip 설치본(`py\\python.exe`)도 옛 `cueprecise-mcp.exe` 설치본처럼 찾아야 한다."""
+
+    def test_bundled_server_finds_the_embeddable_python(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install = Path(tmp)
+            (install / "py").mkdir()
+            python_exe = install / "py" / "python.exe"
+            python_exe.write_bytes(b"")
+            self.assertEqual(installer_support._bundled_server(install), python_exe.resolve())
+
+    def test_bundled_server_prefers_the_old_exe_when_both_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            install = Path(tmp)
+            exe = install / "cueprecise-mcp.exe"
+            exe.write_bytes(b"")
+            (install / "py").mkdir()
+            (install / "py" / "python.exe").write_bytes(b"")
+            self.assertEqual(installer_support._bundled_server(install), exe.resolve())
+
+    def test_bundled_server_is_none_when_neither_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(installer_support._bundled_server(Path(tmp)))
+
+    def test_server_launch_args_uses_module_flag_only_for_python_exe(self) -> None:
+        self.assertEqual(installer_support._server_launch_args(Path("C:/x/py/python.exe")),
+                         ["-m", "mcp_server"])
+        # 대소문자를 가리지 않는다(Windows 파일 시스템 자체가 그렇다).
+        self.assertEqual(installer_support._server_launch_args(Path("C:/x/py/Python.EXE")),
+                         ["-m", "mcp_server"])
+        self.assertEqual(
+            installer_support._server_launch_args(Path("C:/x/cueprecise-mcp.exe")), [])
+
+    def test_bundled_ffmpeg_is_found_next_to_python_exe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            server = root / "python.exe"
+            server.write_bytes(b"")
+            (root / "ffmpeg.exe").write_bytes(b"")
+            self.assertEqual(installer_support._bundled_ffmpeg(server), root / "ffmpeg.exe")
+
+    def test_bundled_ffmpeg_is_none_for_the_old_exe_install(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = Path(tmp).resolve() / "cueprecise-mcp.exe"
+            server.write_bytes(b"")
+            self.assertIsNone(installer_support._bundled_ffmpeg(server))
+
+
+class ProbeMcpCommandTest(unittest.TestCase):
+    def test_probe_adds_the_module_flag_for_python_exe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = Path(tmp) / "python.exe"
+            server.write_bytes(b"")
+            response = json.dumps({"result": {"serverInfo": {"name": "cueprecise"}}}) + "\n"
+            with mock.patch("installer_support.subprocess.run") as run:
+                run.return_value = subprocess.CompletedProcess([], 0, response, "")
+                ok, error = installer_support.probe_mcp(server, Path(tmp) / "data", {})
+            self.assertTrue(ok)
+            self.assertIsNone(error)
+            command = run.call_args[0][0]
+            self.assertEqual(command[0], str(server))
+            self.assertEqual(command[1:3], ["-m", "mcp_server"])
+            self.assertEqual(command[3], "--bundle-root")
+
+    def test_probe_calls_the_old_exe_directly_without_a_module_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = Path(tmp) / "cueprecise-mcp.exe"
+            server.write_bytes(b"")
+            response = json.dumps({"result": {"serverInfo": {"name": "cueprecise"}}}) + "\n"
+            with mock.patch("installer_support.subprocess.run") as run:
+                run.return_value = subprocess.CompletedProcess([], 0, response, "")
+                installer_support.probe_mcp(server, Path(tmp) / "data", {})
+            command = run.call_args[0][0]
+            self.assertEqual(command, [str(server), "--bundle-root", str(Path(tmp) / "data")])
+
+
+class ZipInstallConnectTest(unittest.TestCase):
+    """zip 설치본(`py\\python.exe` + 옆의 `ffmpeg.exe`)으로 붙이는 경로."""
+
+    def _install(self, root: Path, *, with_ffmpeg: bool = True) -> tuple[Path, Path]:
+        install = root / "app"
+        (install / "py").mkdir(parents=True)
+        python_exe = install / "py" / "python.exe"
+        python_exe.write_bytes(b"")
+        if with_ffmpeg:
+            (install / "py" / "ffmpeg.exe").write_bytes(b"")
+        return install, python_exe
+
+    def test_connect_uses_the_python_module_command_and_skips_ffmpeg_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            install, python_exe = self._install(root)
+            config = root / "claude.json"
+            config.write_text("{}", encoding="utf-8")
+
+            with mock.patch("installer_support.ensure_ffmpeg") as ensure, \
+                    mock.patch("installer_support.probe_mcp", return_value=(True, None)) as probe:
+                installer_support.connect(
+                    VALID_KEY, install, config_path=config, bundle_root=root / "data",
+                    credential_path=root / "key.dpapi")
+
+            ensure.assert_not_called()
+            self.assertEqual(probe.call_args[0][0], python_exe.resolve())
+
+            saved = json.loads(config.read_text(encoding="utf-8"))
+            entry = saved["mcpServers"]["cueprecise"]
+            self.assertEqual(Path(entry["command"]), python_exe.resolve())
+            self.assertEqual(entry["args"][:2], ["-m", "mcp_server"])
+            self.assertEqual(entry["args"][2], "--bundle-root")
+            # zip 설치본은 python.exe 옆의 ffmpeg.exe 를 runtime.tool() 이 바로 찾으므로
+            # PATH 를 끼워 넣지 않는다.
+            self.assertNotIn("PATH", entry.get("env", {}))
+
+    def test_connect_falls_back_to_ensure_ffmpeg_without_the_bundled_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            install, _python_exe = self._install(root, with_ffmpeg=False)
+            config = root / "claude.json"
+            config.write_text("{}", encoding="utf-8")
+            ffmpeg_bin = root / "ffmpeg"
+            ffmpeg_bin.mkdir()
+
+            with mock.patch("installer_support.ensure_ffmpeg",
+                            return_value=(ffmpeg_bin, None)) as ensure, \
+                    mock.patch("installer_support.probe_mcp", return_value=(True, None)):
+                installer_support.connect(
+                    VALID_KEY, install, config_path=config, bundle_root=root / "data",
+                    credential_path=root / "key.dpapi")
+
+            ensure.assert_called_once()
+            saved = json.loads(config.read_text(encoding="utf-8"))
+            entry = saved["mcpServers"]["cueprecise"]
+            self.assertTrue(entry["env"]["PATH"].startswith(str(ffmpeg_bin)))
 
 
 if __name__ == "__main__":

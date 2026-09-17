@@ -15,18 +15,51 @@ import credential_store
 
 API_KEY_PATTERN = re.compile(r"^AIza[0-9A-Za-z_-]{30,}$")
 
-# 번들 MCP 서버 실행 파일.
+# 번들 MCP 서버 실행 파일(옛 setup.exe 설치본).
 SERVER_EXECUTABLES = ("cueprecise-mcp.exe",)
+# 임베더블 파이썬 zip 설치본의 진입점. `python313._pth` 가 `..\app` 를
+# sys.path 에 이미 넣어 두므로 `-m mcp_server` 로 부를 수 있다(installer/mcpb/
+# manifest.json 이 Claude Desktop 용으로 쓰는 것과 같은 꼴).
+PYTHON_SUBDIR = "py"
+PYTHON_EXECUTABLE = "python.exe"
+PYTHON_SERVER_ARGS = ("-m", "mcp_server")
 # initialize 응답의 serverInfo.name 허용값.
 SERVER_NAMES = {"cueprecise"}
 
 
 def _bundled_server(install_dir: Path) -> Path | None:
+    """설치 폴더에서 부를 서버 실행 파일을 찾는다.
+
+    옛 setup.exe 설치본은 `cueprecise-mcp.exe` 를 바로 두고, zip 설치본은
+    `py\\python.exe` 를 둔다. 후자는 실행 파일 이름만으로는 구분되지 않으므로
+    `_server_launch_args` 가 함께 인자를 결정한다.
+    """
     for filename in SERVER_EXECUTABLES:
         candidate = (install_dir / filename).resolve()
         if candidate.is_file():
             return candidate
+    candidate = (install_dir / PYTHON_SUBDIR / PYTHON_EXECUTABLE).resolve()
+    if candidate.is_file():
+        return candidate
     return None
+
+
+def _server_launch_args(server: Path) -> list[str]:
+    """`python.exe` 형태는 자신을 그냥 부르는 게 아니라 `-m mcp_server` 로 불러야 한다."""
+    if server.name.lower() == PYTHON_EXECUTABLE:
+        return list(PYTHON_SERVER_ARGS)
+    return []
+
+
+def _bundled_ffmpeg(server: Path) -> Path | None:
+    """`py\\ffmpeg.exe` 가 있으면 그것을 돌려준다.
+
+    zip 설치본은 FFmpeg 를 `python.exe` 옆에 두므로 `runtime.tool()` 이 PATH
+    없이도 그 자리를 바로 찾는다(옛 setup.exe 설치본은 winget 이 깐 FFmpeg 를
+    PATH 로 물려줘야 하므로 이 자리에 없다).
+    """
+    candidate = server.parent / "ffmpeg.exe"
+    return candidate if candidate.is_file() else None
 
 
 def normalize_api_key(value: str) -> str:
@@ -87,9 +120,10 @@ def ensure_ffmpeg() -> tuple[Path | None, str | None]:
 
 def probe_mcp(server: Path, bundle_root: Path, environment: dict[str, str]) -> tuple[bool, str | None]:
     request = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}) + "\n"
+    command = [str(server), *_server_launch_args(server), "--bundle-root", str(bundle_root)]
     try:
         result = subprocess.run(
-            [str(server), "--bundle-root", str(bundle_root)], input=request,
+            command, input=request,
             capture_output=True, text=True, timeout=20,
             env={**os.environ, **environment},
         )
@@ -129,21 +163,27 @@ def connect_clients(api_key: str, install_dir: Path, *,
     server = _bundled_server(install_dir)
     if server is None:
         raise FileNotFoundError(
-            "설치된 cueprecise-mcp.exe를 찾지 못했습니다. CuePrecise를 다시 설치해 주세요.")
+            "설치된 CuePrecise 서버(cueprecise-mcp.exe 또는 py\\python.exe)를 찾지 못했습니다. "
+            "CuePrecise를 다시 설치해 주세요.")
     chosen = configuration.detected_clients() if targets is None else list(targets)
     if not chosen:
         # 붙인 앱이 하나도 없는 것을 성공이라고 말하면 안 된다.
         raise RuntimeError(
             "연결할 AI 앱을 찾지 못했습니다. Claude Desktop, Codex, Claude Code, "
             "VS Code 중 하나를 설치한 뒤 다시 시도해 주세요.")
-    ffmpeg_bin, ffmpeg_error = ensure_ffmpeg()
-    if ffmpeg_error or ffmpeg_bin is None:
-        raise RuntimeError(ffmpeg_error)
+    bundled_ffmpeg = _bundled_ffmpeg(server)
+    server_environment: dict[str, str] = {}
+    if bundled_ffmpeg is not None:
+        # zip 설치본은 `python.exe` 옆에 FFmpeg 를 두므로 `runtime.tool()` 이
+        # PATH 없이도 그 자리를 찾는다. winget 설치·PATH 주입을 건너뛴다.
+        ffmpeg_bin = bundled_ffmpeg.parent
+    else:
+        ffmpeg_bin, ffmpeg_error = ensure_ffmpeg()
+        if ffmpeg_error or ffmpeg_bin is None:
+            raise RuntimeError(ffmpeg_error)
+        server_environment["PATH"] = str(ffmpeg_bin) + os.pathsep + os.environ.get("PATH", "")
 
     destination = bundle_root or configuration.default_bundle_root()
-    server_environment = {
-        "PATH": str(ffmpeg_bin) + os.pathsep + os.environ.get("PATH", ""),
-    }
     destination.mkdir(parents=True, exist_ok=True)
     ok, probe_error = probe_mcp(server, destination, {**server_environment, "GEMINI_API_KEY": key})
     if not ok:
@@ -159,13 +199,14 @@ def connect_clients(api_key: str, install_dir: Path, *,
         server_environment[credential_store.CREDENTIAL_ENV] = str(protected_path)
         config_key = None
 
+    server_args = _server_launch_args(server)
     connected: list[dict[str, Any]] = []
     failed: list[dict[str, str]] = []
     for target in chosen:
         try:
             result = target.install(
-                destination, api_key=config_key, server_command=str(server), server_args=[],
-                extra_env=server_environment,
+                destination, api_key=config_key, server_command=str(server),
+                server_args=server_args, extra_env=server_environment,
                 config_path=config_path if len(chosen) == 1 else None)
         except Exception as error:  # 한 앱의 실패가 나머지를 막지 않는다.
             failed.append({"key": target.key, "label": target.label, "reason": str(error)})
@@ -237,8 +278,8 @@ def migrate(install_dir: Path, config_path: Path | None = None,
         environment[credential_store.CREDENTIAL_ENV] = str(protected_path.resolve())
     try:
         result = configuration.setup_claude(
-            config, destination, api_key=None, server_command=str(server), server_args=[],
-            extra_env=environment)
+            config, destination, api_key=None, server_command=str(server),
+            server_args=_server_launch_args(server), extra_env=environment)
     except Exception:
         if credential_state is not None:
             credential_store.restore(credential_state, protected_path)
@@ -325,7 +366,8 @@ def migrate_clients(install_dir: Path, *,
             continue
         try:
             result = target.install(
-                destination, api_key=None, server_command=str(server), server_args=[],
+                destination, api_key=None, server_command=str(server),
+                server_args=_server_launch_args(server),
                 extra_env=environment, config_path=path)
         except Exception as error:
             # CLI 방식은 기존 항목을 지운 뒤 다시 추가한다. 추가가 실패하면
