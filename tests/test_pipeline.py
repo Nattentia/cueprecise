@@ -1589,8 +1589,12 @@ class SingleFetchCallTests(unittest.TestCase):
             return pipeline.subprocess.CompletedProcess(command, 0, "", "")
 
         pipeline.subprocess.run = run
+        # 환경에 yt_dlp 모듈이 있으면 `python -m yt_dlp` 가 된다. 호출 수 검사는 이름으로 한다.
+        self.original_command = pipeline.runtime.command
+        pipeline.runtime.command = lambda name: [name]
 
     def tearDown(self) -> None:
+        pipeline.runtime.command = self.original_command
         pipeline.subprocess.run = self.original_run
         self.tmp.cleanup()
 
