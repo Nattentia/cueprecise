@@ -189,6 +189,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # 파이프로 실행되면(에이전트·CI) 출력 인코딩이 로케일(cp1252·cp949)을 따라
+    # 한국어 안내문에서 UnicodeEncodeError 가 난다.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
     parser = build_parser()
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
 
