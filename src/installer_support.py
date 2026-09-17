@@ -13,7 +13,11 @@ import configuration
 import credential_store
 
 
-API_KEY_PATTERN = re.compile(r"^AIza[0-9A-Za-z_-]{30,}$")
+# 두 가지 Google API 키 모양을 받는다. `AIza` 로 시작하는 옛 키와, 2026 년부터
+# 발급되는 `AQ.` 로 시작하는 새 Google Auth 키(예: `AQ.Ab8...`, 뒤에 긴 토큰이
+# 붙는다). 어느 쪽도 아니면 붙여넣기 실수로 본다.
+API_KEY_PATTERN = re.compile(
+    r"^(?:AIza[0-9A-Za-z_-]{30,}|AQ\.[A-Za-z0-9_.-]{20,})$")
 
 # 번들 MCP 서버 실행 파일(옛 setup.exe 설치본).
 SERVER_EXECUTABLES = ("cueprecise-mcp.exe",)
@@ -77,7 +81,8 @@ def validate_api_key(value: str) -> tuple[str, str | None]:
     if any(character.isspace() for character in key):
         return key, "API 키 중간에 공백이 있습니다. 전체 키를 다시 복사해 주세요."
     if not API_KEY_PATTERN.fullmatch(key):
-        return key, "Google AI Studio에서 복사한 AIza로 시작하는 API 키인지 확인해 주세요."
+        return key, ("Google AI Studio에서 복사한 API 키인지 확인해 주세요"
+                     "(AIza로 시작하거나 AQ.으로 시작하는 키).")
     return key, None
 
 

@@ -907,6 +907,10 @@ class MaskSecretsTest(unittest.TestCase):
         key = "AIza" + "b" * 35
         self.assertNotIn(key, configuration.mask_secrets(f"stderr: {key} 끝"))
 
+    def test_unknown_aq_dot_key_is_caught_by_shape(self) -> None:
+        key = "AQ." + "b" * 40
+        self.assertNotIn(key, configuration.mask_secrets(f"stderr: {key} 끝"))
+
     def test_short_or_empty_value_does_not_eat_the_message(self) -> None:
         # 빈 문자열로 바꾸면 글자 사이마다 끼어들어 메시지를 못 읽게 된다.
         for secret in ("", None, "ab"):

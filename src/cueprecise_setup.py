@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,20 @@ import installer_support
 
 
 API_KEY_URL = "https://aistudio.google.com/api-keys"
+
+
+def _old_setup_exe_install_dir() -> Path | None:
+    """v0.2.5/v0.2.6 setup.exe 가 설치했던 옛 폴더가 아직 있으면 그 경로를 돌려준다.
+
+    이 zip 설치본은 그 폴더에 손대지 않는다. 사용자가 원치 않는데 프로그램을
+    지우면 안 되기 때문이다. 대신 남아 있다는 사실만 알려 사람이 직접
+    Windows 설정에서 지우게 한다.
+    """
+    base = os.environ.get("LOCALAPPDATA")
+    if not base:
+        return None
+    candidate = Path(base) / "Programs" / "CuePrecise"
+    return candidate if candidate.is_dir() else None
 
 
 def install_directory() -> Path:
@@ -128,6 +143,12 @@ def _print_result(result: dict[str, Any]) -> None:
         print()
         print("연결한 앱을 완전히 종료한 뒤 다시 여세요.")
         print("새 대화에서 '이 유튜브 영상을 분석해줘'라고 요청하면 됩니다.")
+    old_install = _old_setup_exe_install_dir()
+    if old_install is not None:
+        print()
+        print(f"이전 버전의 CuePrecise 설치 프로그램이 남아 있습니다: {old_install}")
+        print("Windows 설정 > 앱에서 'CuePrecise'를 제거할 수 있습니다(지금 자동으로 "
+              "지우지 않습니다).")
 
 
 def _run_uninstall() -> int:

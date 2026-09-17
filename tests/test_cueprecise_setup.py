@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import io
+import os
 import sys
 import tempfile
 import unittest
@@ -88,6 +89,37 @@ class TargetResolutionTest(unittest.TestCase):
                 mock.patch("builtins.input", return_value="2"):
             targets = cueprecise_setup._resolve_targets(None)
         self.assertEqual(targets, [two])
+
+
+class OldInstallHintTest(unittest.TestCase):
+    """v0.2.5/v0.2.6 setup.exe 가 남긴 폴더가 있으면 지울 수 있다고 알린다."""
+
+    def test_mentions_the_old_folder_when_it_still_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            localappdata = Path(tmp)
+            (localappdata / "Programs" / "CuePrecise").mkdir(parents=True)
+            connected = {"connected": [{"key": "claude-desktop", "label": "Claude Desktop"}],
+                        "failed": []}
+            with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(localappdata)}), \
+                    mock.patch.object(cueprecise_setup.sys, "stdin",
+                                      io.StringIO(VALID_KEY + "\n")), \
+                    mock.patch("installer_support.connect_clients", return_value=connected), \
+                    mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+                cueprecise_setup.main(["--api-key-stdin", "--targets", "claude-desktop"])
+            self.assertIn("CuePrecise", out.getvalue())
+            self.assertIn("Windows 설정", out.getvalue())
+
+    def test_says_nothing_when_no_old_folder_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            connected = {"connected": [{"key": "claude-desktop", "label": "Claude Desktop"}],
+                        "failed": []}
+            with mock.patch.dict(os.environ, {"LOCALAPPDATA": tmp}), \
+                    mock.patch.object(cueprecise_setup.sys, "stdin",
+                                      io.StringIO(VALID_KEY + "\n")), \
+                    mock.patch("installer_support.connect_clients", return_value=connected), \
+                    mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+                cueprecise_setup.main(["--api-key-stdin", "--targets", "claude-desktop"])
+            self.assertNotIn("Windows 설정", out.getvalue())
 
 
 class MainFlowTest(unittest.TestCase):

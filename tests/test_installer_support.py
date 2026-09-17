@@ -16,6 +16,7 @@ import runtime
 
 
 VALID_KEY = "AIza" + "A" * 35
+VALID_AQ_KEY = "AQ." + "Ab8" + "x" * 30
 
 
 class ApiKeyTest(unittest.TestCase):
@@ -24,10 +25,19 @@ class ApiKeyTest(unittest.TestCase):
         self.assertEqual(key, VALID_KEY)
         self.assertIsNone(error)
 
+    def test_accepts_the_newer_aq_dot_key_format(self) -> None:
+        key, error = installer_support.validate_api_key(f'  "{VALID_AQ_KEY}"\n')
+        self.assertEqual(key, VALID_AQ_KEY)
+        self.assertIsNone(error)
+
     def test_rejects_missing_or_malformed_key_with_plain_message(self) -> None:
         self.assertIn("붙여넣어", installer_support.validate_api_key(" ")[1])
         self.assertIn("AIza", installer_support.validate_api_key("wrong-key")[1])
+        self.assertIn("AQ.", installer_support.validate_api_key("wrong-key")[1])
         self.assertIn("공백", installer_support.validate_api_key("AIza aaa")[1])
+
+    def test_rejects_an_aq_dot_key_that_is_too_short(self) -> None:
+        self.assertIsNotNone(installer_support.validate_api_key("AQ.tooshort")[1])
 
 
 class ConnectTest(unittest.TestCase):
@@ -324,6 +334,33 @@ class ZipInstallConnectTest(unittest.TestCase):
             saved = json.loads(config.read_text(encoding="utf-8"))
             entry = saved["mcpServers"]["cueprecise"]
             self.assertTrue(entry["env"]["PATH"].startswith(str(ffmpeg_bin)))
+
+    def test_connect_replaces_an_entry_left_by_the_old_setup_exe_install(self) -> None:
+        """v0.2.5/v0.2.6 는 `%LOCALAPPDATA%\\Programs\\CuePrecise\\cueprecise-mcp.exe`
+        를 가리키는 항목을 남긴다. zip 설치본으로 다시 연결하면 그 항목을 우리 것으로
+        인식해(`is_managed_server`) 덮어써야지, 남의 항목이라며 거절하면 안 된다.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            install, python_exe = self._install(root)
+            config = root / "claude.json"
+            old_entry = {
+                "command": "C:/Users/x/AppData/Local/Programs/CuePrecise/cueprecise-mcp.exe",
+                "args": ["--bundle-root", "C:/Users/x/.cueprecise/data"],
+                "env": {"GEMINI_API_KEY": VALID_KEY},
+            }
+            config.write_text(json.dumps({"mcpServers": {"cueprecise": old_entry}}),
+                              encoding="utf-8")
+
+            with mock.patch("installer_support.probe_mcp", return_value=(True, None)):
+                installer_support.connect(
+                    VALID_KEY, install, config_path=config, bundle_root=root / "data",
+                    credential_path=root / "key.dpapi")
+
+            saved = json.loads(config.read_text(encoding="utf-8"))
+            entry = saved["mcpServers"]["cueprecise"]
+            self.assertEqual(Path(entry["command"]), python_exe.resolve())
+            self.assertEqual(entry["args"][:2], ["-m", "mcp_server"])
 
 
 if __name__ == "__main__":
