@@ -304,6 +304,7 @@ PAGE_HTML = r"""<!doctype html>
   #blocked { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
              flex-direction: column; gap: 12px; color: var(--dim); background: #000; text-align: center; padding: 20px; }
   #blocked a { color: var(--accent); }
+  #blocked .blockedNote { max-width: 480px; font-size: 12.5px; color: var(--faint); line-height: 1.5; }
 
   /* 자막: 기본은 상자 없이 사방 그림자(가독성이 가장 높은 방식), 설정에서 상자로 바꿀 수 있다. */
   #cueLayer { position: absolute; left: 5%; right: 5%; pointer-events: none;
@@ -455,6 +456,9 @@ PAGE_HTML = r"""<!doctype html>
     <div id="stage">
       <div id="player"></div>
       <div id="blocked"><div>이 영상은 외부 재생이 막혀 있습니다.</div>
+        <div class="blockedNote">YouTube 페이지 위에 자막을 얹는 브라우저 확장 프로그램을 준비 중입니다.
+          그동안은 CuePrecise MCP 도구로 영상 내용을 질문·분석하거나 요약·타임스탬프 목차·스크립트
+          같은 정리 파일을 만들 수 있습니다.</div>
         <a id="ytLink" href="#" target="_blank" rel="noopener">YouTube에서 보기</a></div>
       <div id="cueLayer"></div>
       <div id="termLayer"></div>
