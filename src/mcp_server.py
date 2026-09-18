@@ -95,11 +95,13 @@ def _fmt(seconds: float) -> str:
 
 def tool_register(bundle_root: Path, *, url: str, stages: list[str] | None = None,
                   language: str | None = None,
-                  api_key: str | None = None) -> dict[str, Any]:
+                  api_key: str | None = None,
+                  allow_blocked_embed: bool = False) -> dict[str, Any]:
     codes = [s.strip() for s in language.split(",") if s.strip()] if language else None
     selected = pipeline.resolve_stages(stages)
     return pipeline.run(url, bundle_root=bundle_root, stages=selected,
-                        language_codes=codes, api_key=api_key)
+                        language_codes=codes, api_key=api_key,
+                        allow_blocked_embed=allow_blocked_embed)
 
 
 def tool_status(bundle_root: Path, *, video_id: str, api_key: str | None = None,
@@ -301,19 +303,32 @@ def _viewer_url(bundle_root: Path, video_id: str) -> str | None:
 
 
 def tool_subtitle(bundle_root: Path, *, video_id: str | None = None, url: str | None = None,
-                  lang: str = "ko") -> dict[str, Any]:
-    """번역 자막 작업 패킷을 돌려준다 (CONTRACT.md 16절). Gemini 를 부르지 않는다."""
+                  lang: str = "ko", allow_blocked_embed: bool = False) -> dict[str, Any]:
+    """번역 자막 작업 패킷을 돌려준다 (CONTRACT.md 16절). Gemini 를 부르지 않는다.
+
+    자막의 유일한 산출 용도는 뷰어 재생이다. 임베드가 막힌 영상에서 자막
+    작업을 새로 시작하면 만들고도 얹어 볼 곳이 없다. 이미 시작한 작업
+    (`translations/<lang>.json` 존재)은 이미 쓴 비용이므로 막지 않는다 —
+    고지만 붙인다.
+    """
     if not video_id and not url:
         raise ToolError("video_id 또는 url 중 하나가 필요하다.")
     if not video_id:
         video_id = pipeline.video_id_from_url(url)
     bundle = pipeline.bundle_path(bundle_root, video_id)
     _transcript(bundle)  # 전사가 없으면 여기서 ToolError 로 알린다.
+    playable = pipeline.embed_playability(bundle)
+    already_started = subtitle.load_state(bundle, lang) is not None
+    if playable is False and not already_started and not allow_blocked_embed:
+        raise ToolError(pipeline.EMBED_BLOCKED_SUBTITLE_NOTICE)
     try:
-        return subtitle.build_packet(bundle, video_id=video_id, lang=lang,
-                                     viewer_url=_viewer_url(bundle_root, video_id))
+        packet = subtitle.build_packet(bundle, video_id=video_id, lang=lang,
+                                       viewer_url=_viewer_url(bundle_root, video_id))
     except subtitle.SubtitleError as error:
         raise ToolError(str(error)) from error
+    if playable is False:
+        packet["embed_notice"] = pipeline.EMBED_BLOCKED_NOTICE
+    return packet
 
 
 def tool_set_subtitle(bundle_root: Path, *, video_id: str, phase: str, fingerprint: str,
@@ -345,6 +360,12 @@ TOOLS: list[dict[str, Any]] = [
                                              ", ".join(pipeline.STAGES))},
                 "language": {"type": "string",
                              "description": "쉼표 구분 BCP-47. 생략하면 자동 감지"},
+                "allow_blocked_embed": {
+                    "type": "boolean",
+                    "description": "외부 재생이 막힌 영상도 강행한다. 기본 false — 막힌 "
+                                   "영상은 등록 자체를 하지 않는다(Gemini·다운로드 0). "
+                                   "뷰어 재생 없이 분석·정리만 원하면 true로 강제한다.",
+                },
             },
             "required": ["url"],
         },
@@ -499,6 +520,12 @@ TOOLS: list[dict[str, Any]] = [
                 "video_id": {"type": "string"},
                 "url": {"type": "string", "description": "YouTube URL. video_id 대신 줄 수 있다"},
                 "lang": {"type": "string", "description": "기본 ko. 현재 ko 만 지원"},
+                "allow_blocked_embed": {
+                    "type": "boolean",
+                    "description": "외부 재생이 막힌 영상에서도 자막 작업을 새로 시작한다. "
+                                   "기본 false. 이미 시작한 자막 작업은 이 값과 무관하게 "
+                                   "막히지 않는다.",
+                },
             },
             "required": [],
         },
@@ -584,7 +611,8 @@ def dispatch(name: str, arguments: dict[str, Any], *, bundle_root: Path,
     if name == "cueprecise_register":
         return tool_register(bundle_root, url=arguments["url"],
                              stages=arguments.get("stages"),
-                             language=arguments.get("language"), api_key=api_key)
+                             language=arguments.get("language"), api_key=api_key,
+                             allow_blocked_embed=bool(arguments.get("allow_blocked_embed", False)))
     if name == "cueprecise_status":
         return tool_status(bundle_root, video_id=arguments["video_id"], api_key=api_key)
     if name == "cueprecise_outline":
@@ -616,7 +644,8 @@ def dispatch(name: str, arguments: dict[str, Any], *, bundle_root: Path,
                           scope=arguments.get("scope", "derived"))
     if name == "cueprecise_subtitle":
         return tool_subtitle(bundle_root, video_id=arguments.get("video_id"),
-                             url=arguments.get("url"), lang=arguments.get("lang", "ko"))
+                             url=arguments.get("url"), lang=arguments.get("lang", "ko"),
+                             allow_blocked_embed=bool(arguments.get("allow_blocked_embed", False)))
     if name == "cueprecise_set_subtitle":
         return tool_set_subtitle(bundle_root, video_id=arguments["video_id"],
                                  phase=arguments["phase"], fingerprint=arguments["fingerprint"],
