@@ -94,12 +94,18 @@ claude 는 필요할 때 이 파일을 고치고, 고친 이유를 `DECISIONS/cl
   "channel": "MahlerLab",
   "language": "ko",
   "auto_caption_langs": ["ko-orig"],
-  "subtitle_langs": []
+  "subtitle_langs": [],
+  "playable_in_embed": true
 }
 ```
 
 `language`와 `auto_caption_langs`만 번역문 판정의 근거로 쓴다. `title`과
 `channel`은 사람이 번들을 알아보기 위한 것이고 판정에 쓰지 않는다.
+
+`playable_in_embed`는 업로더가 외부 사이트(iframe) 재생을 껐는지다. yt-dlp가
+주지 않으면 `null` — 판정 불가이고 차단하지 않는다. `register`/`subtitle`의
+선행 검사(12·16절)가 이 필드만 본다. 뷰어 재생 가능 여부를 미디어를 받기
+전에 공짜로 아는 유일한 근거다.
 
 ### transcript.json — `transcribe.py` 출력
 
@@ -504,6 +510,15 @@ data/<video_id>/
   지시가 있었으면 받지 않는다.
 - 네트워크를 쓰기 전에 그 결과를 쓸 수 있는지 먼저 확인한다. 전사가 없는
   bundle에서 프레임을 요청하면 영상을 받기 전에 실패해야 한다.
+- 업로더가 외부 사이트 재생을 끈 영상(`playable_in_embed: false`)은 미디어를
+  받기 전에 `--skip-download --dump-json`으로 몇 초짜리 메타데이터만 받아
+  판정하고, 등록 자체를 하지 않는다 — Gemini 호출·다운로드·전사가 전부 0이다.
+  `fetch`가 선택 단계에 없으면(이미 받아둔 번들의 `transcribe`/`render` 등
+  일부 재실행) 새로 받을 미디어가 없으므로 검사하지 않는다. 전사가 이미 끝난
+  번들도 검사하지 않는다(이미 쓴 비용, 남은 단계는 Gemini도 다운로드도 안
+  쓴다). `cueprecise_register`의 `allow_blocked_embed`(CLI
+  `--allow-blocked-embed`)를 주면 강제로 진행한다 — 뷰어 재생 없이
+  분석·정리만 원하는 경우다. 판정 불가(`null`)는 차단하지 않는다.
 
 ## 13. chapters.json — 챕터 색인
 
@@ -683,6 +698,11 @@ data/<video_id>/
 
 - `cueprecise_subtitle`, `cueprecise_set_subtitle` 두 개만 둔다.
 - 서버 상태를 요청 사이에 두지 않는다. 다음 묶음은 번역 파일에서 매번 계산한다.
+- 자막의 유일한 산출 용도는 뷰어 재생이다. `cueprecise_subtitle`은 등록과
+  같은 임베드 판정을 쓴다: `playable_in_embed: false`인 영상에서 자막 작업을
+  **새로** 시작하면 기본으로 거절한다(`allow_blocked_embed`로 강행 가능).
+  이미 시작한 작업(`translations/<lang>.json`이 이미 있음)은 이미 쓴 비용이므로
+  막지 않고 `embed_notice`만 결과에 붙인다.
 
 ### 뷰어
 

@@ -796,6 +796,230 @@ class ForceAndMissingJobTests(unittest.TestCase):
                         "--force 가 조용히 아무것도 안 했다")
 
 
+class EmbedPlayabilityMetadataTests(unittest.TestCase):
+    """`_trim_metadata` 가 `playable_in_embed` 를 보존하는지."""
+
+    def test_keeps_true(self) -> None:
+        self.assertIs(pipeline._trim_metadata({"id": "x", "playable_in_embed": True})
+                      ["playable_in_embed"], True)
+
+    def test_keeps_false(self) -> None:
+        self.assertIs(pipeline._trim_metadata({"id": "x", "playable_in_embed": False})
+                      ["playable_in_embed"], False)
+
+    def test_missing_key_becomes_none(self) -> None:
+        self.assertIsNone(pipeline._trim_metadata({"id": "x"})["playable_in_embed"])
+
+    def test_non_bool_value_becomes_none(self) -> None:
+        self.assertIsNone(pipeline._trim_metadata(
+            {"id": "x", "playable_in_embed": "maybe"})["playable_in_embed"])
+
+
+class EmbedBlockGateTests(unittest.TestCase):
+    """실측(106분 강연, tr-CUpw--ck): 재생이 막힌 영상을 다 전사한 뒤에야 알았다.
+
+    `playable_in_embed: false` 는 등록 전에 공짜로(metadata-only) 안다. 이
+    테스트는 그 선행 검사(`_preflight_embed_block`)가 판정을 정확히 하고,
+    캐시 재사용·강제 실행 경로를 건드리지 않는지 확인한다.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.bundle = self.root / "vid"
+        (self.bundle / "raw").mkdir(parents=True)
+        self.real_run = pipeline.subprocess.run
+
+    def tearDown(self) -> None:
+        pipeline.subprocess.run = self.real_run
+        self.tmp.cleanup()
+
+    def _write_metadata(self, **fields) -> None:
+        pipeline._write_json(self.bundle / "raw" / pipeline.METADATA_NAME, fields)
+
+    def test_embed_playability_unknown_without_metadata(self) -> None:
+        self.assertIsNone(pipeline.embed_playability(self.bundle))
+
+    def test_embed_playability_reads_cached_value(self) -> None:
+        self._write_metadata(playable_in_embed=False)
+        self.assertIs(pipeline.embed_playability(self.bundle), False)
+        self._write_metadata(playable_in_embed=True)
+        self.assertIs(pipeline.embed_playability(self.bundle), True)
+
+    def test_embed_playability_ignores_missing_key(self) -> None:
+        self._write_metadata(title="x")
+        self.assertIsNone(pipeline.embed_playability(self.bundle))
+
+    def test_preflight_blocks_known_false(self) -> None:
+        self._write_metadata(playable_in_embed=False)
+        result = pipeline._preflight_embed_block(
+            self.bundle, "https://y/watch?v=x", allow_blocked_embed=False)
+        self.assertEqual(result["blocked_embed"], True)
+        self.assertIn("확장 프로그램", result["notice"])
+        self.assertIn("allow_blocked_embed", result["notice"])
+
+    def test_preflight_allows_known_true(self) -> None:
+        self._write_metadata(playable_in_embed=True)
+        result = pipeline._preflight_embed_block(
+            self.bundle, "https://y/watch?v=x", allow_blocked_embed=False)
+        self.assertIsNone(result)
+
+    def test_preflight_skips_when_forced(self) -> None:
+        self._write_metadata(playable_in_embed=False)
+        result = pipeline._preflight_embed_block(
+            self.bundle, "https://y/watch?v=x", allow_blocked_embed=True)
+        self.assertIsNone(result)
+
+    def test_preflight_skips_when_already_transcribed(self) -> None:
+        """이미 쓴 비용은 되돌릴 수 없다 — 남은 단계는 Gemini/다운로드를 쓰지 않는다."""
+        self._write_metadata(playable_in_embed=False)
+        (self.bundle / "derived").mkdir(parents=True)
+        (self.bundle / "derived" / "transcript.json").write_text("{}", encoding="utf-8")
+        result = pipeline._preflight_embed_block(
+            self.bundle, "https://y/watch?v=x", allow_blocked_embed=False)
+        self.assertIsNone(result)
+
+    def test_preflight_fetches_metadata_only_when_unknown(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake(command, **kwargs):
+            calls.append(command)
+            return pipeline.subprocess.CompletedProcess(
+                command, 0,
+                json.dumps({"id": "x", "title": "t", "playable_in_embed": False}), "")
+
+        pipeline.subprocess.run = fake
+        result = pipeline._preflight_embed_block(
+            self.bundle, "https://y/watch?v=x", allow_blocked_embed=False)
+        self.assertEqual(len(calls), 1, "메타데이터 조회를 한 번만 해야 한다")
+        self.assertIn("--dump-json", calls[0])
+        self.assertIn("--skip-download", calls[0])
+        self.assertEqual(result["blocked_embed"], True)
+
+    def test_preflight_allows_when_metadata_fetch_fails(self) -> None:
+        """판정 불가는 차단하지 않는다."""
+        def fake(command, **kwargs):
+            return pipeline.subprocess.CompletedProcess(command, 1, "", "network down")
+
+        pipeline.subprocess.run = fake
+        result = pipeline._preflight_embed_block(
+            self.bundle, "https://y/watch?v=x", allow_blocked_embed=False)
+        self.assertIsNone(result)
+
+
+class RunEmbedGateTests(unittest.TestCase):
+    """`run()` 이 막힌 영상에서 어느 단계도 돌리지 않는지 (Gemini 호출·다운로드 0)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.real_run = pipeline.subprocess.run
+        self.real_stage_fetch = pipeline.stage_fetch
+
+    def tearDown(self) -> None:
+        pipeline.subprocess.run = self.real_run
+        pipeline.stage_fetch = self.real_stage_fetch
+        self.tmp.cleanup()
+
+    def _fake_dump_json(self, *, playable: bool):
+        def fake(command, **kwargs):
+            if "--dump-json" in command:
+                return pipeline.subprocess.CompletedProcess(
+                    command, 0,
+                    json.dumps({"id": "jcBDSLSeud4", "title": "t",
+                                "playable_in_embed": playable}), "")
+            raise AssertionError("차단됐는데 미디어를 받으려 했다: %r" % (command,))
+        return fake
+
+    def test_run_stops_before_any_stage_when_blocked(self) -> None:
+        pipeline.subprocess.run = self._fake_dump_json(playable=False)
+        pipeline.stage_fetch = mock.Mock(side_effect=AssertionError("fetch 단계가 돌았다"))
+        summary = pipeline.run("jcBDSLSeud4", bundle_root=self.root)
+        self.assertTrue(summary["blocked_embed"])
+        self.assertEqual(summary["stages"], {})
+        pipeline.stage_fetch.assert_not_called()
+
+    def test_run_ignores_gate_when_fetch_not_selected(self) -> None:
+        """`fetch` 를 고르지 않았으면 새로 받을 미디어가 없으므로 검사하지 않는다."""
+        calls: list[list[str]] = []
+
+        def fake(command, **kwargs):
+            calls.append(command)
+            return pipeline.subprocess.CompletedProcess(command, 1, "", "안 불려야 한다")
+
+        pipeline.subprocess.run = fake
+        with self.assertRaises(pipeline.StageError):
+            pipeline.run("jcBDSLSeud4", bundle_root=self.root, stages=("assemble",))
+        self.assertEqual(calls, [], "fetch 를 고르지 않았는데 네트워크를 썼다")
+
+    def test_run_proceeds_when_forced(self) -> None:
+        pipeline.subprocess.run = self._fake_dump_json(playable=False)
+        called: list[str] = []
+
+        def fake_fetch(bundle, url, **kwargs):
+            called.append(url)
+            return {"source_audio": None, "captions": None, "cues": 0,
+                    "captions_language": None, "metadata_script": None, "video": None}
+
+        pipeline.stage_fetch = fake_fetch
+        summary = pipeline.run("jcBDSLSeud4", bundle_root=self.root,
+                               stages=("fetch",), allow_blocked_embed=True)
+        self.assertNotIn("blocked_embed", summary)
+        self.assertEqual(called, ["jcBDSLSeud4"])
+
+    def test_run_proceeds_when_playable(self) -> None:
+        pipeline.subprocess.run = self._fake_dump_json(playable=True)
+        called: list[str] = []
+
+        def fake_fetch(bundle, url, **kwargs):
+            called.append(url)
+            return {"source_audio": None, "captions": None, "cues": 0,
+                    "captions_language": None, "metadata_script": None, "video": None}
+
+        pipeline.stage_fetch = fake_fetch
+        summary = pipeline.run("jcBDSLSeud4", bundle_root=self.root, stages=("fetch",))
+        self.assertNotIn("blocked_embed", summary)
+        self.assertEqual(called, ["jcBDSLSeud4"])
+
+
+class AllowBlockedEmbedCliTests(unittest.TestCase):
+    """CLI `--allow-blocked-embed` 가 `run()` 까지 실제로 전달되는지."""
+
+    def test_cli_flag_reaches_run(self) -> None:
+        real_run, real_argv = pipeline.run, sys.argv
+        captured = {}
+
+        def fake_run(url, **kwargs):
+            captured.update(kwargs)
+            return {"video_id": url, "bundle": "b", "stages": {}}
+
+        pipeline.run = fake_run
+        sys.argv = ["cueprecise", "run", "jcBDSLSeud4", "--allow-blocked-embed"]
+        try:
+            pipeline.main()
+        finally:
+            pipeline.run = real_run
+            sys.argv = real_argv
+        self.assertTrue(captured.get("allow_blocked_embed"))
+
+    def test_cli_flag_defaults_to_false(self) -> None:
+        real_run, real_argv = pipeline.run, sys.argv
+        captured = {}
+
+        def fake_run(url, **kwargs):
+            captured.update(kwargs)
+            return {"video_id": url, "bundle": "b", "stages": {}}
+
+        pipeline.run = fake_run
+        sys.argv = ["cueprecise", "run", "jcBDSLSeud4"]
+        try:
+            pipeline.main()
+        finally:
+            pipeline.run = real_run
+            sys.argv = real_argv
+        self.assertFalse(captured.get("allow_blocked_embed"))
+
+
 if __name__ == "__main__":
     unittest.main()
 
