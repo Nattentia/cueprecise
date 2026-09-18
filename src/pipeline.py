@@ -332,20 +332,20 @@ def _fetch_metadata(url: str, raw: Path) -> Path | None:
 # 전부 버렸다. `playable_in_embed` 는 `--dump-json` 몇 초로 공짜로 안다.
 
 EMBED_BLOCKED_NOTICE = (
-    "이 영상은 업로더가 외부 사이트 재생을 막아 두어 CuePrecise 뷰어에서 재생할 수 "
-    "없다. YouTube 페이지 위에 자막을 얹는 브라우저 확장 프로그램을 준비 중이다. "
-    "그래도 영상 내용을 질문·분석하거나 요약·타임스탬프 목차·스크립트 같은 정리 "
-    "파일을 만들고 싶다면, cueprecise_register 에 allow_blocked_embed: true 를 "
-    "주거나(CLI는 --allow-blocked-embed) 강제로 파이프라인을 실행할 수 있다. "
-    "뷰어 재생만 안 될 뿐이다."
+    "이 영상은 업로더가 외부 사이트 재생을 허용하지 않아 CuePrecise 뷰어에서 "
+    "재생되지 않습니다. 분석을 시작하지 않았습니다. YouTube 페이지 위에 자막을 "
+    "얹는 브라우저 확장 프로그램을 준비하고 있습니다. "
+    "영상 내용을 질문하거나 요약·타임스탬프 목차·스크립트 같은 정리 파일을 "
+    "만드는 기능은 그대로 쓸 수 있습니다. 그대로 진행하려면 cueprecise_register 에 "
+    "allow_blocked_embed: true 를 주십시오(명령줄은 --allow-blocked-embed)."
 )
 
 EMBED_BLOCKED_SUBTITLE_NOTICE = (
-    "이 영상은 업로더가 외부 사이트 재생을 막아 두어 CuePrecise 뷰어에서 재생할 수 "
-    "없다. 자막을 만들어도 뷰어에 얹어 볼 방법이 없다. YouTube 페이지 위에 자막을 "
-    "얹는 브라우저 확장 프로그램을 준비 중이다. 그래도 자막 작업을 미리 해 두고 "
-    "싶다면 cueprecise_subtitle 에 allow_blocked_embed: true 를 주면 강제로 진행할 "
-    "수 있다."
+    "이 영상은 업로더가 외부 사이트 재생을 허용하지 않아 CuePrecise 뷰어에서 "
+    "재생되지 않습니다. 자막을 만들어도 영상 위에 얹어 볼 수 없어 자막 작업을 "
+    "시작하지 않았습니다. YouTube 페이지 위에 자막을 얹는 브라우저 확장 "
+    "프로그램을 준비하고 있습니다. 자막을 미리 만들어 두려면 cueprecise_subtitle 에 "
+    "allow_blocked_embed: true 를 주십시오."
 )
 
 
