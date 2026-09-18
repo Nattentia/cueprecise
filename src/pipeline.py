@@ -269,6 +269,7 @@ def _trim_metadata(info: dict[str, Any]) -> dict[str, Any]:
     """
     automatic = info.get("automatic_captions") or {}
     subtitles = info.get("subtitles") or {}
+    playable_in_embed = info.get("playable_in_embed")
     return {
         "video_id": info.get("id"),
         "title": (info.get("title") or "")[:200],
@@ -277,6 +278,10 @@ def _trim_metadata(info: dict[str, Any]) -> dict[str, Any]:
         "auto_caption_langs": sorted(k for k in automatic if k.endswith("-orig")),
         "subtitle_langs": sorted(subtitles)[:20],
         "chapters": info.get("chapters") or [],
+        # 업로더가 외부 사이트 재생을 껐는지. yt-dlp 가 안 주면 None(판정 불가) —
+        # 모르는 것을 차단으로 몰지 않는다. 뷰어 재생 가능 여부의 유일한 공짜
+        # 근거라 register/subtitle 선행 검사가 이 필드만 본다.
+        "playable_in_embed": playable_in_embed if isinstance(playable_in_embed, bool) else None,
     }
 
 
@@ -317,6 +322,76 @@ def _fetch_metadata(url: str, raw: Path) -> Path | None:
     target = raw / METADATA_NAME
     _write_json(target, _trim_metadata(info))
     return target
+
+
+# 임베드 차단 선행 검사 -------------------------------------------------------
+#
+# 업로더가 외부 사이트 재생을 끈 영상은 뷰어에서 절대 재생되지 않는다
+# (YouTube IFrame API 오류 101/150). 실측: 106분 강연을 전사하고 한국어 자막
+# 1121문장을 다 만든 뒤에야 이 사실을 알았다 — Gemini 호출과 전사 시간을
+# 전부 버렸다. `playable_in_embed` 는 `--dump-json` 몇 초로 공짜로 안다.
+
+EMBED_BLOCKED_NOTICE = (
+    "이 영상은 업로더가 외부 사이트 재생을 막아 두어 CuePrecise 뷰어에서 재생할 수 "
+    "없다. YouTube 페이지 위에 자막을 얹는 브라우저 확장 프로그램을 준비 중이다. "
+    "그래도 영상 내용을 질문·분석하거나 요약·타임스탬프 목차·스크립트 같은 정리 "
+    "파일을 만들고 싶다면, cueprecise_register 에 allow_blocked_embed: true 를 "
+    "주거나(CLI는 --allow-blocked-embed) 강제로 파이프라인을 실행할 수 있다. "
+    "뷰어 재생만 안 될 뿐이다."
+)
+
+EMBED_BLOCKED_SUBTITLE_NOTICE = (
+    "이 영상은 업로더가 외부 사이트 재생을 막아 두어 CuePrecise 뷰어에서 재생할 수 "
+    "없다. 자막을 만들어도 뷰어에 얹어 볼 방법이 없다. YouTube 페이지 위에 자막을 "
+    "얹는 브라우저 확장 프로그램을 준비 중이다. 그래도 자막 작업을 미리 해 두고 "
+    "싶다면 cueprecise_subtitle 에 allow_blocked_embed: true 를 주면 강제로 진행할 "
+    "수 있다."
+)
+
+
+def embed_playability(bundle: Path) -> bool | None:
+    """캐시된 `raw/metadata.json` 만 본다. 네트워크를 쓰지 않는다.
+
+    `playable_in_embed` 키가 없는 번들(이 기능 이전에 만든 번들, 또는
+    yt-dlp 가 안 준 경우)은 판정 불가 -> `None`. 판정 불가는 차단하지 않는다.
+    """
+    path = bundle / "raw" / METADATA_NAME
+    if not path.exists():
+        return None
+    try:
+        payload = _read_json(path)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get("playable_in_embed")
+    return value if isinstance(value, bool) else None
+
+
+def _preflight_embed_block(bundle: Path, url: str, *,
+                           allow_blocked_embed: bool) -> dict[str, Any] | None:
+    """등록 전에 임베드 재생 가능 여부를 판정한다. 막혔으면 차단 결과를 돌려준다.
+
+    전사가 이미 끝난 번들은 검사하지 않는다 — 이미 쓴 Gemini 호출은 되돌릴 수
+    없고, 남은 단계(merge/render/chapters/index)는 Gemini 도 다운로드도 쓰지
+    않으므로 막을 이유가 없다. `--skip-video`·캐시 재사용 경로는 이 판정과
+    무관하게 그대로 동작한다 — 여기서 손대는 것은 최초 등록 여부뿐이다.
+    """
+    if allow_blocked_embed:
+        return None
+    if (bundle / "derived" / "transcript.json").exists():
+        return None
+    playable = embed_playability(bundle)
+    if playable is None:
+        # 아직 모른다. 미디어는 받지 않고 메타데이터만 몇 초짜리로 받는다.
+        raw = bundle / "raw"
+        raw.mkdir(parents=True, exist_ok=True)
+        _fetch_metadata(url, raw)
+        playable = embed_playability(bundle)
+    if playable is False:
+        return {"blocked_embed": True, "playable_in_embed": False,
+                "notice": EMBED_BLOCKED_NOTICE}
+    return None
 
 
 def _fetch_sources(url: str, raw: Path, *, want_video: bool,
@@ -1295,12 +1370,26 @@ def run(url: str, *, bundle_root: Path = Path("data"),
         video: bool = True, keep_video: bool = False,
         at: list[float] | None = None,
         max_frames: int = visual.DEFAULT_MAX_FRAMES,
-        transcriber=None, api_key: str | None = None) -> dict[str, Any]:
+        transcriber=None, api_key: str | None = None,
+        allow_blocked_embed: bool = False) -> dict[str, Any]:
     video_id = video_id_from_url(url)
     bundle = bundle_path(bundle_root, video_id)
     bundle.mkdir(parents=True, exist_ok=True)
     ledger = ledger or (Path(bundle_root) / "usage.json")
     summary: dict[str, Any] = {"video_id": video_id, "bundle": str(bundle), "stages": {}}
+    selected = resolve_stages(stages)
+
+    # 미디어를 받기도, Gemini 를 부르기도 전에 판정한다 (API 호출 수 절감이
+    # 목적이다). `fetch` 단계가 선택되지 않았으면(예: 이미 받아둔 번들의
+    # `transcribe`/`render`만 재실행) 여기서 새로 받을 미디어가 없으므로
+    # 검사하지 않는다 — 그런 경로는 fetch가 이미 한 번 돌았을 때만 가능하고,
+    # 그때 이미 이 검사를 통과했거나 사람이 강제한 것이다.
+    if "fetch" in selected:
+        block = _preflight_embed_block(bundle, url, allow_blocked_embed=allow_blocked_embed)
+        if block is not None:
+            summary.update(block)
+            return summary
+
     job: dict[str, Any] | None = None
 
     # 번들 하나는 한 프로세스만 다룬다. 클라이언트가 여러 개 붙을 수 있어
@@ -1308,7 +1397,7 @@ def run(url: str, *, bundle_root: Path = Path("data"),
     # derived 산출물이 서로를 덮는다. 다른 작업이 쥐고 있으면 기다리지 않고
     # locking.BundleBusy 를 올린다 — 무엇이 도는 중인지 사람이 알아야 한다.
     with locking.bundle_lock(bundle, activity="register"):
-        for stage in resolve_stages(stages):
+        for stage in selected:
             _log("[%s]" % stage)
             if stage == "fetch":
                 summary["stages"][stage] = stage_fetch(bundle, url, force=force, video=video)
@@ -1544,6 +1633,9 @@ def main() -> int:
                          help="프레임을 뽑은 뒤에도 영상을 지우지 않는다")
     run_cmd.add_argument("--at", default=None, help="프레임을 뽑을 시각. 쉼표 구분 초")
     run_cmd.add_argument("--max-frames", type=int, default=visual.DEFAULT_MAX_FRAMES)
+    run_cmd.add_argument("--allow-blocked-embed", action="store_true",
+                         help="외부 재생이 막힌 영상도 파이프라인을 강행한다 "
+                              "(뷰어 재생은 여전히 안 된다)")
 
     status_cmd = sub.add_parser("status", help="작업 상태와 로컬 사용량 추정")
     status_cmd.add_argument("video_id")
@@ -1570,7 +1662,8 @@ def main() -> int:
                       rpm_limit=args.rpm_limit, request_interval=args.request_interval,
                       force=args.force, video=not args.skip_video,
                       keep_video=args.keep_video, at=at,
-                      max_frames=args.max_frames)
+                      max_frames=args.max_frames,
+                      allow_blocked_embed=args.allow_blocked_embed)
         print(json.dumps(summary, ensure_ascii=False, indent=1))
     elif args.command == "status":
         bundle = bundle_path(args.bundle_root, args.video_id)
