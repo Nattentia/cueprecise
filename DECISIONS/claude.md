@@ -2499,3 +2499,90 @@ PyInstaller exe 는 빌드마다 평판이 0 에서 시작해 복불복이다.
 미번역 줄까지 같이 담기는지, instructions 에 새 규칙 문구가 있는지).
 `python -m pytest -q tests` 655 passed → **657 passed**(신규 2개), 58
 subtests 그대로.
+
+## 2026-09-18 · 임베드 차단 영상은 등록 전에 걸러야 한다 — 106분을 버린 뒤 발견
+
+**측정:** `tr-CUpw--ck`(Stanford Online, 106분)를 Gemini 4청크로 전사하고
+한국어 자막 1121문장을 다 만든 뒤에야 뷰어 재생이 안 되는 것을 알았다.
+업로더가 외부 사이트(iframe) 재생을 껐고, YouTube IFrame API 오류 101/150 로
+`viewer.py`의 `#blocked` 오버레이가 뜬다. `playable_in_embed: false`는
+`yt-dlp --skip-download --dump-json`으로 몇 초 만에 공짜로 안다. 그런데
+`_trim_metadata`(`src/pipeline.py`)가 이 필드를 버려서, 파이프라인이 끝까지
+돈 뒤에야(실제로는 사람이 뷰어를 열어 봐야만) 드러났다.
+
+**고친 것.**
+- `_trim_metadata`: `playable_in_embed`를 보존한다(bool이 아니면 `null`).
+- `pipeline.embed_playability(bundle)`: 캐시된 `raw/metadata.json`만 읽는
+  공개 함수(네트워크 없음). `mcp_server.py`(subtitle 게이트)도 같이 쓴다.
+- `pipeline._preflight_embed_block(bundle, url, allow_blocked_embed=...)`:
+  `playable_in_embed`가 `false`면 미디어를 받기 전에 차단 결과를 돌려준다.
+  모르면(`null`) `_fetch_metadata`로 메타데이터만 한 번 받아 판정한다.
+  `allow_blocked_embed=True`이거나 `derived/transcript.json`이 이미 있으면
+  검사하지 않는다.
+- `run()`: `selected`(= `resolve_stages(stages)`)에 `"fetch"`가 있을 때만
+  이 검사를 부른다. `allow_blocked_embed: bool = False` 인자를 추가했고
+  차단되면 단계를 하나도 돌리지 않고 `{"blocked_embed": true, "notice": ...,
+  "playable_in_embed": false}`를 돌려준다(예외 없음, 사람이 읽을 메시지).
+- CLI `run`에 `--allow-blocked-embed` 플래그.
+- `mcp_server.cueprecise_register`: `allow_blocked_embed` 인자 추가, 기본
+  `false`.
+- `mcp_server.cueprecise_subtitle`: 같은 판정을 쓴다. 자막의 유일한 산출
+  용도가 뷰어 재생이라, `playable_in_embed: false`면 **새** 자막 작업은
+  기본으로 거절한다. `translations/<lang>.json`이 이미 있으면(이미 만들어진
+  `tr-CUpw--ck` 번들처럼) 막지 않고 `embed_notice`만 결과에 붙인다 — 이미 쓴
+  비용을 버리게 하지 않는다. `allow_blocked_embed` 인자로 새 작업도 강행할
+  수 있다.
+- `viewer.py`의 `#blocked` 오버레이에 "브라우저 확장 프로그램을 준비 중"과
+  "그동안 CuePrecise MCP 도구로 질문·분석·정리 파일 작성 가능" 문구를 추가.
+- `README.ko.md`/`README.md` 로드맵에 확장 프로그램 항목 한 줄(영문판은 기존
+  결정대로 로드맵 한 줄만, 자막 기능 홍보를 늘리지 않았다).
+
+**고지 문구(전문).**
+
+등록 차단(`pipeline.EMBED_BLOCKED_NOTICE`):
+> 이 영상은 업로더가 외부 사이트 재생을 막아 두어 CuePrecise 뷰어에서 재생할
+> 수 없다. YouTube 페이지 위에 자막을 얹는 브라우저 확장 프로그램을 준비
+> 중이다. 그래도 영상 내용을 질문·분석하거나 요약·타임스탬프 목차·스크립트
+> 같은 정리 파일을 만들고 싶다면, cueprecise_register 에 allow_blocked_embed:
+> true 를 주거나(CLI는 --allow-blocked-embed) 강제로 파이프라인을 실행할 수
+> 있다. 뷰어 재생만 안 될 뿐이다.
+
+자막 차단(`pipeline.EMBED_BLOCKED_SUBTITLE_NOTICE`):
+> 이 영상은 업로더가 외부 사이트 재생을 막아 두어 CuePrecise 뷰어에서 재생할
+> 수 없다. 자막을 만들어도 뷰어에 얹어 볼 방법이 없다. YouTube 페이지 위에
+> 자막을 얹는 브라우저 확장 프로그램을 준비 중이다. 그래도 자막 작업을 미리
+> 해 두고 싶다면 cueprecise_subtitle 에 allow_blocked_embed: true 를 주면
+> 강제로 진행할 수 있다.
+
+**계획 검토에서 바뀐 판단.** 처음에는 `run()` 맨 앞에서 항상 선행 검사를
+부르려 했다. 기존 테스트
+(`ForceAndMissingJobTests.test_missing_job_explains_which_stage_to_run`,
+`stages=("assemble",)`로 `run()`을 부르고 네트워크를 전혀 안 씀)를 코드로
+확인하다가, 이렇게 하면 `fetch`를 고르지 않은 모든 재실행에서 매번
+`--dump-json`을 새로 부르게 된다는 것을 발견했다 — 단순히 느려지는 정도가
+아니라, 저 테스트가 실제 yt-dlp 프로세스를 부르게 되어 네트워크 없는
+테스트가 깨진다. `"fetch" in selected`일 때만 검사하도록 좁혔다: `fetch`를
+고르지 않은 재실행(`transcribe`/`render`/`chapters`/`index` 등 일부 재실행)은
+새로 받을 미디어가 없으므로 검사할 이유도 없다 — Gemini 호출까지 가려면
+`plan`이 만든 청크가 있어야 하고, 그 청크는 이전에 `fetch`가 돈 적이 있어야만
+존재한다(그때 이미 이 검사를 통과했거나 사람이 강제한 것이다). `--skip-video`
+는 영상(프레임용) 다운로드만 끄고 오디오 취득과는 무관하므로 이 게이트와
+겹치지 않음을 코드로 확인했다(`stage_fetch`가 `video` 인자와 별개로 오디오는
+항상 받는다).
+
+**테스트.** `EmbedPlayabilityMetadataTests`(4), `EmbedBlockGateTests`(8),
+`RunEmbedGateTests`(4, 차단 시 `stage_fetch` 미호출을 mock으로 확인),
+`AllowBlockedEmbedCliTests`(2, CLI 플래그가 `run()`까지 전달되는지) —
+`tests/test_pipeline.py`. `cueprecise_register`의 `allow_blocked_embed` 전달
+2개 — `tests/test_mcp_server.py`. `SubtitleEmbedGateTests`(5, 차단/강제/미확정
+허용/이미 시작한 작업/재생 가능 영상) + 오버레이 문구 확인 1개 —
+`tests/test_viewer.py`. `python -m pytest -q tests` 657 passed → **684
+passed**(신규 27개), 58 subtests 그대로.
+
+**남은 위험.** `tr-CUpw--ck`처럼 이 기능 이전에 만든 번들은
+`raw/metadata.json`에 `playable_in_embed` 키가 없어 판정 불가(`None`)로
+남는다 — 의도한 대로 차단하지 않지만, 그 번들들의 실제 재생 가능 여부는
+여전히 모른다. 다음에 `register`를 `fetch` 단계와 함께 다시 돌리면(예:
+`--force`) 메타데이터가 갱신되며 알게 된다. yt-dlp가 `playable_in_embed`를
+안 주는 추출기·구버전에서는 항상 판정 불가로 남아 차단이 전혀 동작하지
+않는다 — 그런 환경에서는 이 기능이 조용히 무력화된다는 뜻이다.
