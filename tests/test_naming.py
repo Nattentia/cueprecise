@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 import sys
 import tempfile
 import tomllib
@@ -205,42 +204,20 @@ class McpToolNameTest(unittest.TestCase):
 
 
 class InstallerMetadataTest(unittest.TestCase):
+    """zip 설치 묶음이 CuePrecise 이름과 실행 경로를 그대로 쓰는지 본다."""
+
     def setUp(self) -> None:
-        self.script = (ROOT / "installer" / "cueprecise.iss").read_text(encoding="utf-8")
+        self.script = (ROOT / "installer" / "build_windows.ps1").read_text(encoding="utf-8")
 
-    def _define(self, name: str) -> str:
-        match = re.search(rf'#define {name} "([^"]+)"', self.script)
-        self.assertIsNotNone(match, f"{name} 정의를 찾지 못했다")
-        return match.group(1)
+    def test_output_file_name(self) -> None:
+        self.assertIn("cueprecise-windows.zip", self.script)
 
-    def _setting(self, name: str) -> str:
-        match = re.search(rf"^{name}=(.+)$", self.script, re.MULTILINE)
-        self.assertIsNotNone(match, f"{name} 설정을 찾지 못했다")
-        return match.group(1).strip()
+    def test_launcher_keeps_the_product_name(self) -> None:
+        self.assertIn("CuePrecise 설치.cmd", self.script)
 
-    def test_installer_version_matches_the_package_version(self) -> None:
-        package = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-        self.assertEqual(self._define("MyAppVersion"), package["project"]["version"])
-
-    def test_product_publisher_and_output_file_name(self) -> None:
-        self.assertEqual(self._define("MyAppName"), "CuePrecise")
-        self.assertEqual(self._define("MyAppPublisher"), "Nattentia")
-        self.assertEqual(self._setting("OutputBaseFilename"), "cueprecise-setup")
-        self.assertEqual(self._setting("UninstallDisplayName"), "CuePrecise")
-
-    def test_install_directory_uses_the_product_name(self) -> None:
-        self.assertEqual(self._setting("DefaultDirName"), r"{localappdata}\Programs\CuePrecise")
-
-    def test_appid_is_unchanged_so_the_old_install_upgrades(self) -> None:
-        self.assertEqual(self._setting("AppId"), "{{E5118050-5C8A-47D9-8A61-A4A94C6298ED}")
-
-    def test_bundled_files_use_the_new_executable_names(self) -> None:
-        for filename in ("cueprecise-mcp.exe", "cueprecise-onboarding.exe", "yt-dlp.exe"):
-            self.assertIn(filename, self.script)
-
-    def test_upgrade_migrates_the_configuration_before_deleting_old_files(self) -> None:
-        self.assertIn('Parameters: "--migrate"', self.script)
-        self.assertLess(self.script.index("[InstallDelete]"), self.script.index("[Files]"))
+    def test_launcher_runs_the_embedded_python(self) -> None:
+        self.assertIn("py\\python.exe", self.script)
+        self.assertIn("cueprecise_setup", self.script)
 
 
 class PolicyDocumentTest(unittest.TestCase):
