@@ -495,6 +495,7 @@ installed.
 ## Roadmap
 
 - [x] Korean subtitles laid over the YouTube video, built from the analyzed evidence
+- [ ] A browser extension for videos that block external playback
 - [ ] The same subtitles in languages other than Korean
 - [ ] Host-specific timestamp links
 - [ ] Pipelined chunk transcription
