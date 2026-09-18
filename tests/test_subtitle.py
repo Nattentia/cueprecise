@@ -916,6 +916,67 @@ class MergeLineTests(unittest.TestCase):
             self.assertEqual(first["segments"][-1]["end"], second["end"])
 
 
+class TranslateBatchGapTests(unittest.TestCase):
+    """실측(106분 강연, 1121문장)에서 드러난 문제: 거절로 중간에 구멍이 난 줄이
+    다음 패킷에서 혼자 왕복하던 버그. `_translate_batch_for` 가 저장된 줄을
+    건너뛰고 미저장 줄을 모아야 한다(단일 줄 패킷을 만들지 않는다)."""
+
+    def _bundle(self, root: Path) -> Path:
+        bundle = root / "vid"
+        words = [
+            _word("Hello", 0.0, 0.5), _word("world.", 0.6, 1.1),
+            _word("It", 2.0, 2.2), _word("happened", 2.2, 2.5), _word("there.", 2.5, 2.8),
+            _word("It", 4.0, 4.2), _word("happened", 4.2, 4.5), _word("again.", 4.5, 4.8),
+            _word("It", 6.0, 6.2), _word("happened", 6.2, 6.5), _word("once.", 6.5, 6.8),
+        ]
+        _write_json(bundle / "derived" / "transcript.json",
+                   {"video_id": "vid", "words": words})
+        return bundle
+
+    def _start_translate(self, bundle: Path) -> dict:
+        packet = subtitle.build_packet(bundle, video_id="vid", lang="ko")
+        result = subtitle.apply_response(bundle, video_id="vid", phase="terms",
+                                         fingerprint=packet["fingerprint"], text="")
+        self.assertEqual(result["next"]["phase"], "translate")
+        return result["next"]
+
+    def test_gap_left_by_a_rejected_line_is_filled_by_later_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle(Path(directory))
+            packet = self._start_translate(bundle)
+            # 문장 1,3 은 정상 번역, 문장 2 만 한글 비율 미달로 거절돼 구멍이
+            # 된다. 문장 4 는 이번 응답에 아예 없어 다음 라운드까지 미번역으로
+            # 남는다(아직 오지 않은 일감 역할).
+            result = subtitle.apply_response(
+                bundle, video_id="vid", phase="translate", fingerprint=packet["fingerprint"],
+                text="1|안녕 세상아.\n2|this happened there\n3|다시 일어났습니다.")
+            self.assertEqual(sorted(result["accepted"]), [1, 3])
+            self.assertEqual([r["line"] for r in result["rejected"]], [2])
+            self.assertEqual(result["next"]["phase"], "translate")
+
+            state = subtitle.load_state(bundle, "ko")
+            indexed = subtitle.index_sentences(bundle)
+            batch = subtitle._translate_batch_for(bundle, state, indexed)
+            # 옛 버그: 문장 3 이 이미 저장돼 있어 batch 가 [2] 하나로 끊겼다.
+            # 고친 뒤: 저장된 3 은 건너뛰고 2, 4 를 같은 묶음에 담는다.
+            self.assertEqual([item["no"] for item in batch], [2, 4])
+
+            next_packet = result["next"]["packet"]
+            self.assertIn("2|", next_packet)
+            self.assertIn("4|", next_packet)
+            # 건너뛴 구간(3번, 이미 저장됨)이 패킷에 드러나 번역자가 2, 4 가
+            # 바로 이어진다고 오해하지 않는다.
+            self.assertIn("-- 3번 이미 번역됨(생략) --", next_packet)
+
+    def test_translate_instructions_state_hard_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle(Path(directory))
+            packet = self._start_translate(bundle)
+            instructions = packet["instructions"]
+            self.assertIn("오름차순", instructions)
+            self.assertIn("한글 비율은 30%", instructions)
+            self.assertIn("초당 약 13자", instructions)
+
 
 class ReviewFixTests(unittest.TestCase):
     """실측(68분 강연)에서 드러난 재검토 단계 결함의 회귀 테스트."""
