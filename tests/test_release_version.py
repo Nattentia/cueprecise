@@ -1,6 +1,6 @@
 """릴리스 버전 검사 테스트.
 
-문자열을 맞추는 테스트가 아니다. **버전이 박힌 다섯 곳이 지금 서로 맞는지**를
+문자열을 맞추는 테스트가 아니다. **버전이 박힌 네 곳이 지금 서로 맞는지**를
 평소 CI 에서 미리 걸러내고, 어긋났을 때 릴리스가 실제로 멈추는지를 본다.
 """
 from __future__ import annotations
@@ -16,18 +16,16 @@ import release_version
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _fake_repo(root: Path, pyproject: str, iss: str, readme: str, readme_ko: str) -> None:
+def _fake_repo(root: Path, pyproject: str, readme: str, readme_ko: str,
+               manifest: str | None = None) -> None:
     (root / "installer" / "mcpb").mkdir(parents=True, exist_ok=True)
     (root / "pyproject.toml").write_text(
         f'[project]\nname = "cueprecise-mcp"\nversion = "{pyproject}"\n', encoding="utf-8"
     )
-    (root / "installer" / "cueprecise.iss").write_text(
-        f'#define MyAppName "CuePrecise"\n#define MyAppVersion "{iss}"\n', encoding="utf-8"
-    )
     (root / "README.md").write_text(f"> `v{readme}` is a prerelease.\n", encoding="utf-8")
     (root / "README.ko.md").write_text(f"> `v{readme_ko}`은 시험판이다.\n", encoding="utf-8")
     (root / "installer" / "mcpb" / "manifest.json").write_text(
-        f'{{"version": "{pyproject}"}}\n', encoding="utf-8"
+        f'{{"version": "{manifest or pyproject}"}}\n', encoding="utf-8"
     )
 
 
@@ -36,7 +34,7 @@ class RepositoryConsistencyTest(unittest.TestCase):
 
     def test_all_declared_versions_agree(self) -> None:
         found = release_version.declared_versions(REPO_ROOT)
-        self.assertEqual(len(found), 5)
+        self.assertEqual(len(found), 4)
         self.assertEqual(
             len(set(found.values())),
             1,
@@ -72,12 +70,12 @@ class MismatchTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             # 0.2.0 을 낼 때 실제로 났던 사고: 일부만 올리고 나머지를 잊는다.
-            _fake_repo(root, "0.3.0", "0.2.0", "0.3.0", "0.2.0")
+            _fake_repo(root, "0.3.0", "0.3.0", "0.2.0", manifest="0.2.0")
             with self.assertRaises(release_version.VersionMismatch) as caught:
                 release_version.check("0.3.0", root)
             message = str(caught.exception)
-            self.assertIn("installer/cueprecise.iss", message)
             self.assertIn("README.ko.md", message)
+            self.assertIn("installer/mcpb/manifest.json", message)
             self.assertNotIn("pyproject.toml", message)
 
     def test_check_rejects_version_nobody_declared(self) -> None:

@@ -632,8 +632,6 @@ data/<video_id>/
 
 - **이름은 하나다.** 실행 명령은 `cueprecise`, `cueprecise-mcp`. MCP 도구
   접두사는 `cueprecise_`. 설정 항목 이름은 `cueprecise`. 별칭은 두지 않는다.
-- **설치 프로그램 AppId.** Inno Setup 의 `AppId` GUID 는 바꾸지 않는다. 바꾸면
-  기존 설치가 지워지지 않고 별개 프로그램으로 남는다.
 - **요약 표식.** `summary.py` 의 `META_PREFIX` 는 `<!-- cueprecise-summary:` 다
   (14절). 사용자에게 보이지 않는 내부 표식이다. 바꾸면 이미 저장된 요약을
   읽지 못하므로, 바꿀 때는 기존 번들의 `summary.md` 와 색인
@@ -654,8 +652,11 @@ data/<video_id>/
 
 ### 버전
 
-- `pyproject.toml` 의 `version` 과 `installer/cueprecise.iss` 의
-  `MyAppVersion` 은 항상 같아야 한다. `tests/test_naming.py` 가 검사한다.
+- 버전이 박힌 네 곳 — `pyproject.toml`, `README.md`, `README.ko.md`,
+  `installer/mcpb/manifest.json` — 은 항상 같아야 한다.
+  `installer/release_version.py` 가 목록의 유일한 진실이고
+  `tests/test_release_version.py` 가 검사한다. 릴리스 워크플로는 이 검사를
+  통과해야 빌드를 시작한다.
 
 ## 16. 번역 자막과 뷰어
 

@@ -8,10 +8,6 @@
 # CPython + Gyan FFmpeg essentials, no PyInstaller-built or custom-compiled
 # executable) as a plain zip with a `.cmd` launcher, for AI clients other than
 # Claude Desktop that cannot install a `.mcpb`.
-#
-# installer/cueprecise.iss is left in place (unused by this script) because
-# tests/test_naming.py and installer/release_version.py still read it as one
-# of the five places a release version must agree.
 
 $repo = Split-Path -Parent $PSScriptRoot
 $mcpbStage = Join-Path $repo "build\mcpb\release"
