@@ -455,9 +455,9 @@ PAGE_HTML = r"""<!doctype html>
   <div id="theater">
     <div id="stage">
       <div id="player"></div>
-      <div id="blocked"><div>이 영상은 외부 재생이 막혀 있습니다.</div>
-        <div class="blockedNote">YouTube 페이지 위에 자막을 얹는 브라우저 확장 프로그램을 준비 중입니다.
-          그동안은 CuePrecise MCP 도구로 영상 내용을 질문·분석하거나 요약·타임스탬프 목차·스크립트
+      <div id="blocked"><div>업로더가 외부 사이트 재생을 허용하지 않은 영상입니다.</div>
+        <div class="blockedNote">YouTube 페이지 위에 자막을 얹는 브라우저 확장 프로그램을 준비하고 있습니다.
+          그동안은 CuePrecise MCP 도구로 영상 내용을 질문하거나 요약·타임스탬프 목차·스크립트
           같은 정리 파일을 만들 수 있습니다.</div>
         <a id="ytLink" href="#" target="_blank" rel="noopener">YouTube에서 보기</a></div>
       <div id="cueLayer"></div>
