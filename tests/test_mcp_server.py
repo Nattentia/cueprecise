@@ -81,6 +81,23 @@ class ToolSurfaceTests(unittest.TestCase):
         self.assertNotIn("isError", reply["result"])
         self.assertEqual(run.call_args.kwargs["api_key"], key)
 
+    def test_register_defaults_allow_blocked_embed_to_false(self) -> None:
+        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                   "params": {"name": "cueprecise_register",
+                              "arguments": {"url": "abcdefghijk"}}}
+        with mock.patch("mcp_server.pipeline.run", return_value={"ok": True}) as run:
+            mcp_server.handle(message, bundle_root=Path("data"))
+        self.assertIs(run.call_args.kwargs["allow_blocked_embed"], False)
+
+    def test_register_forwards_allow_blocked_embed(self) -> None:
+        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                   "params": {"name": "cueprecise_register",
+                              "arguments": {"url": "abcdefghijk",
+                                            "allow_blocked_embed": True}}}
+        with mock.patch("mcp_server.pipeline.run", return_value={"ok": True}) as run:
+            mcp_server.handle(message, bundle_root=Path("data"))
+        self.assertIs(run.call_args.kwargs["allow_blocked_embed"], True)
+
 
 MODERN_META = {"_meta": {mcp_server.PROTOCOL_VERSION_KEY:
                          mcp_server.MODERN_PROTOCOL_VERSION}}

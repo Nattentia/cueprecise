@@ -197,6 +197,94 @@ class McpServerViewerUrlTests(unittest.TestCase):
             self.assertIsNone(result["viewer_url"])
 
 
+class SubtitleEmbedGateTests(unittest.TestCase):
+    """실측(tr-CUpw--ck, 106분): 재생이 막힌 영상을 다 전사·번역한 뒤에야 알았다.
+
+    자막의 유일한 산출 용도는 뷰어 재생이므로, 아직 시작하지 않은 자막 작업은
+    `playable_in_embed: false` 면 기본으로 거절한다. 이미 시작한 작업은 이미
+    쓴 비용이므로 막지 않는다.
+    """
+
+    def _bundle(self, root: Path) -> Path:
+        bundle = root / "AAAAAAAAAAA"
+        words = [_word("Hello", 0.0, 0.5), _word("world.", 0.6, 1.1)]
+        _write_json(bundle / "derived" / "transcript.json",
+                   {"video_id": "AAAAAAAAAAA", "words": words})
+        return bundle
+
+    def _write_metadata(self, bundle: Path, playable: bool) -> None:
+        _write_json(bundle / "raw" / "metadata.json",
+                   {"video_id": "AAAAAAAAAAA", "playable_in_embed": playable})
+
+    def test_blocks_fresh_subtitle_work_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle_root = Path(directory)
+            bundle = self._bundle(bundle_root)
+            self._write_metadata(bundle, False)
+            with mock.patch.object(mcp_server.viewer, "ensure_server",
+                                   return_value=(None, "무시")):
+                with self.assertRaises(mcp_server.ToolError) as caught:
+                    mcp_server.tool_subtitle(bundle_root, video_id="AAAAAAAAAAA")
+            self.assertIn("cueprecise_subtitle", str(caught.exception))
+            self.assertIn("allow_blocked_embed", str(caught.exception))
+            self.assertFalse((bundle / "translations" / "ko.json").exists(),
+                             "차단됐는데 상태 파일을 만들었다")
+
+    def test_allow_blocked_embed_forces_it_through(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle_root = Path(directory)
+            bundle = self._bundle(bundle_root)
+            self._write_metadata(bundle, False)
+            with mock.patch.object(mcp_server.viewer, "ensure_server",
+                                   return_value=(None, "무시")):
+                result = mcp_server.tool_subtitle(bundle_root, video_id="AAAAAAAAAAA",
+                                                  allow_blocked_embed=True)
+            self.assertEqual(result["embed_notice"], mcp_server.pipeline.EMBED_BLOCKED_NOTICE)
+            self.assertTrue((bundle / "translations" / "ko.json").exists())
+
+    def test_unknown_playability_does_not_block(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle_root = Path(directory)
+            self._bundle(bundle_root)  # metadata.json 없음 -> 판정 불가
+            with mock.patch.object(mcp_server.viewer, "ensure_server",
+                                   return_value=(None, "무시")):
+                result = mcp_server.tool_subtitle(bundle_root, video_id="AAAAAAAAAAA")
+            self.assertNotIn("embed_notice", result)
+
+    def test_playable_true_never_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle_root = Path(directory)
+            bundle = self._bundle(bundle_root)
+            self._write_metadata(bundle, True)
+            with mock.patch.object(mcp_server.viewer, "ensure_server",
+                                   return_value=(None, "무시")):
+                result = mcp_server.tool_subtitle(bundle_root, video_id="AAAAAAAAAAA")
+            self.assertNotIn("embed_notice", result)
+
+    def test_already_started_work_is_not_blocked_but_gets_notice(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle_root = Path(directory)
+            bundle = self._bundle(bundle_root)
+            self._write_metadata(bundle, False)
+            with mock.patch.object(mcp_server.viewer, "ensure_server",
+                                   return_value=(None, "무시")):
+                # 강제로 한 번 시작해 translations/ko.json 을 만들어 둔다
+                # (이미 만들어진 tr-CUpw--ck 번들과 같은 상태).
+                mcp_server.tool_subtitle(bundle_root, video_id="AAAAAAAAAAA",
+                                         allow_blocked_embed=True)
+                # 이후에는 allow_blocked_embed 없이도 막히지 않는다.
+                result = mcp_server.tool_subtitle(bundle_root, video_id="AAAAAAAAAAA")
+            self.assertEqual(result["embed_notice"], mcp_server.pipeline.EMBED_BLOCKED_NOTICE)
+
+    def test_blocked_overlay_mentions_extension_and_mcp_tools(self) -> None:
+        html = viewer.PAGE_HTML
+        start = html.index('id="blocked"')
+        end = html.index("</div>", html.index("ytLink", start))
+        block = html[start:end]
+        self.assertIn("확장 프로그램", block)
+        self.assertIn("CuePrecise MCP", block)
+
+
 class PseudoFullscreenFallbackTests(unittest.TestCase):
     """Bug 2: 인앱 브라우저 패널처럼 Fullscreen API 가 없거나 거부될 때의 대체 동작."""
 
