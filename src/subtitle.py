@@ -882,12 +882,12 @@ def _translate_batch_for(bundle: Path, state: dict[str, Any], indexed: Indexed
             break
     if start is None:
         return []
-    run = []
-    for item in indexed.sentences[start:]:
-        if item["key"] in lines:
-            break
-        run.append(item)
-    if not run:
+    # 저장된(이미 번역된) 문장은 건너뛰고 미저장 문장만 모은다 — 거절돼 혼자
+    # 남은 한 줄이 다음 미번역 구간과 합쳐져 한 패킷이 된다(왕복 감소). 건너뛴
+    # 구간은 `_render_translate_body` 가 "-- N~M번 이미 번역됨(생략) --" 로
+    # 패킷에 남겨 번역자가 앞뒤 문장이 바로 이어진다고 오해하지 않게 한다.
+    unsaved = [item for item in indexed.sentences[start:] if item["key"] not in lines]
+    if not unsaved:
         return []
 
     chapters_path = bundle / "derived" / "chapters.json"
@@ -899,14 +899,14 @@ def _translate_batch_for(bundle: Path, state: dict[str, Any], indexed: Indexed
         except (OSError, ValueError, KeyError):
             chapter_starts = []
 
-    total_chars = len(run[0]["text"])
-    batch = [run[0]]
-    for position in range(1, len(run)):
-        item = run[position]
+    total_chars = len(unsaved[0]["text"])
+    batch = [unsaved[0]]
+    for position in range(1, len(unsaved)):
+        item = unsaved[position]
         projected = total_chars + len(item["text"])
         if projected > BATCH_CHARS:
             break
-        gap = item["start"] - run[position - 1]["end"]
+        gap = item["start"] - batch[-1]["end"]
         natural_break = gap >= BATCH_BREAK_GAP_SECS or any(
             abs(item["start"] - boundary) < 0.05 for boundary in chapter_starts)
         batch.append(item)
@@ -929,9 +929,15 @@ def _render_translate_body(state: dict[str, Any], indexed: Indexed,
     if context:
         lines.append("[앞 문맥] " + "  ".join(context))
     lines.append("[원고] 번호|길이|글자상한|원문(^k 표시)")
+    previous_no: int | None = None
     for item in batch:
+        if previous_no is not None and item["no"] != previous_no + 1:
+            skip_start, skip_end = previous_no + 1, item["no"] - 1
+            span = f"{skip_start}" if skip_start == skip_end else f"{skip_start}~{skip_end}"
+            lines.append(f"-- {span}번 이미 번역됨(생략) --")
         duration = item["end"] - item["start"]
         lines.append(f"{item['no']}|{duration:.1f}s|{char_budget(duration)}|{_render_sentence(item)}")
+        previous_no = item["no"]
     return "\n".join(lines)
 
 
@@ -976,7 +982,13 @@ def _packet_translate(bundle: Path, state: dict[str, Any], indexed: Indexed,
                    "문장이 중간에 끊겨 다음 번호와 합쳐야만 옮길 수 있으면 다음 번호를 "
                    "<번호>|= 로 답하고(예: 12|=, 연쇄 가능 11<-12<-13) 그 내용을 앞 번역에 "
                    "포함시켜라 — 병합된 문장의 시작은 /+1, /+2, 병합된 문장 안의 숨 지점은 /+1.2 처럼 써라. "
-                   "합쇼체로 쓴다.")
+                   "합쇼체로 쓴다. "
+                   "/k, /+n 번호는 항상 오름차순으로 써라 — 한국어 어순이 뒤집혀도 표시는 원문 시간순이다. "
+                   "원문이 기호·숫자뿐이어도 번역문의 한글 비율은 30% 이상이어야 한다(기호를 그대로 "
+                   "베끼지 말고 한국어로 풀어써라). "
+                   "/k 로 나눈 구간도 각각 초당 약 13자를 넘기지 마라(문장 전체 글자상한과 별개다). "
+                   "'-- N~M번 이미 번역됨(생략) --' 표시는 그 사이 문장이 이미 처리됐다는 뜻이다 — "
+                   "표시 앞뒤 문장이 바로 이어진다고 보지 마라.")
     return _base_packet(video_id=video_id, phase="translate",
                         fingerprint=state["sentences_fingerprint"],
                         progress=_progress(state, indexed), instructions=instructions,
