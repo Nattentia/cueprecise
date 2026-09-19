@@ -76,6 +76,19 @@ class BreathAndBudgetTests(unittest.TestCase):
         points = subtitle.breath_points(sentence_words)
         self.assertEqual(points, [0.31, 1.0])
 
+    def test_zero_length_word_does_not_duplicate_breath_point(self) -> None:
+        """길이 0인 단어의 앞뒤 경계는 같은 시각을 가리킨다. 한 번만 담아야 한다.
+
+        같은 시각이 두 번 담기면 뒤 번호는 넘김 시각이 증가하지 않아 어떤
+        번역으로도 쓸 수 없다.
+        """
+        sentence_words = [
+            {"text": "then", "start": 0.0, "end": 0.3},
+            {"text": "Oh,", "start": 1.0, "end": 1.0},
+            {"text": "that", "start": 1.0, "end": 1.2},
+        ]
+        self.assertEqual(subtitle.breath_points(sentence_words), [1.0])
+
     def test_char_budget_floor_and_scale(self) -> None:
         self.assertEqual(subtitle.char_budget(0.1), 8)
         self.assertEqual(subtitle.char_budget(2.0), 26)
@@ -269,6 +282,45 @@ class TranslatePhaseTests(unittest.TestCase):
                 text="- 1|안녕 세상아.\n`2|그것은 100개 항목이 있습니다.`")
             self.assertEqual(sorted(result["accepted"]), [1, 2])
             self.assertEqual(result["rejected"], [])
+
+    def test_literal_slash_number_in_text_is_not_a_break_marker(self) -> None:
+        """본문의 `C/3` 는 넘김 표시가 아니다. 앞뒤가 공백일 때만 표시로 읽는다."""
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle(Path(directory))
+            packet = self._start_translate(bundle)
+            # 문장 1엔 숨 지점이 없다. `/3` 을 표시로 읽으면 범위를 벗어나 거절된다.
+            result = subtitle.apply_response(
+                bundle, video_id="vid", phase="translate", fingerprint=packet["fingerprint"],
+                text="1|이것을 C/3라고 부릅니다.")
+            self.assertEqual(result["accepted"], [1])
+            self.assertEqual(result["rejected"], [])
+            state = subtitle.load_state(bundle, "ko")
+            stored = next(line for line in state["lines"].values() if line.get("ko"))
+            self.assertIn("C/3", stored["ko"])
+            self.assertEqual(stored["breaks"], [])
+
+    def test_rejected_merge_root_can_be_retried_alone(self) -> None:
+        """뿌리가 거절되고 `=` 만 수락된 뒤, 뿌리만 다시 보내도 `/+1` 이 살아야 한다.
+
+        병합 사슬을 이번 응답의 `=` 줄로만 만들면 재시도에서 사슬이 사라져
+        `/+n` 이 범위를 벗어난다 — 재시도 기회가 남아도 고칠 수 없게 된다.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self._bundle(Path(directory))
+            packet = self._start_translate(bundle)
+            # 1차: 뿌리는 범위를 벗어난 /9 로 거절되고, 병합 선언만 저장된다.
+            first = subtitle.apply_response(
+                bundle, video_id="vid", phase="translate", fingerprint=packet["fingerprint"],
+                text="1|안녕 /9 세상아.\n2|=")
+            self.assertEqual(first["accepted"], [2])
+            self.assertEqual([r["line"] for r in first["rejected"]], [1])
+            # 2차: 뿌리만 다시 보낸다. 저장된 병합 선언이 사슬로 남아 있어야 한다.
+            second = subtitle.apply_response(
+                bundle, video_id="vid", phase="translate",
+                fingerprint=first["next"]["fingerprint"],
+                text="1|안녕 /+1 세상아.")
+            self.assertEqual(second["accepted"], [1])
+            self.assertEqual(second["rejected"], [])
 
 
 class FullCycleTests(unittest.TestCase):
