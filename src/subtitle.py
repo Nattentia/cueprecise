@@ -163,11 +163,20 @@ def _has_breath(previous: dict[str, Any], current: dict[str, Any]) -> bool:
 
 
 def breath_points(sentence_words: list[dict[str, Any]]) -> list[float]:
-    """문장 안 숨 지점의 시각(다음 단어 start) 목록. 1번부터 순서대로다."""
-    points = []
+    """문장 안 숨 지점의 시각(다음 단어 start) 목록. 1번부터 순서대로다.
+
+    같은 시각은 한 번만 담는다. 길이 0인 단어(start == end)가 있으면 그 앞뒤
+    경계가 둘 다 숨으로 잡혀 같은 시각이 두 번 나오는데, 넘김 시각은 엄격히
+    증가해야 하므로 뒤에 오는 쪽은 어떤 번역으로도 쓸 수 없는 번호가 된다.
+    """
+    points: list[float] = []
     for index in range(1, len(sentence_words)):
-        if _has_breath(sentence_words[index - 1], sentence_words[index]):
-            points.append(float(sentence_words[index]["start"]))
+        if not _has_breath(sentence_words[index - 1], sentence_words[index]):
+            continue
+        point = float(sentence_words[index]["start"])
+        if points and point <= points[-1]:
+            continue
+        points.append(point)
     return points
 
 
@@ -1486,7 +1495,10 @@ def _hangul_ratio(text: str) -> float:
     return hangul / len(letters)
 
 
-_BREAK_TOKEN_RE = re.compile(r"\s*/(\+\d+(?:\.\d+)?|\d+)\s*")
+# 넘김 표시는 홀로 선 토큰일 때만 인정한다. 앞이 줄 시작이나 공백이고 뒤도
+# 공백이나 줄 끝이어야 한다. 본문에 나오는 `C/3`, `1/2` 같은 표기를 넘김으로
+# 읽으면 그 문장은 번역할 방법이 없어진다.
+_BREAK_TOKEN_RE = re.compile(r"(?<![^\s])/(\+\d+(?:\.\d+)?|\d+)(?![^\s])")
 
 
 def _parse_translate_line(rest: str) -> tuple[list[str], list[str], bool]:
@@ -1674,9 +1686,29 @@ def _apply_translate(bundle: Path, state: dict[str, Any], indexed: Indexed, text
             continue
         merge_target[number] = target_no
 
+    # 이미 저장된 병합 선언도 사슬로 친다. 뿌리가 거절되고 `=` 줄만 수락된
+    # 묶음에서 뿌리만 다시 보내면, 이번 응답에는 `=` 가 없어 사슬이 사라지고
+    # `/+n` 이 범위를 벗어난다 — 재시도 기회가 있어도 고칠 수 없게 된다.
+    stored_merge: dict[int, int] = {}
+    for stored_no, stored_item in indexed.by_no.items():
+        merged_into = (lines_state.get(stored_item["key"]) or {}).get("merged_into")
+        if not merged_into:
+            continue
+        target_item = indexed.by_no.get(stored_no - 1)
+        if target_item is not None and target_item["key"] == merged_into:
+            stored_merge[stored_no] = stored_no - 1
+
+    def _merged_target_of(number: int) -> int | None:
+        if number in merge_target:
+            return merge_target[number]
+        # 이번 응답이 그 번호를 일반 번역으로 다시 보냈다면 병합은 풀린 것이다.
+        if number in responses:
+            return None
+        return stored_merge.get(number)
+
     def _chain_terminal_no(root_no: int) -> int:
         terminal = root_no
-        while merge_target.get(terminal + 1) == terminal:
+        while _merged_target_of(terminal + 1) == terminal:
             terminal += 1
         return terminal
 
