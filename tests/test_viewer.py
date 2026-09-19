@@ -388,6 +388,19 @@ class TermsToggleNotPersistedTests(unittest.TestCase):
         persisted_line = html[start:line_end]
         self.assertNotIn('"terms"', persisted_line)
 
+    def test_term_explanations_use_media_clock(self) -> None:
+        html = viewer.PAGE_HTML
+        self.assertIn("function advanceTermQueue(mediaTime)", html)
+        self.assertIn("entry.showAt", html)
+        self.assertIn("entry.expiresAt", html)
+        self.assertNotIn("setTimeout(doShow", html)
+        self.assertNotIn("termDuration(text) * 1000", html)
+        self.assertNotIn("function videoPaused()", html)
+        self.assertNotIn("entry.remainingMs", html)
+
+
+
+
 
 if __name__ == "__main__":
     unittest.main()
