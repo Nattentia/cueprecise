@@ -26,12 +26,20 @@ network, and API response time.
 
 ## See it in action
 
-The attached demo uses a lecture that runs for 1 hour 48 minutes. It shows a summary with
-timestamps, speaker-by-speaker comparison, frame search, and links back to the source video.
+The attached demo uses a Polish-language interview. Ask what it is about in your own language;
+CuePrecise returns relevant moments, the original transcript, and matching frames as evidence.
 
-https://github.com/user-attachments/assets/aeec6d01-aff2-477c-9e91-2edcc6b31183
+~~~text
+You: I do not speak Polish. What is this interview about?
 
-<sub><a href="https://www.youtube.com/watch?v=F9I7llmuhAk">Demo source video</a></sub>
+Your AI + CuePrecise:
+Explains the interview in your language, points to relevant moments,
+and provides the original transcript and matching frames as evidence.
+~~~
+
+https://github.com/user-attachments/assets/ce7d595b-871f-469a-bcb8-798713751ffd
+
+<sub>Demo source: <a href="https://www.youtube.com/watch?v=W5C3FdUO0vs">“Czym jest prompt injection i jak chronić firmę przed złośliwą instrukcją dla AI? Gośc. Tomasz Bartel”</a> by Daniel Bartosiewicz | Content i Automatyzacja, licensed under CC BY.</sub>
 
 [**Download CuePrecise → GitHub Releases**](https://github.com/Nattentia/cueprecise/releases)
 
