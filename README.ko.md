@@ -76,7 +76,7 @@ Claude에서는 응답의 타임스탬프를 누르면 해당 시점부터 YouTu
 4. CuePrecise를 켠 뒤 YouTube 링크에 관해 질문합니다.
 
 이 파일 하나에 CuePrecise 서버, 내장 Python, yt-dlp, FFmpeg, FFprobe가 함께 들어 있습니다.
-약 95MiB이며 Python, Git, 별도 명령어 입력이 필요 없습니다. 현재 이 확장 프로그램은
+약 97MiB이며 Python, Git, 별도 명령어 입력이 필요 없습니다. 현재 이 확장 프로그램은
 Windows용 Claude Desktop에서 사용할 수 있습니다. 다른 지원 앱에는 같은 Releases의
 cueprecise-windows.zip을 사용합니다.
 
@@ -150,12 +150,12 @@ origin을 남깁니다. 예시 영상에서 확인한 결과는 다음과 같습
 
 번역은 사용 중인 AI 앱이 합니다. 강연을 작은 묶음으로 나눠 넘기고, 돌아온 번역은
 숫자·용어·읽기 속도·빠진 줄·말투를 자동으로 검사합니다. 걸린 줄만 다시 보여주고
-나머지는 통과시킵니다. Gemini를 추가로 호출하지 않으므로 번역에는 API 비용이 들지
-않습니다.
+나머지는 통과시킵니다. 번역에는 추가 Gemini 호출이 없으며, 사용 중인 AI 앱의 사용량이나
+요금은 해당 앱의 요금제에 따릅니다.
 
 68분 강연 934문장으로 측정한 결과 용어 확정에 약 2분, 번역 19묶음에 약 14분이 걸렸고
-재검토는 6묶음이었습니다. 재생 속도의 약 5배라 번역을 걸어둔 뒤 바로 영상을 틀어도
-자막이 앞서갑니다.
+재검토는 6묶음이었습니다. 이 측정에서는 재생 속도의 약 5배로 자막을 만들었습니다.
+실제 속도는 영상과 사용하는 AI 앱에 따라 달라집니다.
 
 완성된 자막은 브라우저의 로컬 뷰어에서 봅니다.
 
@@ -168,6 +168,7 @@ origin을 남깁니다. 예시 영상에서 확인한 결과는 다음과 같습
 - 단축키: `Space` 재생·정지, `←` `→` 5초 이동, `C` 자막 언어, `T` 용어 해설,
   `F` 전체화면.
 
+품질 보고의 교정 건수에서는 `MinGPT → minGPT` 같은 단순 표기 차이를 제외합니다.
 번역 대상 언어는 현재 한국어입니다. 다른 언어는 로드맵에 있습니다.
 
 ### 한 번 분석한 영상은 다시 쓸 수 있습니다
@@ -211,8 +212,9 @@ AI 앱이 직접 대화형 입력 없이 스크립트를 실행할 수도 있습
 `CuePrecise 설치.cmd --api-key-stdin --targets claude-desktop,codex`.
 
 Python이나 Git을 설치할 필요가 없습니다. Windows에서는 API 키를 현재 사용자만
-풀 수 있도록 DPAPI로 암호화합니다. 기존 설정은 백업한 뒤 CuePrecise 항목만
-추가하며, 예전 버전이 평문으로 저장했던 키도 업그레이드할 때 암호화 저장소로
+풀 수 있도록 DPAPI로 암호화합니다. 기존 설정은 안전하게 백업할 수 있을 때만 백업하고
+CuePrecise 항목만 추가합니다. 비밀이 포함된 Codex TOML은 키 복사를 피하기 위해 백업하지
+않을 수 있습니다. 예전 버전이 평문으로 저장했던 키도 업그레이드할 때 암호화 저장소로
 옮깁니다.
 
 현재 `v0.2.10` 배포 파일은 서명되지 않은 시험판입니다. Windows에서 알 수 없는 게시자
@@ -220,7 +222,7 @@ Python이나 Git을 설치할 필요가 없습니다. Windows에서는 API 키�
 
 ### macOS·Linux 또는 명령어 설치
 
-uv가 있으면 [uv 설치 안내](https://docs.astral.sh/uv/getting-started/installation/)를
+[uv 설치 안내](https://docs.astral.sh/uv/getting-started/installation/)를
 따라 설치한 뒤 다음 명령을 실행합니다.
 
 ~~~bash
@@ -273,9 +275,15 @@ cueprecise setup --client codex     # 하나만
 cueprecise doctor                   # 설치·연결 상태
 ~~~
 
-앱의 실행 파일이 PATH에 없거나 자동 감지 목록에 없는 경우에도
+자동 감지는 PATH에서 앱의 실행 파일을 확인하며, 남아 있는 설정 폴더만으로 설치된
+앱이라고 판단하지 않습니다. 앱의 실행 파일이 PATH에 없거나 자동 감지 목록에 없는 경우에도
 cueprecise setup --client <이름>으로 지정할 수 있습니다. 이미 있는 cueprecise 항목이
-CuePrecise가 만든 것이 아니면 건너뛰며, 다른 MCP 설정을 덮어쓰지 않습니다.
+CuePrecise가 만든 것이 아니면 건너뛰며, 다른 MCP 설정을 덮어쓰지 않습니다. 한 앱의
+설정에 실패해도 나머지 앱의 설정은 계속합니다.
+
+CuePrecise는 요청마다 프로토콜 버전을 전달하는 MCP `2026-07-28`과 이전의
+`initialize` 핸드셰이크를 모두 지원합니다. 지원 앱에서는 기존 설정과 인증 정보를
+처리하는 `cueprecise setup`을 권장합니다.
 
 수동 등록이 필요한 MCP 호스트에서는 다음 JSON을 사용합니다. API 키가 평문으로
 남으므로 가능하면 setup 명령을 사용하세요.
@@ -299,6 +307,8 @@ CuePrecise가 만든 것이 아니면 건너뛰며, 다른 MCP 설정을 덮어�
 ~~~
 
 절대 경로를 사용하세요. --bundle-root는 영상 자료를 쌓아둘 디렉터리입니다.
+모든 운영체제에서 키를 직접 적는 `--api-key VALUE`는 거부합니다. 프로세스 목록과
+셸 기록에 키가 남지 않도록 표준 입력이나 파일을 사용하세요.
 GEMINI_API_KEY 없이도 서버는 시작되며, 이미 분석한 영상의 조회 도구는 사용할 수
 있습니다. 새 전사가 필요한 도구만 API 키가 없다는 사실을 알리고 멈춥니다.
 
@@ -319,7 +329,7 @@ GEMINI_API_KEY 없이도 서버는 시작되며, 이미 분석한 영상의 조�
 - cueprecise_query — 질문과 관련된 전사 구간, 화자, 프레임, 타임스탬프를 찾습니다.
 - cueprecise_excerpt — 특정 시각 구간의 자막과 프레임을 확인합니다.
 - cueprecise_frames — 화면 참조 시점의 프레임을 추출합니다. 필요한 경우 영상만
-  다시 내려받습니다.
+  다시 내려받습니다. 사용자가 지정한 시점의 프레임도 추출할 수 있습니다.
 
 자막:
 
@@ -331,7 +341,7 @@ GEMINI_API_KEY 없이도 서버는 시작되며, 이미 분석한 영상의 조�
 - cueprecise_summary — 요약을 생성하거나 저장된 요약을 조회합니다.
 - cueprecise_set_summary — 호스트 AI가 근거를 바탕으로 개선한 요약을 검증하고 저장합니다.
 - cueprecise_set_chapter_titles — 호스트 AI가 지은 챕터 제목을 검증하고 저장합니다.
-- cueprecise_purge — 청크 오디오, 원본 영상, 파생 결과물, raw 자료를 명시적으로 삭제합니다.
+- cueprecise_purge — 청크 오디오, 원본 영상, 파생 결과물, raw 자료 또는 전체 데이터를 명시적으로 삭제합니다.
 
 YouTube 취득과 Gemini 전사 이후의 조립·자막 병합·챕터·렌더링·프레임 추출·검색 색인은
 로컬에서 실행됩니다. 오디오 청크는 Gemini로 전송되며, 요약과 챕터 제목은 호스트 AI가
@@ -368,7 +378,9 @@ render 단계는 선택 사항입니다. 필요할 때만 SRT와 TXT를 만들�
 
 ## 저장되는 결과
 
-기본 데이터 디렉터리는 ~/.cueprecise/data입니다. 영상별로 다음 자료가 저장됩니다.
+설치 프로그램과 `cueprecise setup`의 기본 데이터 디렉터리는 `~/.cueprecise/data`입니다.
+소스에서 실행할 때는 `--bundle-root`를 지정하지 않으면 `data`를 사용할 수 있습니다.
+영상별로 다음 자료가 저장됩니다.
 
 ~~~text
 data/<video_id>/
@@ -392,6 +404,35 @@ data/<video_id>/
 자료에는 단어별 시각과 출처가 남고, cueprecise_query의 결과에는 최소한 시작·종료
 시각, 텍스트, 출처, 신뢰도가 포함됩니다. 근거가 없거나 약하면 추측하지 않고
 evidence 부족을 반환합니다.
+
+병합된 단어 자료의 예시:
+
+~~~json
+{
+  "text": "supervised",
+  "start": 208.93,
+  "end": 209.87,
+  "speaker": "speaker:0",
+  "speaker_status": "confirmed",
+  "origin": "youtube"
+}
+~~~
+
+검색 결과의 예시:
+
+~~~json
+{
+  "start": 1728.4,
+  "end": 1740.2,
+  "timecode": "00:28:48",
+  "text": "The experiment was stopped after eight participants had seizures.",
+  "source_path": "derived/merged.json",
+  "source_kind": "transcript",
+  "speaker": "speaker:3",
+  "speaker_status": "inferred",
+  "speaker_confidence": 0.75
+}
+~~~
 
 프레임은 영상 전체를 일정한 간격으로 모두 저장하지 않습니다. 전사의 화면 참조,
 복원된 용어, 사용자가 요청한 시점을 우선합니다. 모든 코드·표·도식을 의미적으로
@@ -473,8 +514,8 @@ google-genai가 없으면 전사 관련 테스트는 건너뜁니다.
 
 ## 알려진 제한
 
-- YouTube 자막의 표기 오류는 그대로 들어올 수 있습니다. 별도의 표기 정규화 단계는
-  아직 없습니다.
+- 병합으로 복원한 용어에는 YouTube 자막의 표기 오류가 남을 수 있고, 원어 자막이
+  없는 영상도 있습니다.
 - 자막 병합 임계값은 제한된 실제 영상으로 조정되어 다른 영상의 추가 검증이 필요합니다.
 - 청크가 3개 이상이고 겹치는 구간에 근거가 없으면 서로 다른 청크의 화자를 같은
   사람인지 확정하지 못하고 unresolved로 남길 수 있습니다.
@@ -482,13 +523,17 @@ google-genai가 없으면 전사 관련 테스트는 건너뜁니다.
 - 화면 후보를 찾는 표현은 현재 한국어와 영어를 중심으로 지원합니다.
 - 화면 검색은 전체 프레임을 무작위로 읽는 방식이 아니라, 전사의 화면 참조와 요청
   시점을 우선하는 후보 기반 방식입니다.
+- 언어를 넘나드는 검색도 번역이나 임베딩이 아닌 어휘 일치 방식입니다. 호스트 AI가
+  검색어를 번역하지 않으면 영상 원어의 표현이 필요할 수 있습니다.
+- 자막에서 복원한 단어의 시각은 전사의 빈 구간 안에 배치한 값이므로, 그 구간 내의
+  근삿값으로 봐야 합니다.
 - 자막 번역 대상 언어는 현재 한국어뿐입니다. 뷰어 화면도 한국어입니다.
 - 자막 뷰어는 MCP 서버가 실행 중일 때 이 컴퓨터(`127.0.0.1`)에서만 열리며, 데스크톱
   브라우저용입니다.
-- 품질 보고의 교정 목록은 MinGPT → minGPT 같은 대소문자 차이도 교정 한 건으로 셉니다.
 
 ## 문서
 
+- [README.md](README.md) — 영어 README
 - [Code signing policy](CODE_SIGNING_POLICY.md) — Windows 배포 파일의 빌드·검토·서명 정책
 - [PRIVACY.md](PRIVACY.md) — API 키, 로컬 데이터, 외부 서비스 통신
 - [CONTRACT.md](CONTRACT.md) — 단계 사이 JSON 구조와 검증 기준
@@ -513,7 +558,7 @@ google-genai가 없으면 전사 관련 테스트는 건너뜁니다.
 
 ## 라이선스
 
-MIT. [LICENSE](LICENSE)를 참고하세요.
+CuePrecise는 [MIT 라이선스](LICENSE)로 배포됩니다.
 
 CuePrecise는 YouTube 및 Google과 제휴 관계가 없고 두 회사의 공식 제품도 아닙니다.
 YouTube는 지원 대상 서비스일 뿐입니다.
