@@ -780,55 +780,76 @@ function tryFireTerm(t) {
     const passed = t >= term.first_t && t < term.first_t + 8;
     if (passed && !already) {
       firedTerms.add(key);
-      showTermLine(term.src + ": " + term.short);
+      showTermLine(term.src + ": " + term.short, t);
     } else if (!passed && t < term.first_t) {
       firedTerms.delete(key); // 되감아 다시 지나가면 다시 뜨게.
-    }
-  }
+    }  }
 }
 
-function showTermLine(text) {
-  const cueTwoLines = displayCues[activeCueIndex] && displayCues[activeCueIndex].lines.length >= 2;
-  const doShow = () => {
-    if (termQueue.length >= 3) {
-      const oldEnough = termQueue.filter(x => (Date.now() - x.born) >= 3000);
-      if (!oldEnough.length) return; // 전부 3초 미만이면 버린다.
-      const victim = oldEnough[0];
-      removeTermLine(victim);
+
+const TERM_FADE_SECONDS = 0.42;
+let termMediaTime = 0;
+
+
+function visibleTermCount(mediaTime = termMediaTime) {
+  return termQueue.filter(entry => !entry.fading && entry.showAt <= mediaTime).length;
+}
+
+
+function advanceTermQueue(mediaTime) {
+  termMediaTime = mediaTime;
+  let changed = false;
+  for (const entry of termQueue) {
+    if (!entry.shown && mediaTime >= entry.showAt) {
+      entry.shown = true;
+      changed = true;
     }
-    const entry = { text, born: Date.now(), el: null };
-    entry.timer = setTimeout(() => fadeTermLine(entry), termDuration(text) * 1000);
-    termQueue.push(entry);
-    renderTermQueue();
-  };
-  if (cueTwoLines && termQueue.length >= 2) {
-    setTimeout(doShow, 2000);
-  } else {
-    doShow();
+    if (!entry.fading && mediaTime >= entry.expiresAt) {
+      entry.fading = true;
+      entry.fadeUntil = mediaTime + TERM_FADE_SECONDS;
+      changed = true;
+    }
   }
+  const next = termQueue.filter(entry => mediaTime < (entry.fadeUntil ?? Infinity));
+  if (next.length !== termQueue.length) {
+    termQueue = next;
+    changed = true;
+  }
+  if (changed) renderTermQueue();
 }
-function fadeTermLine(entry) {
-  entry.fading = true;
-  renderTermQueue();
-  setTimeout(() => removeTermLine(entry), 420);
-}
-function removeTermLine(entry) {
-  clearTimeout(entry.timer);
-  termQueue = termQueue.filter(x => x !== entry);
+
+
+function showTermLine(text, mediaTime) {
+  const cueTwoLines = displayCues[activeCueIndex] && displayCues[activeCueIndex].lines.length >= 2;
+  const delay = cueTwoLines && visibleTermCount(mediaTime) >= 2 ? 2 : 0;
+  const showAt = mediaTime + delay;
+  if (visibleTermCount(mediaTime) >= 3) {
+    const oldEnough = termQueue.find(item =>
+      !item.fading && item.showAt <= mediaTime && mediaTime - item.showAt >= 3,
+    );
+    if (!oldEnough) return;
+    termQueue = termQueue.filter(item => item !== oldEnough);
+  }
+  termQueue.push({
+    text,
+    showAt,
+    expiresAt: showAt + termDuration(text),
+    fading: false,
+    shown: showAt <= mediaTime,
+  });
   renderTermQueue();
 }
 function renderTermQueue() {
   const layer = $("termLayer");
   const cueBox = $("cueLayer").getBoundingClientRect();
   const stage = $("stage").getBoundingClientRect();
-  // 해설 줄은 자막 상자 바로 위에 붙인다(자막이 없으면 자막 자리 위).
   const cueTop = cueBox.height ? cueBox.top : stage.bottom - Math.max(YT_BAR_PX, stage.height * prefs.posPct / 100);
   layer.style.bottom = (stage.bottom - cueTop + 4) + "px";
   const fontPx = Math.max(10, cueBox.width * 0.032 * prefs.fontScale * 0.55);
   layer.innerHTML = "";
-  // 레이어는 아래(자막 쪽)부터 채워진다. 가장 최근 줄이 마지막 자식 = 자막 바로 위.
   for (let i = 0; i < termQueue.length; i++) {
     const entry = termQueue[i];
+    if (entry.showAt > termMediaTime) continue;
     const div = document.createElement("div");
     div.className = "termLine" + (entry.fading ? " fade" : "");
     div.style.fontSize = fontPx + "px";
@@ -844,13 +865,14 @@ function renderTermQueue() {
   }
 }
 
-// -------------------------------------------------------------- 재생 루프
 function tick() {
   if (player && player.getCurrentTime && !blocked) {
     const t = player.getCurrentTime() + syncOffset();
     const dur = player.getDuration ? player.getDuration() : 0;
     $("clock").innerHTML = "<b>" + fmt(t) + "</b> / " + fmt(dur || 0);
 
+
+    advanceTermQueue(t);
     const idx = findIndex(displayCues, t);
     const cue = (idx >= 0 && t <= displayCues[idx].end + 0.15) ? displayCues[idx] : null;
     if (idx !== activeCueIndex || !cue) {
@@ -863,10 +885,12 @@ function tick() {
   requestAnimationFrame(tick);
 }
 
+
 function highlightSentenceAt(t) {
   if (!payload) return;
   const sentences = payload.sentences;
   let lo = 0, hi = sentences.length - 1, no = -1;
+
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
     if (sentences[mid].start <= t) { no = sentences[mid].no; lo = mid + 1; } else { hi = mid - 1; }
